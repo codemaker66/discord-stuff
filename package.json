@@ -1,0 +1,21 @@
+{
+  "name": "dopas-discord-purifier",
+  "version": "4.1.0",
+  "private": true,
+  "description": "Cute bulk message purifier for Discord~ ✨",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "check": "node tools/build.mjs --check",
+    "test": "node test/e2e.mjs dist/dopas-discord-purifier.user.js",
+    "shots": "node test/shots.mjs dist/dopas-discord-purifier.user.js test/out/shots 2"
+  },
+  "purifier": {
+    "homepage": "https://codemaker66.github.io/discord-stuff/",
+    "repo": "https://github.com/codemaker66/discord-stuff",
+    "raw": "https://raw.githubusercontent.com/codemaker66/discord-stuff/main"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en" data-latest="4.1.0">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dopa's Discord Purifier — wipe your own Discord messages</title>
+<meta name="description" content="Wipe your own messages from any Discord DM, group or server in a few clicks. Free, readable code, runs in your browser.">
+<meta name="theme-color" content="#ff7aa9">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Dopa's Discord Purifier">
+<meta property="og:title" content="Dopa's Discord Purifier ✨">
+<meta property="og:description" content="Wipe your own messages from any DM, group or server — in a few clicks~ Free, readable code, runs in your browser.">
+<meta property="og:image" content="https://codemaker66.github.io/discord-stuff/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="https://codemaker66.github.io/discord-stuff/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="img/favicon.png">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<style>
+  :root {
+    --bg: #110810;
+    --wine-900: #150b11;
+    --wine-850: #1b0f16;
+    --card: rgba(255, 236, 244, .035);
+    --hair: rgba(255, 208, 226, .09);
+    --hair-2: rgba(255, 208, 226, .15);
+    --hi: rgba(255, 240, 246, .07);
+    --t1: #f8ebf1;
+    --t2: #cfb3c1;
+    --t3: #a08393;
+    --t4: #6f5765;
+    --rose-100: #ffe3ed;
+    --rose-200: #ffc4d8;
+    --rose-300: #ffa0c2;
+    --rose-400: #ff7aa9;
+    --rose-500: #f2568f;
+    --rose-ink: #2a0716;
+    --crim-300: #ff8090;
+    --ember-200: #ffe6a8;
+    --ember-300: #f7cb6e;
+    --ok: #9ee6c0;
+    --focus: #efe4ff;
+    --font: 'gg sans', ui-sans-serif, 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+    --mono: 'gg mono', ui-monospace, 'SFMono-Regular', 'Cascadia Code', Menlo, Consolas, monospace;
+    --ease-out: cubic-bezier(.22, 1, .36, 1);
+    --spring: linear(0, .041, .14, .269, .408, .542, .662, .766, .85, .915, .963, .997, 1.019, 1.032, 1.037, 1.038, 1.036, 1.032, 1.026, 1.021, 1.016, 1.012, 1.008, 1.005, 1.003, 1.001, 1, 1);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; min-height: 100vh; font: 400 16px/1.55 var(--font); color: var(--t1); -webkit-font-smoothing: antialiased;
+    background:
+      radial-gradient(900px 520px at 12% -10%, rgba(200, 59, 115, .32), transparent 70%),
+      radial-gradient(800px 600px at 110% 20%, rgba(120, 30, 70, .30), transparent 70%),
+      var(--bg);
+  }
+  a { color: var(--rose-300); text-underline-offset: 3px; }
+  a:hover { color: var(--rose-200); }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 8px; }
+  .wrap { width: min(1080px, 100% - 32px); margin: 0 auto; }
+  [hidden] { display: none !important; }
+
+  /* hero */
+  .hero { display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; padding: 72px 0 48px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand img { width: 64px; height: 64px; border-radius: 20px; box-shadow: 0 0 0 1px rgba(255, 122, 169, .4), 0 14px 32px -12px rgba(255, 90, 150, .7); }
+  .brand span { font: 700 13px/1.2 var(--font); letter-spacing: .14em; text-transform: uppercase; color: var(--rose-300); }
+  h1 { margin: 22px 0 14px; font: 800 clamp(40px, 5.4vw, 64px)/1.02 var(--font); letter-spacing: -.035em; }
+  h1 em { font-style: normal; color: var(--rose-300); }
+  .lead { margin: 0; max-width: 34ch; font-size: 19px; color: var(--t2); }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; height: 52px; padding: 0 24px; border: 0; border-radius: 14px; cursor: pointer;
+    font: 700 16px/1 var(--font); text-decoration: none; white-space: nowrap; transition: transform .18s var(--ease-out), filter .2s, background-color .2s, box-shadow .2s; }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { color: var(--rose-ink); background: linear-gradient(180deg, #ff8fb8, #ff6c9f);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(130, 10, 55, .25), 0 0 0 1px rgba(255, 122, 169, .55), 0 12px 30px -10px rgba(255, 90, 150, .7); }
+  .btn-primary:hover { color: var(--rose-ink); filter: brightness(1.05); }
+  .btn-quiet { color: var(--t1); background: rgba(255, 236, 244, .06); box-shadow: inset 0 0 0 1px var(--hair-2), inset 0 1px 0 var(--hi); }
+  .btn-quiet:hover { color: var(--t1); background: rgba(255, 236, 244, .1); }
+  .btn-sm { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 11px; }
+  .btn svg { width: 18px; height: 18px; flex: none; }
+  .meta { margin: 18px 0 0; font-size: 14px; color: var(--t3); }
+  .meta b { color: var(--t2); font-weight: 600; }
+  .shot { position: relative; }
+  .shot img { display: block; width: 100%; height: auto; border-radius: 22px; box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 208, 226, .06); }
+  .shot::after { content: ''; position: absolute; inset: -40px -16px; z-index: -1; background: radial-gradient(closest-side, rgba(255, 122, 169, .22), transparent); }
+
+
+  /* installed banner */
+  .installed { display: flex; align-items: center; gap: 14px; margin-top: 26px; padding: 14px 16px; border-radius: 16px;
+    background: linear-gradient(90deg, rgba(158, 230, 192, .14), rgba(158, 230, 192, .04)); box-shadow: inset 0 0 0 1px rgba(158, 230, 192, .3); }
+  .installed .tick { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--ok); color: #082416; font-weight: 800; }
+  .installed p { margin: 0; flex: 1; font-size: 15px; color: var(--t2); }
+  .installed b { color: var(--t1); }
+  .installed.is-update { background: linear-gradient(90deg, rgba(247, 203, 110, .16), rgba(247, 203, 110, .04)); box-shadow: inset 0 0 0 1px rgba(247, 203, 110, .32); }
+  .installed.is-update .tick { background: var(--ember-300); color: #2b1a04; }
+
+  /* sections */
+  section { padding: 56px 0; }
+  .eyebrow { font: 700 12.5px/1 var(--font); letter-spacing: .16em; text-transform: uppercase; color: var(--rose-300); }
+  h2 { margin: 12px 0 10px; font: 800 clamp(28px, 3.4vw, 38px)/1.1 var(--font); letter-spacing: -.025em; }
+  .sub { margin: 0 0 28px; max-width: 60ch; color: var(--t2); }
+
+  /* install steps */
+  .setup { padding: 28px; border-radius: 26px; background: linear-gradient(180deg, rgba(255, 236, 244, .05), rgba(255, 236, 244, .025)); box-shadow: inset 0 0 0 1px var(--hair), inset 0 1px 0 var(--hi), 0 30px 60px -30px rgba(0, 0, 0, .7); }
+  .picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 22px; }
+  .picker > span { margin-right: 6px; font-size: 14px; color: var(--t3); }
+  .chip { height: 34px; padding: 0 14px; border: 0; border-radius: 999px; cursor: pointer; font: 600 14px/1 var(--font); color: var(--t2);
+    background: rgba(255, 236, 244, .05); box-shadow: inset 0 0 0 1px var(--hair); transition: background-color .2s, color .2s, box-shadow .2s; }
+  .chip:hover { color: var(--t1); }
+  .chip[aria-pressed="true"] { color: var(--rose-ink); background: var(--rose-300); box-shadow: none; }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; counter-reset: step; }
+  .step { counter-increment: step; display: grid; grid-template-columns: 44px 1fr auto; gap: 18px; align-items: center; padding: 18px 20px; border-radius: 18px;
+    background: rgba(0, 0, 0, .22); box-shadow: inset 0 0 0 1px var(--hair); }
+  .step::before { content: counter(step); width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; font: 800 18px/1 var(--font);
+    color: var(--rose-ink); background: var(--rose-300); box-shadow: 0 0 0 6px rgba(255, 122, 169, .1); }
+  .step.is-done::before { content: '✓'; background: var(--ok); color: #082416; box-shadow: 0 0 0 6px rgba(158, 230, 192, .1); }
+  .step h3 { margin: 0 0 4px; font: 700 18px/1.25 var(--font); }
+  .step p { margin: 0; font-size: 15px; color: var(--t2); }
+  .step p + p { margin-top: 6px; }
+  .step .how { margin-top: 10px; display: grid; gap: 6px; font-size: 14.5px; color: var(--t2); }
+  .step .how li { margin-left: 18px; }
+  kbd, code { font: 600 13px/1 var(--mono); padding: 3px 7px; border-radius: 6px; color: var(--rose-100); background: rgba(255, 236, 244, .07); box-shadow: inset 0 0 0 1px var(--hair-2); }
+  .toggle-mock { display: inline-flex; align-items: center; gap: 10px; margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: #202124; color: #e8eaed; font: 500 13.5px/1 system-ui, sans-serif; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+  .toggle-mock i { position: relative; width: 34px; height: 18px; border-radius: 9px; background: #8ab4f8; }
+  .toggle-mock i::after { content: ''; position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #1a73e8; box-shadow: 0 0 0 2px #8ab4f8; }
+  .copy { margin-left: 4px; height: 26px; padding: 0 10px; border: 0; border-radius: 7px; cursor: pointer; font: 600 12.5px/1 var(--font); color: var(--t1); background: rgba(255, 236, 244, .08); box-shadow: inset 0 0 0 1px var(--hair-2); }
+  .copy:hover { background: rgba(255, 236, 244, .14); }
+  .note { margin-top: 18px; display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--t3); }
+  .note svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--ember-300); }
+
+  /* features */
+  .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .feature { margin: 0; padding: 14px 14px 18px; border-radius: 20px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
+  .feature img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 5; object-fit: cover; object-position: top; border-radius: 12px; background: #1a0e15; }
+  .feature h3 { margin: 14px 4px 4px; font: 700 16px/1.3 var(--font); }
+  .feature p { margin: 0 4px; font-size: 14px; color: var(--t2); }
+
+  /* desktop + faq */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel { padding: 24px; border-radius: 22px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
+  .panel h3 { margin: 0 0 8px; font: 700 19px/1.3 var(--font); }
+  .panel p, .panel li { color: var(--t2); font-size: 15px; }
+  .panel ol { margin: 10px 0 18px; padding-left: 20px; display: grid; gap: 6px; }
+  details { border-radius: 16px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
+  details + details { margin-top: 10px; }
+  summary { list-style: none; cursor: pointer; padding: 18px 52px 18px 20px; position: relative; font: 700 16.5px/1.35 var(--font); }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: '+'; position: absolute; right: 20px; top: 50%; transform: translateY(-50%); font: 500 24px/1 var(--font); color: var(--rose-300); transition: transform .3s var(--spring); }
+  details[open] summary::after { transform: translateY(-50%) rotate(45deg); }
+  details > div { padding: 0 20px 18px; color: var(--t2); font-size: 15px; }
+  details > div p { margin: 0 0 10px; }
+
+  /* share */
+  .share { display: flex; align-items: center; gap: 22px; padding: 26px 28px; border-radius: 26px;
+    background: linear-gradient(120deg, rgba(255, 122, 169, .16), rgba(255, 122, 169, .04)); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .28); }
+  .share img { width: 72px; height: 72px; border-radius: 22px; flex: none; }
+  .share-text { flex: 1; min-width: 0; width: 100%; }
+  .share h2 { margin: 0 0 4px; font-size: 26px; }
+  .share p { margin: 0; color: var(--t2); }
+  .linkbox { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 6px 6px 6px 14px; border-radius: 12px; background: rgba(0, 0, 0, .28); box-shadow: inset 0 0 0 1px var(--hair); }
+  .linkbox code { flex: 1; min-width: 0; padding: 0; background: none; box-shadow: none; color: var(--t1); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  footer { padding: 40px 0 56px; color: var(--t3); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; }
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; padding: 12px 18px; border-radius: 12px;
+    background: #2a1422; color: var(--t1); font-weight: 600; box-shadow: 0 0 0 1px var(--hair-2), 0 20px 40px -12px rgba(0, 0, 0, .8); transition: opacity .2s, transform .35s var(--spring); }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; padding-top: 44px; gap: 32px; }
+    .features { grid-template-columns: repeat(2, 1fr); }
+    .two { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .setup { padding: 18px; }
+    .step { grid-template-columns: 36px 1fr; padding: 16px; gap: 14px; }
+    .step::before { width: 36px; height: 36px; font-size: 16px; }
+    .step > .act { grid-column: 1 / -1; }
+    .step > .act .btn { width: 100%; }
+    .share { flex-direction: column; align-items: flex-start; }
+    .btn { width: 100%; }
+    .linkbox .btn { width: auto; }
+    .cta { flex-direction: column; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: .001ms !important; } html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="hero">
+    <div>
+      <div class="brand"><img src="img/emote.webp" alt="" width="64" height="64"><span>Dopa's Discord Purifier</span></div>
+      <h1>Wipe your Discord messages, <em>gently.</em></h1>
+      <p class="lead">Every message you ever sent in a DM, group or server — gone in a few clicks. Nothing else is touched.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#install" data-role="hero-cta">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          <span>Get it free</span>
+        </a>
+        <button class="btn btn-quiet" type="button" data-act="share">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3M7.5 7.5L12 3l4.5 4.5M5 12v7h14v-7"/></svg>
+          Share with a friend
+        </button>
+      </div>
+      <p class="meta"><b>v<span data-role="latest"></span></b> · free, no sign-up · Chrome, Edge, Firefox, Opera, Brave, Safari</p>
+      <div class="installed" data-role="installed" hidden>
+        <span class="tick" aria-hidden="true">✓</span>
+        <p data-role="installed-text"></p>
+        <a class="btn btn-primary btn-sm" href="https://discord.com/app" data-role="installed-action">Open Discord</a>
+      </div>
+    </div>
+    <div class="shot"><img src="img/purging.webp" alt="The purifier panel mid-purge next to its log window, inside Discord" width="1400" height="1059"></div>
+  </header>
+
+  <section id="install" aria-labelledby="install-title">
+    <div class="eyebrow">Two minutes, once</div>
+    <h2 id="install-title">Set it up</h2>
+    <p class="sub">It runs inside Discord in your browser through a free "userscript manager" extension. You only do this once — updates arrive by themselves.</p>
+    <div class="setup">
+      <div class="picker" role="group" aria-label="Your browser">
+        <span>Your browser:</span>
+        <button class="chip" type="button" data-browser="chrome">Chrome</button>
+        <button class="chip" type="button" data-browser="edge">Edge</button>
+        <button class="chip" type="button" data-browser="firefox">Firefox</button>
+        <button class="chip" type="button" data-browser="opera">Opera</button>
+        <button class="chip" type="button" data-browser="brave">Brave</button>
+        <button class="chip" type="button" data-browser="safari">Safari</button>
+      </div>
+      <ol class="steps">
+        <li class="step" data-step="manager">
+          <div>
+            <h3>Add Tampermonkey to <span data-role="browser-name">Chrome</span></h3>
+            <p data-role="manager-note">Free, made for exactly this. Click <b>Add to <span data-role="browser-name">Chrome</span></b> on the page that opens.</p>
+          </div>
+          <div class="act"><a class="btn btn-quiet btn-sm" data-role="manager-link" target="_blank" rel="noopener" href="https://www.tampermonkey.net/">Get Tampermonkey</a></div>
+        </li>
+        <li class="step" data-step="allow">
+          <div>
+            <h3>Switch on “Allow User Scripts”</h3>
+            <p>Your browser keeps userscripts off until you say yes — without this, nothing happens.</p>
+            <ol class="how">
+              <li>Right-click the Tampermonkey icon in your toolbar (it may be under the puzzle-piece <b>Extensions</b> button) and choose <b>Manage extension</b>.</li>
+              <li>Turn on <b>Allow User Scripts</b>. <span class="toggle-mock" aria-hidden="true">Allow User Scripts <i></i></span></li>
+              <li data-role="devmode">Don't see that switch? Open <code data-role="ext-url">chrome://extensions</code><button class="copy" type="button" data-act="copy-ext">Copy</button> and turn on <b>Developer mode</b> (top right) instead.</li>
+            </ol>
+          </div>
+          <div class="act"></div>
+        </li>
+        <li class="step" data-step="install">
+          <div>
+            <h3>Install the Purifier</h3>
+            <p>Tampermonkey opens a page showing the script — click <b>Install</b> there. Come back here afterwards and this page ticks itself off.</p>
+          </div>
+          <div class="act"><a class="btn btn-primary btn-sm" data-role="install-link" href="https://raw.githubusercontent.com/codemaker66/discord-stuff/main/dist/dopas-discord-purifier.user.js">Install</a></div>
+        </li>
+        <li class="step" data-step="open">
+          <div>
+            <h3>Open Discord in this browser</h3>
+            <p>Look top-right for the panel. Open any chat, press <b>Scan</b>, then <b>hold Purify</b>. That's it~</p>
+          </div>
+          <div class="act"><a class="btn btn-quiet btn-sm" href="https://discord.com/app" target="_blank" rel="noopener">Open Discord</a></div>
+        </li>
+      </ol>
+      <div class="note" data-role="mobile-note" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.6l7.6 3.1v5.9c0 4.9-3.2 8.4-7.6 10.1-4.4-1.7-7.6-5.2-7.6-10.1V5.7z"/></svg>
+        <span>On a phone? Discord's app can't run scripts. Open this page on a computer — or use Firefox for Android with Tampermonkey and discord.com in "Desktop site" mode.</span>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="what-title">
+    <div class="eyebrow">What it does</div>
+    <h2 id="what-title">Cute on the outside, thorough on the inside</h2>
+    <p class="sub">It only ever deletes messages <b>you</b> sent, at a pace Discord is happy with, and shows you everything as it goes.</p>
+    <div class="features">
+      <figure class="feature"><img src="img/scanned.webp" alt="" loading="lazy" width="720" height="1056"><figcaption><h3>Scan in a second</h3><p>See how many of your messages are in a chat and how long a purge takes.</p></figcaption></figure>
+      <figure class="feature"><img src="img/confirm.webp" alt="" loading="lazy" width="800" height="813"><figcaption><h3>Hold to purify</h3><p>No accidental clicks: hold the button and watch it fill.</p></figcaption></figure>
+      <figure class="feature"><img src="img/batch.webp" alt="" loading="lazy" width="720" height="1515"><figcaption><h3>Many chats at once</h3><p>Tick DMs and server channels, then purge them in one go.</p></figcaption></figure>
+      <figure class="feature"><img src="img/immune.webp" alt="" loading="lazy" width="720" height="1056"><figcaption><h3>Shield your people</h3><p>Tap the shield on anyone and their chat is immune, forever.</p></figcaption></figure>
+    </div>
+  </section>
+
+  <section aria-labelledby="desktop-title">
+    <div class="eyebrow">Use the Discord app?</div>
+    <h2 id="desktop-title">Desktop app users</h2>
+    <div class="two">
+      <div class="panel">
+        <h3>Easiest: use Discord in your browser</h3>
+        <p>Same account, same chats — just at <a href="https://discord.com/app">discord.com/app</a>. Follow the steps above, purge, and go back to the app whenever you like.</p>
+      </div>
+      <div class="panel">
+        <h3>Already on BetterDiscord?</h3>
+        <ol>
+          <li>Download <a href="downloads/DopasPurifier.plugin.js" download>DopasPurifier.plugin.js</a>.</li>
+          <li>In Discord: <b>User Settings → Plugins → Open Plugins Folder</b>, drop the file in.</li>
+          <li>Switch <b>DopasPurifier</b> on. The panel appears top-right.</li>
+        </ol>
+        <a class="btn btn-quiet btn-sm" href="downloads/DopasPurifier.plugin.js" download>Download plugin</a>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="faq-title">
+    <div class="eyebrow">Questions</div>
+    <h2 id="faq-title">Good to know</h2>
+    <details><summary>Is it safe? Does it send my login anywhere?</summary><div>
+      <p>It runs entirely in your own browser, inside Discord, using the session you're already logged in with. It talks to Discord and nothing else — no servers, no tracking. The whole thing is <a href="https://github.com/codemaker66/discord-stuff">open source</a>, so anyone can check.</p>
+    </div></details>
+    <details><summary>Can it delete other people's messages?</summary><div>
+      <p>No. Discord only lets you delete your own messages, and the purifier only ever asks for yours. Anyone you shield (and Bardo, always~) is skipped entirely.</p>
+    </div></details>
+    <details><summary>Can I undo a purge?</summary><div>
+      <p>No — deleted means deleted. That's why there's a scan first and a hold-to-confirm button. Pause or Stop any time; nothing after that point is touched.</p>
+    </div></details>
+    <details><summary>Could my account get in trouble?</summary><div>
+      <p>Honest answer: Discord's terms don't allow automating your account, and any tool like this carries a small risk. The purifier works at a human-ish pace (about one message a second), slows down whenever Discord asks, and never runs on its own — you start every purge. Use it at your own discretion.</p>
+    </div></details>
+    <details><summary>How long does it take?</summary><div>
+      <p>About a second per message, because that's what Discord allows. A scan tells you the estimate up front; you can minimise the panel and keep chatting while it works. Keep the Discord tab open until it's done.</p>
+    </div></details>
+    <details><summary>How do updates work?</summary><div>
+      <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Dashboard</b> → <b>Check for updates</b>, or just click Install above again.</p>
+    </div></details>
+    <details><summary>Nothing shows up in Discord — help!</summary><div>
+      <p>Nine times out of ten it's step 2: on Chrome, Edge, Opera and Brave the <b>Allow User Scripts</b> switch (or Developer mode) must be on. Then make sure Tampermonkey is enabled, the script is switched on in its dashboard, and reload Discord. Still stuck? <a href="https://github.com/codemaker66/discord-stuff/issues">Open an issue</a>.</p>
+    </div></details>
+  </section>
+
+  <section aria-labelledby="share-title">
+    <div class="share">
+      <img src="img/emote.webp" alt="" width="72" height="72">
+      <div class="share-text">
+        <h2 id="share-title">Send this to a friend</h2>
+        <p>One link — this page walks them through everything.</p>
+        <div class="linkbox"><code data-role="share-url"></code><button class="btn btn-primary btn-sm" type="button" data-act="share">Copy link</button></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Made with ♡ by Bardo &amp; Dopa · not affiliated with Discord</span>
+    <span><a href="https://github.com/codemaker66/discord-stuff">Source on GitHub</a></span>
+  </footer>
+</main>
+<div class="toast" role="status" aria-live="polite" data-role="toast"></div>
+
+<script>
+(() => {
+  const LATEST = document.documentElement.dataset.latest;
+  const SHARE_URL = 'https://codemaker66.github.io/discord-stuff/';
+  const $ = (s) => document.querySelector(s);
+  const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+  // ── Browser-specific steps ──
+  const BROWSERS = {
+    chrome:  { name: 'Chrome',  store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo', ext: 'chrome://extensions', allow: true },
+    edge:    { name: 'Edge',    store: 'https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd', ext: 'edge://extensions', allow: true },
+    firefox: { name: 'Firefox', store: 'https://addons.mozilla.org/firefox/addon/tampermonkey/', allow: false },
+    opera:   { name: 'Opera',   store: 'https://addons.opera.com/extensions/details/tampermonkey-beta/', ext: 'opera://extensions', allow: true },
+    brave:   { name: 'Brave',   store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo', ext: 'brave://extensions', allow: true },
+    safari:  { name: 'Safari',  store: 'https://apps.apple.com/app/tampermonkey/id6738342400', allow: false,
+               note: 'Get it from the App Store, then turn it on in <b>Safari → Settings → Extensions</b> and allow it on discord.com.' },
+  };
+
+  function detect() {
+    const ua = navigator.userAgent;
+    const brands = (navigator.userAgentData && navigator.userAgentData.brands || []).map((b) => b.brand);
+    if (/Edg\//.test(ua)) return 'edge';
+    if (/OPR\/|Opera/.test(ua) || brands.includes('Opera')) return 'opera';
+    if (navigator.brave || brands.includes('Brave')) return 'brave';
+    if (/Firefox\//.test(ua)) return 'firefox';
+    if (/Safari\//.test(ua) && !/Chrome|Chromium|CriOS|Edg|OPR/.test(ua)) return 'safari';
+    return 'chrome';
+  }
+
+  function choose(key) {
+    const b = BROWSERS[key];
+    for (const chip of $$('.chip')) chip.setAttribute('aria-pressed', String(chip.dataset.browser === key));
+    for (const el of $$('[data-role="browser-name"]')) el.textContent = b.name;
+    $('[data-role="manager-link"]').href = b.store;
+    $('[data-role="manager-link"]').textContent = key === 'safari' ? 'Open App Store' : `Add to ${b.name}`;
+    $('[data-role="manager-note"]').innerHTML = b.note || `Free, made for exactly this. Click <b>Add to ${b.name}</b> on the page that opens.`;
+    $('[data-step="allow"]').hidden = !b.allow;
+    if (b.ext) $('[data-role="ext-url"]').textContent = b.ext;
+  }
+
+  for (const chip of $$('.chip')) chip.addEventListener('click', () => choose(chip.dataset.browser));
+  choose(detect());
+  if (/Android|iPhone|iPad|Mobile/.test(navigator.userAgent)) $('[data-role="mobile-note"]').hidden = false;
+
+  // ── "Installed ✓": the purifier announces itself on this page ──
+  $('[data-role="latest"]').textContent = LATEST;
+  const newer = (a, b) => {
+    const pa = a.split('.').map(Number); const pb = b.split('.').map(Number);
+    for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+    return false;
+  };
+  function showInstalled(version) {
+    const box = $('[data-role="installed"]');
+    const outdated = newer(LATEST, version);
+    box.hidden = false;
+    box.classList.toggle('is-update', outdated);
+    $('[data-role="installed-text"]').innerHTML = outdated
+      ? `You have <b>v${version}</b> — <b>v${LATEST}</b> is out.`
+      : `<b>Installed — v${version}.</b> You're all set, princess~`;
+    const action = $('[data-role="installed-action"]');
+    action.textContent = outdated ? 'Update now' : 'Open Discord';
+    action.href = outdated ? $('[data-role="install-link"]').href : 'https://discord.com/app';
+    for (const s of ['manager', 'allow', 'install']) $(`[data-step="${s}"]`).classList.add('is-done');
+    const cta = $('[data-role="hero-cta"]');
+    cta.href = action.href;
+    cta.querySelector('span').textContent = outdated ? 'Update now' : 'Open Discord';
+    if (!outdated) cta.querySelector('path').setAttribute('d', 'M7 17L17 7M9 7h8v8');
+  }
+  const check = () => { const v = document.documentElement.dataset.dopaPurifier; if (v) showInstalled(v); return !!v; };
+  window.addEventListener('dopa-purifier:installed', (e) => showInstalled(e.detail.version));
+  setTimeout(check, 0);
+
+  // After clicking Install, coming back to this tab reloads it once so the tick can appear.
+  $('[data-role="install-link"]').addEventListener('click', () => { try { sessionStorage.setItem('dopa-await', '1'); } catch {} });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || check()) return;
+    let waiting = false;
+    try { waiting = sessionStorage.getItem('dopa-await') === '1'; sessionStorage.removeItem('dopa-await'); } catch {}
+    if (waiting) location.reload();
+  });
+
+  // ── Sharing ──
+  $('[data-role="share-url"]').textContent = SHARE_URL;
+  const toast = (msg) => {
+    const t = $('[data-role="toast"]');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => t.classList.remove('show'), 2200);
+  };
+  async function share() {
+    const data = { title: "Dopa's Discord Purifier", text: 'Wipe your own Discord messages in a few clicks~ ✨', url: SHARE_URL };
+    if (navigator.share && /Android|iPhone|iPad|Mobile/.test(navigator.userAgent)) {
+      try { await navigator.share(data); return; } catch { /* fall back to copying */ }
+    }
+    try { await navigator.clipboard.writeText(SHARE_URL); toast('Link copied~ send it to a friend ♡'); }
+    catch { toast(SHARE_URL); }
+  }
+  for (const b of $$('[data-act="share"]')) b.addEventListener('click', share);
+  $('[data-act="copy-ext"]').addEventListener('click', async () => {
+    const text = $('[data-role="ext-url"]').textContent;
+    try { await navigator.clipboard.writeText(text); toast(`Copied — paste it into the address bar`); } catch { toast(text); }
+  });
+})();
+</script>
+</body>
+</html>
