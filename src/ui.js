@@ -433,10 +433,10 @@
         h('span', { class: 'tab-pill', 'aria-hidden': 'true' }),
         h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'Current channel' }),
         h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Batch' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }))),
-      h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-label': 'Welcome' },
+      h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-labelledby': 'dp-welcome-title' },
         h('div', { class: 'welcome-card' },
           h('div', { class: 'welcome-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
-          h('div', { class: 'welcome-title', text: 'Hi princess~ ♡' }),
+          h('div', { class: 'welcome-title', id: 'dp-welcome-title', text: 'Hi princess~ ♡' }),
           h('div', { class: 'welcome-lead', text: 'Three steps and your messages are gone:' }),
           h('ol', { class: 'welcome-steps' },
             h('li', {}, h('span', {}, h('b', { text: 'Open a chat' }), ' — any DM, group or server channel')),
@@ -675,13 +675,19 @@
 
   // ── Current channel ─────────────────────────────────────
 
+  // A real lookup failure (not just "no chat open"): Scan becomes Retry.
+  const describeFailed = () => !!state.targetError && state.targetError !== 'none';
+
   let describeSeq = 0;
   async function refreshRoute({ keepScan = false } = {}) {
     const route = routeTarget();
     const key = route ? route.channelId : '';
-    if (state.route && route && state.route.channelId === key) return;
+    if (state.route && route && state.route.channelId === key && !describeFailed()) return;
     if (!state.route && !route && state.target === null && state.targetError === 'none') return;
     if (state.scanning && state.scanKind === 'current' && !keepScan) cancelScan();
+    // The footer may still be talking about the last chat (or the failed lookup); an account
+    // switch re-reads the same chat and keeps its notice.
+    const freshStatus = !state.target || state.target.channelId !== key || describeFailed();
     state.route = route;
     state.target = null;
     state.targetError = route ? null : 'none';
@@ -693,6 +699,7 @@
       if (seq !== describeSeq) return; // user moved on while we were asking
       state.target = target;
       if (target.protected && !run.active) setStatus(`${target.name} is immune~`, 'immune');
+      else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~ ✨', 'info');
     } catch (err) {
       if (seq !== describeSeq) return;
       state.target = { channelId: route.channelId, guildId: route.guildId, kind: route.guildId ? 'guild' : 'dm', name: route.channelId, context: '', protected: false };
@@ -772,9 +779,10 @@
       const t = state.target;
       const usable = !!t && !t.protected && !state.targetError;
       const n = usable ? counts.get(t.channelId) : undefined;
-      scan.disabled = !usable && !state.scanning;
+      const retry = describeFailed();
+      scan.disabled = !usable && !state.scanning && !retry;
       purify.disabled = !usable || state.scanning || (n === 0 && !isPartialCount(t.channelId));
-      scanLabel.textContent = state.scanning ? 'Cancel scan' : (n !== undefined ? 'Scan again' : 'Scan');
+      scanLabel.textContent = state.scanning ? 'Cancel scan' : retry ? 'Retry' : (n !== undefined ? 'Scan again' : 'Scan');
       purifyLabel.textContent = 'Purify';
       purifyCount.textContent = n ? n.toLocaleString() : '';
       purifyCount.hidden = !n;
@@ -1650,17 +1658,25 @@
     return { w: panel.offsetWidth, h: panel.offsetHeight };
   }
 
-  function placeShell(x, y) {
+  // Only a drag moves the remembered spot. Everything else clamps for display, so a window
+  // that shrinks and grows back gets the panel back where it was.
+  function placeShell(x, y, { remember = false } = {}) {
     const shell = $('[data-role="shell"]');
     const w = panelSize().w || 360; // hidden while minimised: measure as its real width
     const nx = clamp(x, 8, Math.max(8, innerWidth - w - 8));
     const ny = clamp(y, 8, Math.max(8, innerHeight - 120));
     shell.style.left = `${Math.round(nx)}px`;
     shell.style.top = `${Math.round(ny)}px`;
-    prefs.x = nx;
-    prefs.y = ny;
     layoutPanel();
-    return { x: nx, y: ny };
+    if (remember) {
+      prefs.x = nx;
+      prefs.y = parseFloat(shell.style.top); // where it settled once lifted to fit
+    }
+  }
+
+  // Never dragged: stay anchored to the right edge at any window size.
+  function homePosition() {
+    return prefs.x != null && prefs.y != null ? { x: prefs.x, y: prefs.y } : defaultPosition();
   }
 
   const MIN_PANEL = 400;
@@ -1675,7 +1691,6 @@
     if (lifted !== top) {
       top = lifted;
       shell.style.top = `${Math.round(top)}px`;
-      prefs.y = top;
     }
     $('.panel').style.maxHeight = `${Math.max(240, innerHeight - top - 12)}px`;
     placeTerminal();
@@ -1683,7 +1698,7 @@
   }
 
   function defaultPosition() {
-    return { x: innerWidth - panelSize().w - 20, y: 56 };
+    return { x: innerWidth - (panelSize().w || 360) - 20, y: 56 };
   }
 
   function makeDraggable() {
@@ -1705,7 +1720,7 @@
       drag.vx = drag.vx * 0.6 + ((e.clientX - drag.lastX) / dt) * 16 * 0.4;
       drag.lastX = e.clientX;
       drag.t = now;
-      placeShell(e.clientX - drag.dx, e.clientY - drag.dy);
+      placeShell(e.clientX - drag.dx, e.clientY - drag.dy, { remember: true });
       if (!reducedMotion()) {
         wob.rot.target = clamp(drag.vx * 0.35, -7, 7);
         kick();
@@ -1743,7 +1758,8 @@
       shell.hidden = false;
       orb.hidden = true;
       layer.dataset.open = 'true';
-      placeShell(parseFloat(shell.style.left) || 0, parseFloat(shell.style.top) || 0);
+      const home = homePosition();
+      placeShell(home.x, home.y);
       if (!initial && !reducedMotion()) {
         $('.panel').animate([
           { transform: 'translate(24px, -12px) scale(0.6)', opacity: 0, transformOrigin: '90% 0' },
@@ -1772,13 +1788,22 @@
 
   // ── Welcome & share ─────────────────────────────────────
 
+  // The card covers the tabs, body and footer, so Tab must not wander behind it. It takes focus
+  // only from the bare page, never from Discord's message box.
+  const underWelcome = () => [$('.tabs'), $('[data-role="body"]'), $('.foot')];
+
   function showWelcome() {
-    const w = $('[data-role="welcome"]');
-    w.hidden = false;
+    $('[data-role="welcome"]').hidden = false;
+    for (const el of underWelcome()) el.inert = true;
+    if (document.activeElement === document.body) $('[data-act="welcome-ok"]').focus({ preventScroll: true });
   }
 
   function hideWelcome() {
-    $('[data-role="welcome"]').hidden = true;
+    const w = $('[data-role="welcome"]');
+    const hadFocus = w.contains(root.activeElement);
+    w.hidden = true;
+    for (const el of underWelcome()) el.inert = false;
+    if (hadFocus) $('.tab[aria-selected="true"]').focus();
     prefs.welcomed = true;
     savePrefs('welcomed');
   }
@@ -1943,7 +1968,7 @@
   const TOGGLES = new Set(['pause', 'resume', 'stop', 'purify', 'scan', 'minimize', 'restore', 'logs', 'mute']);
 
   const ACTIONS = {
-    scan: () => (state.scanning ? cancelScan() : state.tab === 'current' ? scanCurrent() : scanSelected()),
+    scan: () => (state.scanning ? cancelScan() : state.tab !== 'current' ? scanSelected() : describeFailed() ? refreshRoute() : scanCurrent()),
     purify: () => (state.tab === 'current' ? askPurgeCurrent() : askPurgeSelected()),
     pause: pauseRun,
     resume: resumeRun,
@@ -1954,7 +1979,7 @@
     minimize: () => setOpen(false),
     share: () => shareLink(),
     'welcome-ok': () => hideWelcome(),
-    'welcome-batch': () => { hideWelcome(); switchTab('batch'); },
+    'welcome-batch': () => { switchTab('batch'); hideWelcome(); },
     restore: () => setOpen(true),
     mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); },
     poke: () => {
@@ -2016,8 +2041,8 @@
     });
     $('[data-role="filter"]').addEventListener('input', (e) => { state.filter = e.target.value; applyFilter(); });
     listen(window, 'resize', () => {
-      const shell = $('[data-role="shell"]');
-      placeShell(parseFloat(shell.style.left) || 0, parseFloat(shell.style.top) || 0);
+      const home = homePosition();
+      placeShell(home.x, home.y);
     });
     makeDraggable();
     wireRunEvents();
@@ -2035,20 +2060,22 @@
     renderMute();
     clearLog();
     switchTab(prefs.tab, { initial: true });
-    const pos = prefs.x != null && prefs.y != null ? { x: prefs.x, y: prefs.y } : defaultPosition();
+    const pos = homePosition();
     placeShell(pos.x, pos.y);
     setOpen(prefs.open, { initial: true });
     renderProgress(progressSnapshot());
     if (!prefs.welcomed) showWelcome();
     refreshRoute();
+    // Logging in on /login also arrives as an in-app navigation: lists that failed for want
+    // of a token get another go.
     let lastPath = location.pathname;
-    every(700, () => {
-      if (location.pathname !== lastPath) {
-        lastPath = location.pathname;
-        refreshRoute();
-      }
-    });
-    listen(window, 'popstate', () => refreshRoute());
+    const navigated = () => {
+      lastPath = location.pathname;
+      refreshRoute();
+      if (state.tab === 'batch') loadPendingLists();
+    };
+    every(700, () => { if (location.pathname !== lastPath) navigated(); });
+    listen(window, 'popstate', navigated);
     listen(window, 'storage', onStorage);
     console.log(`[Dopa Purifier] v${VERSION} ready~ ✨`);
   }
