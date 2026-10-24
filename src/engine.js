@@ -75,6 +75,7 @@
     session.boundToken = null;
     if (switched) {
       counts.clear();
+      partialCounts.clear();
       emit('account-changed', {});
     }
     return switched;
@@ -205,7 +206,7 @@
 
   const listDMs = () => getJson('/users/@me/channels');
   const listRelationships = () => getJson('/users/@me/relationships');
-  const openDM = (userId) => getJson('/users/@me/channels', { method: 'POST', body: { recipients: [userId] } });
+  const openDM = (userId, signal) => getJson('/users/@me/channels', { method: 'POST', body: { recipients: [userId] }, signal });
 
   async function listTextChannels(guildId) {
     const channels = await getJson(`/guilds/${guildId}/channels`);
@@ -328,8 +329,10 @@
     if (!run.active) syncAccount();
     const me = await whoAmI();
     try {
-      const { total } = await searchPage(target, me.id, { signal, onWait });
+      const { total, indexing } = await searchPage(target, me.id, { signal, onWait });
       if (signal && signal.aborted) throw new Stopped();
+      if (indexing) partialCounts.add(target.channelId);
+      else partialCounts.delete(target.channelId);
       return total;
     } catch (err) {
       if (err instanceof Stopped || err.status === 401 || err.code === 'captcha' || target.guildId || searchOnly) throw err;
@@ -339,7 +342,10 @@
     let before = null;
     for (;;) {
       const page = await historyPage(target, before, { signal, onWait });
-      if (!page.length) return count;
+      if (!page.length) {
+        partialCounts.delete(target.channelId);
+        return count;
+      }
       scanned += page.length;
       count += page.filter((m) => m.author && m.author.id === me.id && !UNDELETABLE_TYPES.has(m.type)).length;
       if (onProgress) onProgress({ count, scanned });
@@ -355,6 +361,9 @@
   const on = (type, fn) => bus.addEventListener(type, (e) => fn(e.detail));
 
   const counts = new Map(); // channelId → my deletable message count from the last scan
+  // Channels whose count came from a search Discord hadn't finished indexing: older messages may be missing.
+  const partialCounts = new Set();
+  const isPartialCount = (channelId) => partialCounts.has(channelId) && counts.has(channelId);
 
   const run = {
     active: false,
@@ -562,7 +571,7 @@
       for (let i = 0; i < targets.length; i++) {
         const target = targets[i];
         if (signal.aborted) break;
-        if (target.protected) {
+        if (target.protected || isProtectedUser(target.partner)) {
           emit('target-end', { target, index: i, ok: false, immune: true });
           continue;
         }
@@ -573,7 +582,7 @@
         const before = counts.get(target.channelId);
         try {
           if (target.needsDM) {
-            const dm = await openDM(target.userId);
+            const dm = await openDM(target.userId, signal);
             const previousKey = target.key;
             target.channelId = dm.id;
             target.needsDM = false;
@@ -604,6 +613,7 @@
             emit('log', { tone: 'warn', text: `${target.name}: Discord is still indexing older messages — run again later to catch them` });
           } else {
             counts.set(target.channelId, target.failed || 0);
+            partialCounts.delete(target.channelId);
             emit('target-end', { target, index: i, ok: true });
           }
           // A DM we opened only to look inside, with nothing of ours in it, goes back to how it was.

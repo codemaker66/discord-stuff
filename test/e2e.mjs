@@ -3,7 +3,7 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
-import { openDiscord, injectUserscript } from './mock.mjs';
+import { openDiscord, injectUserscript, installMockDiscord, buildWorld, TOKEN } from './mock.mjs';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const SRC = path.resolve(process.argv[2] || path.join(here, '../dist/dopas-discord-purifier.user.js'));
@@ -654,6 +654,135 @@ await test('T35 on the install page the script only announces itself', async () 
   assert(/^\d+\.\d+\.\d+$/.test(v || ''), `version marker ${v}`);
   assert(await page.evaluate(() => !document.querySelector('#dopa-purifier-host')), 'no panel on the install page');
   await context.close();
+});
+
+// Two Discord tabs share one prefs entry: an ordinary save in one tab must not drop the other
+// tab's shields, and a shield set while another tab is mid-purge still protects that chat.
+await test('T36 shields hold across tabs, even mid-purge', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await context.addInitScript((t) => {
+    if (window.top !== window || localStorage.getItem('token')) return;
+    localStorage.setItem('token', JSON.stringify(t));
+    localStorage.setItem('dopa-purifier:prefs', JSON.stringify({ welcomed: true }));
+  }, TOKEN);
+  const world = buildWorld();
+  const open = async (path) => {
+    const page = await context.newPage();
+    const { stats } = await installMockDiscord(page, { world, latencyMs: 30 });
+    await page.goto('https://discord.com' + path);
+    await injectUserscript(page, source);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent !== 'detecting…');
+    return { page, stats };
+  };
+  const a = await open('/channels/4001/5001');
+  const b = await open('/channels/4001/5002');
+  const mine = (cid) => world.messages[cid].filter((m) => m.author.id === world.me.id).length;
+  const aliceBefore = mine('3002');
+  // Tab B queues Mallory's DM, then Alice's, and starts purging.
+  await b.page.click('.tab[data-tab="batch"]');
+  await b.page.waitForSelector('[data-key="c:3002"]');
+  await b.page.click('[data-key="c:3003"]');
+  await b.page.click('[data-key="c:3002"]');
+  await b.page.click('[data-act="purify"]');
+  await holdConfirm(b.page);
+  while (b.stats.deletes.length < 1) await b.page.waitForTimeout(20);
+  await b.page.click('[data-act="pause"]');
+  // Meanwhile tab A shields Alice.
+  await a.page.click('.tab[data-tab="batch"]');
+  await a.page.waitForSelector('[data-key="c:3002"]');
+  await a.page.click('[data-key="c:3002"] .shield-btn');
+  await b.page.waitForTimeout(400);
+  await b.page.click('[data-act="resume"]');
+  await waitEnd(b.page);
+  assert(mine('3003') === 0, `Mallory's DM purged (${mine('3003')} left)`);
+  assert(mine('3002') === aliceBefore && !b.stats.deleteChannels.includes('3002'), 'nothing deleted in the DM shielded mid-run');
+  assert(await b.page.locator('[data-key="c:3002"].row-immune').count() === 1, 'tab B shows Alice as immune after the run');
+  // An ordinary save in tab B (switching tabs) keeps tab A's shield.
+  await b.page.click('.tab[data-tab="current"]');
+  await b.page.waitForTimeout(500);
+  const stored = await a.page.evaluate(() => {
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    const v = JSON.parse(f.contentWindow.localStorage.getItem('dopa-purifier:prefs'));
+    f.remove();
+    return v;
+  });
+  assert(stored.protectedIds.includes('2002') && stored.tab === 'current', `prefs after tab B saved: ${JSON.stringify(stored)}`);
+  await context.close();
+});
+
+// While Discord is still building its search index, a count is a floor, not a verdict.
+await test('T37 scan is honest while Discord is still indexing', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5002', { deepIndex: ['5002'] });
+    await page.click('[data-act="scan"]');
+    await page.waitForFunction(() => /indexing/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+    assert(/10 messages found so far/.test(await status(page)), `status: ${await status(page)}`);
+    assert(!(await page.locator('[data-act="purify"]').isDisabled()), 'purify offered');
+    await context.close();
+  }
+  {
+    const env = await openDiscord(browser, '/channels/4001/5002');
+    await env.page.route('https://discord.com/api/v9/guilds/*/messages/search*', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ total_results: 0, messages: [], doing_deep_historical_index: true }),
+    }));
+    await injectUserscript(env.page, source);
+    const { page } = env;
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent !== 'detecting…');
+    await page.click('[data-act="scan"]');
+    await page.waitForFunction(() => /indexing/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+    assert(!/All clear/.test(await text(page, '.panel')), 'no "All clear" while indexing');
+    assert(!(await page.locator('[data-act="purify"]').isDisabled()), 'purify still offered at 0 found');
+    // Batch: the row says it's still indexing instead of "no messages found".
+    await page.click('.tab[data-tab="batch"]');
+    await page.locator('.guild-head').first().click();
+    await page.waitForSelector('[data-key="c:5002"]');
+    await page.click('[data-key="c:5002"]');
+    await page.click('[data-act="scan"]');
+    await page.waitForFunction(() => /Scan done/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+    assert(await page.locator('[data-key="c:5002"][data-state="indexing"]').count() === 1, 'row marked indexing');
+    assert(/still indexing/.test(await status(page)), `batch status: ${await status(page)}`);
+    assert(!(await page.locator('[data-act="purify"]').isDisabled()), 'batch purify offered');
+    await env.context.close();
+  }
+});
+
+// Opening a friend's DM can sit in a 429 wait; Stop (and BetterDiscord's stop()) must end it.
+await test('T38 Stop interrupts a rate-limited DM open', async () => {
+  const plugin = fs.readFileSync(PLUGIN, 'utf8').replace(/deleteDelayMs:\s*\d+/, 'deleteDelayMs: 20').replace(/searchDelayMs:\s*\d+/, 'searchDelayMs: 10');
+  for (const kind of ['userscript', 'betterdiscord']) {
+    const env = await openDiscord(browser, '/channels/4001/5001');
+    const { page, stats } = env;
+    let throttle = true;
+    const posts = [];
+    await page.route('https://discord.com/api/v9/users/@me/channels', (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      posts.push(Date.now());
+      if (!throttle) return route.fallback();
+      return route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ message: 'You are being rate limited.', retry_after: 1, global: false }) });
+    });
+    if (kind === 'userscript') await injectUserscript(page, source);
+    else await page.evaluate((code) => { const module = { exports: {} }; new Function('module', 'exports', code)(module, module.exports); window.__bd = new module.exports(); window.__bd.start(); }, plugin);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'general');
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForSelector('[data-key="u:2004"]');
+    await page.click('[data-key="u:2004"]'); // Bob: a friend with no DM yet
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    while (!posts.length) await page.waitForTimeout(20);
+    const t0 = Date.now();
+    if (kind === 'userscript') await page.click('[data-act="stop"]');
+    else await page.evaluate(() => window.__bd.stop());
+    await page.waitForTimeout(1600);
+    throttle = false;
+    await page.waitForTimeout(800);
+    assert(posts.filter((t) => t > t0).length === 0, `${kind}: kept POSTing after stop`);
+    assert(stats.opened.length === 0, `${kind}: opened a DM after stop`);
+    if (kind === 'userscript') assert(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.run) === 'idle', 'run ended');
+    assert(env.pageErrors.length === 0, `${kind}: ${env.pageErrors.join('; ')}`);
+    await env.context.close();
+  }
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));

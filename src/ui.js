@@ -63,8 +63,10 @@
 
   // ── Preferences (survive reloads) ───────────────────────
 
+  // Every Discord tab shares these. A tab writes back only the keys it changed, and shields
+  // are read, changed and written in one go, so no tab can erase another tab's settings.
   const PREFS_KEY = 'dopa-purifier:prefs';
-  const prefs = { x: null, y: null, open: true, muted: false, tab: 'current', welcomed: false, protectedIds: [], released: [] };
+  const prefs = { x: null, y: null, open: true, muted: false, tab: 'current', welcomed: false };
   const stringList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 500) : []);
 
   function withStorage(fn) {
@@ -74,26 +76,39 @@
     try { return fn(frame.contentWindow.localStorage); } catch { return null; } finally { frame.remove(); }
   }
 
-  function loadPrefs() {
-    const raw = withStorage((ls) => ls.getItem(PREFS_KEY));
-    if (!raw) return;
+  function readStored(ls) {
     try {
-      const saved = JSON.parse(raw);
-      if (Number.isFinite(saved.x)) prefs.x = saved.x;
-      if (Number.isFinite(saved.y)) prefs.y = saved.y;
-      if (typeof saved.open === 'boolean') prefs.open = saved.open;
-      if (typeof saved.muted === 'boolean') prefs.muted = saved.muted;
-      if (saved.tab === 'current' || saved.tab === 'batch') prefs.tab = saved.tab;
-      if (typeof saved.welcomed === 'boolean') prefs.welcomed = saved.welcomed;
-      prefs.protectedIds = stringList(saved.protectedIds);
-      prefs.released = stringList(saved.released);
-    } catch { /* ignore corrupt prefs */ }
+      const saved = JSON.parse(ls.getItem(PREFS_KEY));
+      return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+    } catch { return {}; }
+  }
+
+  function loadPrefs() {
+    const saved = withStorage(readStored);
+    if (!saved) return;
+    if (Number.isFinite(saved.x)) prefs.x = saved.x;
+    if (Number.isFinite(saved.y)) prefs.y = saved.y;
+    if (typeof saved.open === 'boolean') prefs.open = saved.open;
+    if (typeof saved.muted === 'boolean') prefs.muted = saved.muted;
+    if (saved.tab === 'current' || saved.tab === 'batch') prefs.tab = saved.tab;
+    if (typeof saved.welcomed === 'boolean') prefs.welcomed = saved.welcomed;
   }
 
   let prefsTimer = 0;
-  const writePrefs = () => withStorage((ls) => ls.setItem(PREFS_KEY, JSON.stringify(prefs)));
+  const dirtyPrefs = new Set();
 
-  function savePrefs() {
+  function writePrefs() {
+    const keys = [...dirtyPrefs];
+    dirtyPrefs.clear();
+    withStorage((ls) => {
+      const stored = readStored(ls);
+      for (const key of keys) stored[key] = prefs[key];
+      ls.setItem(PREFS_KEY, JSON.stringify(stored));
+    });
+  }
+
+  function savePrefs(...keys) {
+    for (const key of keys) dirtyPrefs.add(key);
     clearTimeout(prefsTimer);
     prefsTimer = setTimeout(() => { prefsTimer = 0; writePrefs(); }, 250);
   }
@@ -103,6 +118,28 @@
     clearTimeout(prefsTimer);
     prefsTimer = 0;
     writePrefs();
+  }
+
+  // Pull in shields set in any tab. Returns whether anything changed.
+  function syncProtection() {
+    const saved = withStorage(readStored);
+    if (!saved) return false; // storage blocked: keep this tab's own shields
+    const ids = stringList(saved.protectedIds);
+    const released = stringList(saved.released);
+    const same = (set, list) => set.size === list.length && list.every((x) => set.has(x));
+    if (same(protection.ids, ids) && same(protection.released, released)) return false;
+    protection.ids = new Set(ids);
+    protection.released = new Set(released);
+    return true;
+  }
+
+  function storeProtection() {
+    withStorage((ls) => {
+      const stored = readStored(ls);
+      stored.protectedIds = [...protection.ids];
+      stored.released = [...protection.released];
+      ls.setItem(PREFS_KEY, JSON.stringify(stored));
+    });
   }
 
   // ── Sound ───────────────────────────────────────────────
@@ -517,6 +554,11 @@
       if (t.protected) return { total: 0, text: 'Protected forever~ nothing here can be purged 🛡', tone: 'immune' };
       const n = counts.get(t.channelId);
       if (n === undefined) return { total: 0, text: 'scan first for an honest ETA~', tone: 'quiet' };
+      if (isPartialCount(t.channelId)) {
+        return n
+          ? { total: n, text: `${plural(n, 'message')} found so far · Discord is still indexing older ones`, tone: 'ready' }
+          : { total: 0, text: 'Discord is still indexing this chat~ purify anyway, or scan again later 📚', tone: 'quiet' };
+      }
       return n
         ? { total: n, text: `${plural(n, 'message')} found · ~${formatDuration(estimateSeconds(n))} to purge`, tone: 'ready' }
         : { total: 0, text: 'All clear! No messages to purge here~ ✨', tone: 'clear' };
@@ -731,7 +773,7 @@
       const usable = !!t && !t.protected && !state.targetError;
       const n = usable ? counts.get(t.channelId) : undefined;
       scan.disabled = !usable && !state.scanning;
-      purify.disabled = !usable || state.scanning || n === 0;
+      purify.disabled = !usable || state.scanning || (n === 0 && !isPartialCount(t.channelId));
       scanLabel.textContent = state.scanning ? 'Cancel scan' : (n !== undefined ? 'Scan again' : 'Scan');
       purifyLabel.textContent = 'Purify';
       purifyCount.textContent = n ? n.toLocaleString() : '';
@@ -739,7 +781,7 @@
     } else {
       scan.disabled = !rows.length && !state.scanning;
       // Nothing left to purge in any selected chat (all scanned at 0): nothing to offer.
-      const allClear = rows.length && rows.every((r) => r.channelId && counts.get(r.channelId) === 0);
+      const allClear = rows.length && rows.every((r) => r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId));
       purify.disabled = !rows.length || state.scanning || allClear;
       scanLabel.textContent = state.scanning ? 'Cancel scan' : 'Scan selected';
       purifyLabel.textContent = 'Purify selected';
@@ -788,7 +830,11 @@
       if (lastEnd && lastEnd.key === `c:${t.channelId}`) lastEnd = null;
       const here = state.target && state.target.channelId === t.channelId;
       const where = here ? '' : ` in ${t.name}`;
-      setStatus(n ? `${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge ✨` : `All clear${where}! No messages to purge~ ✨`, 'success');
+      if (isPartialCount(t.channelId)) {
+        setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones 📚` : `Discord is still indexing${where}~ older messages may be hiding 📚`, 'warn');
+      } else {
+        setStatus(n ? `${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge ✨` : `All clear${where}! No messages to purge~ ✨`, 'success');
+      }
     } catch (err) {
       if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
       else setStatus(`Scan error: ${err.message} 😿`, 'error');
@@ -806,6 +852,7 @@
     const signal = beginScan('batch');
     let grand = 0;
     let deferred = 0;
+    let indexing = 0;
     try {
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -816,14 +863,16 @@
           const n = await countMine(row, { signal, onWait: (w) => setStatus(waitText(w), 'warn') });
           counts.set(row.channelId, n);
           grand += n;
-          setRowState(row, n ? 'ready' : 'clean');
+          if (isPartialCount(row.channelId)) indexing++;
+          setRowState(row, isPartialCount(row.channelId) ? 'indexing' : n ? 'ready' : 'clean');
         } catch (err) {
           if (err instanceof Stopped || err.status === 401 || err.code === 'captcha') throw err;
           setRowState(row, 'error', err.message);
         }
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
-      setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(rows.length - deferred, 'chat')} ✨`, 'success');
+      if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')} 📚`, 'warn');
+      else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(rows.length - deferred, 'chat')} ✨`, 'success');
     } catch (err) {
       for (const row of rows) if (row.status === 'scanning') setRowState(row, 'idle');
       if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
@@ -852,7 +901,7 @@
     const who = await actingAs();
     const t = state.target; // re-read: an account switch may have reset everything meanwhile
     if (!t || t.protected || run.active || modal) return;
-    const n = counts.get(t.channelId);
+    const n = isPartialCount(t.channelId) ? 0 : counts.get(t.channelId);
     confirmDialog({
       title: 'Ready to purify?',
       lead: n ? ['This will delete all ', h('b', { text: n.toLocaleString() }), ' of your messages in'] : ['This will delete all your messages in'],
@@ -872,10 +921,11 @@
     const known = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
     const blocked = rows.filter((r) => r.status === 'error').length;
     const unscanned = rows.length - scanned.length - blocked;
+    const more = unscanned || scanned.some((r) => isPartialCount(r.channelId));
     confirmDialog({
       title: 'Batch purify?',
       lead: [
-        'Purging ', h('b', { text: `${known.toLocaleString()}${unscanned ? '+' : ''}` }), ` of your messages from ${plural(rows.length, 'chat').replace(' ', '\u00a0')}`,
+        'Purging ', h('b', { text: `${known.toLocaleString()}${more ? '+' : ''}` }), ` of your messages from ${plural(rows.length, 'chat').replace(' ', '\u00a0')}`,
         unscanned ? ` · ${unscanned}\u00a0not\u00a0scanned` : '', blocked ? ` · ${blocked}\u00a0no\u00a0access` : '', ':',
       ],
       list: rows.map((r) => {
@@ -889,6 +939,7 @@
   }
 
   async function beginRun(targets, mode) {
+    if (syncProtection()) protectionStale = true; // a shield from another tab; the engine honours it per chat
     state.runTargets = targets;
     state.runMode = mode;
     state.runKey = mode === 'current' ? `c:${targets[0].channelId}` : 'batch';
@@ -928,12 +979,14 @@
     else if (status === 'running') tag.replaceChildren(row.failed ? `purging~ · ${row.failed} failed` : 'purging~');
     else if (status === 'error') tag.replaceChildren(detail ? shortReason(detail) : 'error');
     else if (status === 'partial') tag.replaceChildren(detail || 'run again later');
+    else if (status === 'indexing') tag.replaceChildren('Discord is still indexing~');
     else tag.replaceChildren();
     tag.hidden = !tag.textContent;
     let meta = null;
     if (status === 'idle') meta = row.needsDM ? h('span', { class: 'chip-need', text: 'no DM yet' }) : (n !== undefined ? (n ? msgs(n) : 'clean ✓') : null);
     else if (status === 'scanning') meta = pill('scan', h('i', { class: 'spin' }), 'scanning');
     else if (status === 'ready') meta = n ? msgs(n) : null;
+    else if (status === 'indexing') meta = n ? msgs(n) : 'none yet';
     else if (status === 'clean') meta = 'no messages found';
     else if (status === 'queued') meta = pill('queued', 'queued');
     else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), n ? `${deleted}/${n.toLocaleString()}` : deleted);
@@ -1091,18 +1144,33 @@
 
   function toggleProtection(user) {
     if (!user || run.active) return;
-    const on = !isProtectedUser(user);
-    setProtected(user, on);
-    prefs.protectedIds = [...protection.ids];
-    prefs.released = [...protection.released];
-    savePrefs();
+    syncProtection(); // start from every tab's shields, not just this one's
+    const shield = !isProtectedUser(user);
+    setProtected(user, shield);
+    storeProtection();
     const name = user.global_name || user.username;
-    addLog(on ? `shielded ${name} — they're immune now ♡` : `${name} is no longer immune`, 'info');
-    setStatus(on ? `${name} is immune now~` : `${name} can be purged again`, on ? 'immune' : 'info');
+    addLog(shield ? `shielded ${name} — they're immune now ♡` : `${name} is no longer immune`, 'info');
+    setStatus(shield ? `${name} is immune now~` : `${name} can be purged again`, shield ? 'immune' : 'info');
+    protectionChanged();
+  }
+
+  // Redraw everything that shows who is immune.
+  function protectionChanged({ keepVerdict = false } = {}) {
     if (state.dmData) renderDMs();
-    if (state.target && state.target.partner && state.target.partner.id === user.id) state.target.protected = on;
-    if (lastEnd && lastEnd.key === contextKey()) lastEnd = null;
+    const partner = state.target && state.target.partner;
+    if (partner) state.target.protected = isProtectedUser(partner);
+    if (!keepVerdict && lastEnd && lastEnd.key === contextKey()) lastEnd = null;
     renderCurrent();
+  }
+
+  // Another tab shielded or released someone: take it on now, or once this tab's run ends
+  // (the engine re-checks shields as it reaches each chat either way).
+  let protectionStale = false;
+  function onStorage(e) {
+    if (e.key !== PREFS_KEY && e.key !== null) return;
+    if (!syncProtection()) return;
+    if (run.active) protectionStale = true;
+    else protectionChanged();
   }
 
   function shieldButton(user, { protectedNow, label }) {
@@ -1246,7 +1314,7 @@
   function switchTab(tab, { initial = false } = {}) {
     state.tab = tab;
     prefs.tab = tab;
-    if (!initial) savePrefs();
+    if (!initial) savePrefs('tab');
     const layer = $('[data-role="layer"]');
     layer.dataset.tab = tab;
     for (const t of $$('.tab')) {
@@ -1649,7 +1717,7 @@
       kick({ spin: clamp(drag.vx * 1.8, -40, 40), squash: Math.min(0.6, Math.abs(drag.vx) * 0.02) });
       drag = null;
       delete $('[data-role="layer"]').dataset.dragging;
-      savePrefs();
+      savePrefs('x', 'y');
     };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
@@ -1666,7 +1734,7 @@
 
   function setOpen(open, { initial = false } = {}) {
     prefs.open = open;
-    if (!initial) savePrefs();
+    if (!initial) savePrefs('open');
     const shell = $('[data-role="shell"]');
     const orb = $('.orb');
     const layer = $('[data-role="layer"]');
@@ -1712,7 +1780,7 @@
   function hideWelcome() {
     $('[data-role="welcome"]').hidden = true;
     prefs.welcomed = true;
-    savePrefs();
+    savePrefs('welcomed');
   }
 
   async function shareLink() {
@@ -1856,6 +1924,11 @@
       renderActions();
       if (state.tab === 'batch') loadPendingLists();
     });
+    on('end', () => {
+      if (!protectionStale) return;
+      protectionStale = false;
+      protectionChanged({ keepVerdict: true });
+    });
   }
 
   // Lists can't be (re)built mid-run or mid-scan; build them as soon as that ends.
@@ -1883,7 +1956,7 @@
     'welcome-ok': () => hideWelcome(),
     'welcome-batch': () => { hideWelcome(); switchTab('batch'); },
     restore: () => setOpen(true),
-    mute: () => { prefs.muted = !prefs.muted; savePrefs(); renderMute(); },
+    mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); },
     poke: () => {
       kick({ spin: (Math.random() - 0.5) * 26, squash: 0.7 });
       const img = $('.avatar img');
@@ -1956,8 +2029,7 @@
 
   function boot() {
     loadPrefs();
-    protection.ids = new Set(prefs.protectedIds);
-    protection.released = new Set(prefs.released);
+    syncProtection();
     host = mount();
     wire();
     renderMute();
@@ -1977,6 +2049,7 @@
       }
     });
     listen(window, 'popstate', () => refreshRoute());
+    listen(window, 'storage', onStorage);
     console.log(`[Dopa Purifier] v${VERSION} ready~ ✨`);
   }
 
