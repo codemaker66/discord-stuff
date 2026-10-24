@@ -133,13 +133,15 @@
     return true;
   }
 
+  // Returns whether the shields really reached storage (it can be full or blocked).
   function storeProtection() {
-    withStorage((ls) => {
+    return withStorage((ls) => {
       const stored = readStored(ls);
       stored.protectedIds = [...protection.ids];
       stored.released = [...protection.released];
       ls.setItem(PREFS_KEY, JSON.stringify(stored));
-    });
+      return true;
+    }) === true;
   }
 
   // ── Sound ───────────────────────────────────────────────
@@ -441,7 +443,7 @@
           h('ol', { class: 'welcome-steps' },
             h('li', {}, h('span', {}, h('b', { text: 'Open a chat' }), ' — any DM, group or server channel')),
             h('li', {}, h('span', {}, h('b', { text: 'Scan' }), ' to count your messages there')),
-            h('li', {}, h('span', {}, h('b', { text: 'Hold Purify' }), ' and watch the ring fill up'))),
+            h('li', {}, h('span', {}, h('b', { text: 'Purify' }), ', then hold the red button till it fills'))),
           h('div', { class: 'welcome-note' },
             icon('shield'),
             h('span', { text: 'Only your own messages, nothing leaves Discord, and anyone you shield is immune.' })),
@@ -489,10 +491,13 @@
         h('div', { class: 'modal-text', id: 'dp-modal-text', 'data-role': 'modal-text' }),
         h('div', { class: 'modal-buttons' },
           h('button', { class: 'btn btn-quiet', 'data-act': 'cancel', text: 'Nevermind~' }),
-          h('button', { class: 'btn btn-purge btn-hold', 'data-act': 'confirm' },
+          h('button', { class: 'btn btn-purge btn-hold', 'data-act': 'confirm', 'aria-describedby': 'dp-modal-hint' },
             h('span', { class: 'hold-fill', 'aria-hidden': 'true' }),
-            h('span', { class: 'hold-label', 'data-role': 'confirm-label', text: '✨ Do it! ✨' }))),
-        h('div', { class: 'modal-hint' }, 'Hold to purify · ', h('kbd', { text: 'Esc' }), ' keeps you safe')));
+            h('span', { class: 'hold-label', 'data-role': 'confirm-label', text: 'Hold to purify ✨' }))),
+        h('div', { class: 'modal-hint', id: 'dp-modal-hint' },
+          h('span', {}, 'Hold with mouse or ', h('kbd', { text: 'Space' })), ' · ',
+          h('span', {}, 'screen reader? press twice'), ' · ',
+          h('span', {}, h('kbd', { text: 'Esc' }), ' keeps you safe'))));
   }
 
   function mount() {
@@ -791,6 +796,10 @@
     const busy = run.active || state.scanning;
     for (const row of state.batchRows.values()) if (row.box) row.box.disabled = busy;
     for (const act of ['dm-all', 'dm-none', 'dm-refresh', 'server-refresh']) $(`[data-act="${act}"]`).disabled = busy;
+    for (const b of $$('.shield-btn')) {
+      b.disabled = run.active;
+      b.title = run.active ? 'Stop the purge to change shields' : shieldTitle(b.classList.contains('is-on'));
+    }
     if (root.querySelector('.guild')) syncGuildChecks();
     $('[data-role="layer"]').dataset.run = run.active ? (run.paused ? 'paused' : 'running') : 'idle';
   }
@@ -830,7 +839,9 @@
       if (lastEnd && lastEnd.key === `c:${t.channelId}`) lastEnd = null;
       const here = state.target && state.target.channelId === t.channelId;
       const where = here ? '' : ` in ${t.name}`;
-      if (isPartialCount(t.channelId)) {
+      // Shielded while we were counting: there's nothing to offer here any more.
+      if (here && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
+      else if (isPartialCount(t.channelId)) {
         setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones 📚` : `Discord is still indexing${where}~ older messages may be hiding 📚`, 'warn');
       } else {
         setStatus(n ? `${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge ✨` : `All clear${where}! No messages to purge~ ✨`, 'success');
@@ -900,14 +911,14 @@
     if (!state.target || state.target.protected || run.active || modal) return;
     const who = await actingAs();
     const t = state.target; // re-read: an account switch may have reset everything meanwhile
-    if (!t || t.protected || run.active || modal) return;
+    if (!t || t.protected || run.active || modal || state.scanning) return; // a scan began while we asked
     const n = isPartialCount(t.channelId) ? 0 : counts.get(t.channelId);
     confirmDialog({
       title: 'Ready to purify?',
       lead: n ? ['This will delete all ', h('b', { text: n.toLocaleString() }), ' of your messages in'] : ['This will delete all your messages in'],
       pill: t,
       who,
-      confirmLabel: '✨ Do it! ✨',
+      confirmLabel: 'Hold to purify ✨',
       onConfirm: () => beginRun([{ ...t }], 'current'),
     });
   }
@@ -916,24 +927,28 @@
     if (!selectedRows().length || run.active || modal) return;
     const who = await actingAs();
     const rows = selectedRows(); // re-read: an account switch clears the selection
-    if (!rows.length || run.active || modal) return;
+    if (!rows.length || run.active || modal || state.scanning) return;
     const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
     const known = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
     const blocked = rows.filter((r) => r.status === 'error').length;
     const unscanned = rows.length - scanned.length - blocked;
     const more = unscanned || scanned.some((r) => isPartialCount(r.channelId));
+    const chats = plural(rows.length, 'chat').replace(' ', '\u00a0');
+    // Never lead with a bare "0+": say what is known, and that the rest is all of yours.
+    const lead = !known && more
+      ? ['Purging ', h('b', { text: 'all' }), ` your messages in ${chats}`, unscanned ? ' (not\u00a0counted\u00a0yet)' : ' (Discord\u00a0is\u00a0still\u00a0indexing)']
+      : known && unscanned
+        ? ['Purging ', h('b', { text: known.toLocaleString() }), ` found + all of yours in ${unscanned}\u00a0uncounted\u00a0chat${unscanned === 1 ? '' : 's'}`]
+        : ['Purging ', h('b', { text: `${known.toLocaleString()}${more ? '+' : ''}` }), ` of your messages from ${chats}`];
     confirmDialog({
       title: 'Batch purify?',
-      lead: [
-        'Purging ', h('b', { text: `${known.toLocaleString()}${more ? '+' : ''}` }), ` of your messages from ${plural(rows.length, 'chat').replace(' ', '\u00a0')}`,
-        unscanned ? ` · ${unscanned}\u00a0not\u00a0scanned` : '', blocked ? ` · ${blocked}\u00a0no\u00a0access` : '', ':',
-      ],
+      lead: [...lead, blocked ? ` · ${blocked}\u00a0no\u00a0access` : '', ':'],
       list: rows.map((r) => {
         const n = r.channelId ? counts.get(r.channelId) : undefined;
         return { label: r.label, meta: r.status === 'error' ? 'no access' : n === undefined ? 'not scanned' : plural(n, 'msg') };
       }),
       who,
-      confirmLabel: '✨ Purify All! ✨',
+      confirmLabel: 'Hold to purify all ✨',
       onConfirm: () => beginRun(rows, 'batch'),
     });
   }
@@ -1143,12 +1158,22 @@
   }
 
   function toggleProtection(user) {
-    if (!user || run.active) return;
-    syncProtection(); // start from every tab's shields, not just this one's
+    if (!user) return;
+    if (run.active) { setStatus('Stop the purge first to change shields~', 'warn'); return; }
+    const synced = syncProtection(); // start from every tab's shields, not just this one's
+    const before = { ids: new Set(protection.ids), released: new Set(protection.released) };
     const shield = !isProtectedUser(user);
     setProtected(user, shield);
-    storeProtection();
     const name = user.global_name || user.username;
+    // A shield that didn't save would be gone after a reload: put things back and say so.
+    if (!storeProtection()) {
+      protection.ids = before.ids;
+      protection.released = before.released;
+      if (synced) protectionChanged();
+      addLog(`couldn't save the shield for ${name} — Discord's storage is full or blocked`, 'error');
+      setStatus(`Couldn't save~ ${name} is ${shield ? 'not immune' : 'still immune'} (Discord's storage is full or blocked) 😿`, 'error');
+      return;
+    }
     addLog(shield ? `shielded ${name} — they're immune now ♡` : `${name} is no longer immune`, 'info');
     setStatus(shield ? `${name} is immune now~` : `${name} can be purged again`, shield ? 'immune' : 'info');
     protectionChanged();
@@ -1173,13 +1198,15 @@
     else protectionChanged();
   }
 
+  const shieldTitle = (immune) => (immune ? 'Immune — click to allow purging again' : 'Protect — never purge this chat');
+
   function shieldButton(user, { protectedNow, label }) {
     const btn = h('button', {
       class: `shield-btn${protectedNow ? ' is-on' : ''}`,
       type: 'button',
       'aria-pressed': String(protectedNow),
       'aria-label': protectedNow ? `Stop protecting ${label}` : `Protect ${label}`,
-      title: protectedNow ? 'Immune — click to allow purging again' : 'Protect — never purge this chat',
+      title: shieldTitle(protectedNow),
     }, icon('shield'));
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1335,7 +1362,8 @@
   // ── Confirm dialog (hold to confirm) ────────────────────
 
   const HOLD_MS = 850;
-  let modal = null; // { onConfirm, restoreFocus, label, openedAt }
+  const ARMED_MS = 5000; // how long a first assistive press waits for the second
+  let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed }
   let dialogTimer = 0;
 
   function targetPill(t) {
@@ -1360,7 +1388,7 @@
       h('div', { class: 'modal-warn', text: "This can't be undone~ 🩸" }),
     ].filter(Boolean));
     $('[data-role="confirm-label"]').textContent = confirmLabel;
-    modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now() };
+    modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0 };
     clearTimeout(dialogTimer);
     layer.hidden = false;
     layer.dataset.open = 'true';
@@ -1371,6 +1399,7 @@
   function closeDialog(confirmed) {
     if (!modal) return;
     const { onConfirm, restoreFocus } = modal;
+    clearTimeout(modal.armed);
     modal = null;
     resetHold();
     const layer = $('.modal-layer');
@@ -1382,19 +1411,24 @@
     else if (restoreFocus && restoreFocus.focus) restoreFocus.focus();
   }
 
-  const hold = { start: 0, raf: 0, active: false };
+  const hold = { start: 0, raf: 0, active: false, nudge: 0 };
+  const ARMED_LABEL = 'Press again to purify~';
 
   function resetHold() {
     cancelAnimationFrame(hold.raf);
+    clearTimeout(hold.nudge);
     hold.active = false;
     const btn = $('[data-act="confirm"]');
     btn.style.setProperty('--hold', '0');
     btn.classList.remove('is-holding');
-    if (modal) $('[data-role="confirm-label"]').textContent = modal.label;
+    const label = $('[data-role="confirm-label"]');
+    delete label.dataset.nudge;
+    if (modal) label.textContent = modal.armed ? ARMED_LABEL : modal.label;
   }
 
   function beginHold() {
     if (!modal || hold.active) return;
+    clearTimeout(hold.nudge);
     hold.active = true;
     hold.start = performance.now();
     const btn = $('[data-act="confirm"]');
@@ -1414,12 +1448,28 @@
     hold.raf = requestAnimationFrame(step);
   }
 
+  // Let go too soon: the button says what it needs for a moment, then settles back.
   function endHold() {
     if (!hold.active) return;
     resetHold();
     const label = $('[data-role="confirm-label"]');
+    label.textContent = 'Hold it down~ ♡';
+    void label.offsetWidth; // restart the shake on a quick second tap
     label.dataset.nudge = 'true';
-    setTimeout(() => { delete label.dataset.nudge; }, 600);
+    hold.nudge = setTimeout(resetHold, 1400);
+  }
+
+  // Screen readers, voice control and switches press with a bare click (detail 0) and can't
+  // hold, so for them two presses confirm. Mouse clicks (detail ≥ 1) still need the hold.
+  function pressConfirm() {
+    if (!modal || hold.active) return;
+    if (modal.armed) { closeDialog(true); return; }
+    modal.armed = setTimeout(() => {
+      if (!modal) return;
+      modal.armed = 0;
+      if (!hold.active) resetHold();
+    }, ARMED_MS);
+    resetHold();
   }
 
   function trapFocus(e) {
@@ -1975,7 +2025,8 @@
       const tab = e.target.closest('.tab');
       if (tab) { switchTab(tab.dataset.tab); return; }
       const btn = e.target.closest('[data-act]');
-      if (!btn || btn.disabled || btn.dataset.act === 'confirm') return;
+      if (!btn || btn.disabled) return;
+      if (btn.dataset.act === 'confirm') { if (e.detail === 0) pressConfirm(); return; }
       // A double-click must not flip a toggle twice (Pause→Resume) or open-then-dismiss a dialog.
       if (e.detail > 1 && TOGGLES.has(btn.dataset.act)) return;
       const fn = ACTIONS[btn.dataset.act];
@@ -1990,10 +2041,18 @@
     });
     const confirmBtn = $('[data-act="confirm"]');
     confirmBtn.addEventListener('pointerdown', (e) => { if (e.button === 0) { confirmBtn.setPointerCapture(e.pointerId); beginHold(); } });
+    // Capture keeps a release anywhere reaching endHold; sliding off (even onto Nevermind) lets go.
+    confirmBtn.addEventListener('pointermove', (e) => {
+      if (!hold.active) return;
+      const r = confirmBtn.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) resetHold();
+    });
     confirmBtn.addEventListener('pointerup', endHold);
     confirmBtn.addEventListener('pointercancel', endHold);
     confirmBtn.addEventListener('keydown', (e) => {
-      if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); beginHold(); }
+      if (e.key !== ' ' && e.key !== 'Enter') return;
+      e.preventDefault(); // repeats too: a held key must never turn into bare clicks
+      if (!e.repeat) beginHold();
     });
     confirmBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(); });
     confirmBtn.addEventListener('blur', endHold);
