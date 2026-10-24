@@ -209,6 +209,8 @@
     selected: new Set(),  // row keys
     guildsLoaded: false,
     dmsLoaded: false,
+    guildsLoading: false,
+    dmsLoading: false,
     filter: '',
   };
 
@@ -1082,20 +1084,31 @@
     return x === y ? 0 : (x > y ? -1 : 1);
   }
 
+  // The latest load of a list wins: an older one, still retrying through an outage, must not
+  // overwrite what a newer one drew.
+  let dmSeq = 0;
+  let guildSeq = 0;
+
   async function loadDMs() {
     const list = $('[data-role="dm-list"]');
     if (run.active || state.scanning) {
       if (!state.dmsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when the purge finishes~' }));
       return;
     }
+    const seq = ++dmSeq;
+    state.dmsLoading = true;
     list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' }));
     try {
       const [channels, relationships] = await Promise.all([listDMs(), listRelationships()]);
+      if (seq !== dmSeq) return;
       state.dmData = { channels, relationships };
       const counted = renderDMs();
       if (state.tab === 'batch' && !run.active) setStatus(`Loaded ${plural(counted.dms, 'DM')} + ${plural(counted.friends, 'friend')} ✨`, 'success');
     } catch (err) {
+      if (seq !== dmSeq) return;
       list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load DMs 😿 ${err.message}` }));
+    } finally {
+      if (seq === dmSeq) state.dmsLoading = false;
     }
     renderActions();
   }
@@ -1203,15 +1216,21 @@
       if (!state.guildsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when the purge finishes~' }));
       return;
     }
+    const seq = ++guildSeq;
+    state.guildsLoading = true;
     list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading servers… 🏰' }));
     try {
       const guilds = await myGuilds({ refresh });
+      if (seq !== guildSeq) return;
       for (const [key, row] of state.batchRows) if (row.kind === 'guild') state.batchRows.delete(key);
       list.replaceChildren(...(guilds.length ? guilds.map(buildGuild) : [h('div', { class: 'list-empty', text: 'No servers found~' })]));
       state.guildsLoaded = true;
       applyFilter();
     } catch (err) {
+      if (seq !== guildSeq) return;
       list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load servers 😿 ${err.message}` }));
+    } finally {
+      if (seq === guildSeq) state.guildsLoading = false;
     }
   }
 
@@ -1332,8 +1351,8 @@
     }
     for (const v of $$('.view')) v.hidden = v.dataset.view !== tab;
     if (tab === 'batch') {
-      if (!state.dmsLoaded) loadDMs();
-      if (!state.guildsLoaded) loadServers();
+      if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
+      if (!state.guildsLoaded && !state.guildsLoading) loadServers();
     }
     if (!initial) kick({ stretch: tab === 'batch' ? 0.025 : -0.025 });
     renderCurrent();
@@ -1872,6 +1891,10 @@
       state.batchRows.clear();
       state.dmsLoaded = false;
       state.guildsLoaded = false;
+      dmSeq++; // what the old account was still fetching isn't ours to draw
+      guildSeq++;
+      state.dmsLoading = false;
+      state.guildsLoading = false;
       state.route = null;
       $('[data-role="dm-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' }));
       $('[data-role="server-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Loading servers… 🏰' }));
@@ -1956,11 +1979,12 @@
     });
   }
 
-  // Lists can't be (re)built mid-run or mid-scan; build them as soon as that ends.
+  // Lists can't be (re)built mid-run or mid-scan; build them as soon as that ends. A list
+  // still loading is left to finish, so navigating through an outage doesn't stack requests.
   function loadPendingLists() {
     if (run.active || state.scanning) return;
-    if (!state.dmsLoaded) loadDMs();
-    if (!state.guildsLoaded) loadServers({ refresh: true });
+    if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
+    if (!state.guildsLoaded && !state.guildsLoading) loadServers({ refresh: true });
   }
 
   // ── Wiring ──────────────────────────────────────────────

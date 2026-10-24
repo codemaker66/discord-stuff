@@ -990,6 +990,79 @@ await test('T65 "no messages found" and the filter placeholder are readable', as
   await context.close();
 });
 
+// A list load can sit in request()'s 5xx backoff for ~14 s. Here the first load of each list is
+// held, then fails: by then a newer load has drawn the list, and the old failure must not win.
+await test('T66 Batch lists: a slow old load never overwrites a newer one, and navigating doesn\'t ask twice', async () => {
+  const { page, pageErrors, context } = await boot('/channels/@me/3002'); // a DM: the servers aren't cached yet
+  const gets = { channels: 0, guilds: 0 };
+  const held = [];
+  let failed = 0;
+  let release;
+  const released = new Promise((r) => { release = r; });
+  await page.route(/\/api\/v9\/users\/@me\/(channels|guilds)$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const list = route.request().url().endsWith('/guilds') ? 'guilds' : 'channels';
+    if (++gets[list] > 1) return route.fallback();
+    held.push(list);
+    await released;
+    await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'Missing Access', code: 50001 }) });
+    failed++;
+  });
+  await page.click('.tab[data-tab="batch"]');
+  while (held.length < 2) await page.waitForTimeout(20);
+  await page.evaluate(() => history.pushState({}, '', '/channels/@me/3003'));
+  await page.waitForTimeout(900);
+  await page.click('a[href="/channels/@me/3002"]');
+  await page.waitForTimeout(900);
+  assert(gets.channels === 1 && gets.guilds === 1, `navigating while the lists load asked again ${JSON.stringify(gets)}`);
+  await page.click('[data-act="dm-refresh"]');
+  await page.click('[data-act="server-refresh"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.waitForSelector('.guild');
+  release();
+  while (failed < 2) await page.waitForTimeout(20);
+  await page.waitForTimeout(300);
+  const dms = await text(page, '[data-role="dm-list"]');
+  const servers = await text(page, '[data-role="server-list"]');
+  assert(!/Failed/.test(dms) && await page.locator('[data-key="c:3002"]').count() === 1, `DM list after the old load failed: ${dms.slice(0, 60)}`);
+  assert(!/Failed/.test(servers) && await page.locator('.guild').count() > 0, `server list after the old load failed: ${servers.slice(0, 60)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// The old account's list, still on its way when Discord switches accounts, isn't the new one's.
+await test('T67 a DM list still loading for the old account is dropped after an account switch', async () => {
+  const { page, pageErrors, context } = await boot('/channels/@me/3002');
+  await page.click('[data-act="scan"]'); // binds the panel to this account
+  await statusMatches(page, /found/);
+  let gets = 0;
+  let served = false;
+  let release;
+  const released = new Promise((r) => { release = r; });
+  await page.route('https://discord.com/api/v9/users/@me/channels', async (route) => {
+    if (route.request().method() !== 'GET' || ++gets > 1) return route.fallback();
+    await released;
+    const pal = { id: '3999', type: 1, last_message_id: '9999', recipients: [{ id: '2999', username: 'old.pal', global_name: 'Old Pal' }] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([pal]) });
+    served = true;
+  });
+  await page.click('.tab[data-tab="batch"]');
+  while (!gets) await page.waitForTimeout(20);
+  await page.click('.tab[data-tab="current"]');
+  await page.evaluate(() => localStorage.setItem('token', JSON.stringify('mock-token.b')));
+  await page.click('a[href="/channels/4001/5001"]');
+  await page.waitForFunction(() => /switched Discord accounts/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="term-body"]').textContent));
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]', { timeout: 4000 });
+  release();
+  while (!served) await page.waitForTimeout(20);
+  await page.waitForTimeout(300);
+  assert(await page.locator('[data-key="c:3999"]').count() === 0, 'drew the old account\'s DMs');
+  assert(await page.locator('[data-key="c:3002"]').count() === 1, `DM list: ${(await text(page, '[data-role="dm-list"]')).slice(0, 60)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
