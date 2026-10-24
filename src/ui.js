@@ -567,9 +567,13 @@
     if (!rows.length) return { total: 0, text: 'pick some chats to purify~', tone: 'quiet' };
     const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
     const total = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
-    const unscanned = rows.length - scanned.length - rows.filter((r) => r.status === 'error').length;
-    const text = [`${plural(rows.length, 'chat')} selected`, scanned.length ? `${total.toLocaleString()} found` : '', unscanned ? `${unscanned} need a scan` : '']
-      .filter(Boolean).join(' · ');
+    // A friend without a DM can't be scanned (that would open one); the run counts them.
+    const later = rows.filter((r) => r.needsDM && r.status !== 'error').length;
+    const unscanned = rows.length - scanned.length - later - rows.filter((r) => r.status === 'error').length;
+    const text = [
+      `${plural(rows.length, 'chat')} selected`, scanned.length ? `${total.toLocaleString()} found` : '',
+      unscanned ? `${unscanned} need a scan` : '', later ? `${plural(later, 'friend')} counted when purged` : '',
+    ].filter(Boolean).join(' · ');
     return { total, text, tone: total ? 'ready' : 'quiet' };
   }
 
@@ -853,10 +857,14 @@
     let grand = 0;
     let deferred = 0;
     let indexing = 0;
+    let searched = false;
     try {
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         if (row.needsDM) { deferred++; continue; }
+        // Search is Discord's tightest limit: pace it like a purge does instead of leaning on 429s.
+        if (searched) await sleep(TIMING.searchDelayMs, signal);
+        searched = true;
         setStatus(`Scanning ${i + 1}/${rows.length}: ${row.label}… 🔍`, 'info', { quiet: true });
         setRowState(row, 'scanning');
         try {
@@ -871,7 +879,8 @@
         }
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
-      if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')} 📚`, 'warn');
+      if (!searched) setStatus(`${plural(deferred, 'friend')} counted when purged~ nothing to scan yet ♡`, 'info');
+      else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')} 📚`, 'warn');
       else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(rows.length - deferred, 'chat')} ✨`, 'success');
     } catch (err) {
       for (const row of rows) if (row.status === 'scanning') setRowState(row, 'idle');

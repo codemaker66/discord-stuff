@@ -1,7 +1,7 @@
   'use strict';
 
   const API = `${location.origin}/api/v9`;
-  const TIMING = { deleteDelayMs: 1200, searchDelayMs: 800 };
+  const TIMING = { deleteDelayMs: 1200, searchDelayMs: 800, requestTimeoutMs: 30000 };
   // Message types Discord refuses to delete: recipient add/remove, call,
   // channel name/icon change and thread starter messages.
   const UNDELETABLE_TYPES = new Set([1, 2, 3, 4, 5, 21]);
