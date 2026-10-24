@@ -1,5 +1,7 @@
 // Capture every visible state of the v4 UI in the mock Discord for visual review.
 // node shots.mjs <userscript.js> <outDir> [dpr] [--showcase]   (--showcase: friendly names, for docs/img)
+// Runs at the shipped pace, so every ETA and rate on screen is one a friend will really see
+// (tools/marketing.py turns these into docs/img and checks pace.json first). Takes a few minutes.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import { openDiscord, injectUserscript } from './mock.mjs';
@@ -8,22 +10,29 @@ const SHOWCASE = process.argv.includes('--showcase');
 const [SRC, OUT, DPR = '2'] = process.argv.slice(2).filter((a) => a !== '--showcase');
 fs.mkdirSync(OUT, { recursive: true });
 const source = fs.readFileSync(SRC, 'utf8');
+const pace = /const TIMING = \{ deleteDelayMs: (\d+), searchDelayMs: (\d+) \};/.exec(source);
+fs.writeFileSync(`${OUT}/pace.json`, JSON.stringify({ deleteDelayMs: Number(pace[1]), searchDelayMs: Number(pace[2]) }));
 const browser = await chromium.launch();
 const sr = "document.querySelector('#dopa-purifier-host').shadowRoot";
 
 async function boot(path, opts = {}) {
   const env = await openDiscord(browser, path, { dpr: Number(DPR), showcase: SHOWCASE, ...opts });
-  // Slow, visible pacing so mid-run states can be caught.
-  let src = source.replace(/deleteDelayMs:\s*\d+/, `deleteDelayMs: ${opts.deleteDelay ?? 160}`).replace(/searchDelayMs:\s*\d+/, 'searchDelayMs: 40');
   // Presentation only: soften the mock chat behind the panel (its test strings contain literal tags).
   await env.page.addStyleTag({ content: '.chat .txt, .chat .who { color: transparent !important; text-shadow: 0 0 7px rgba(219,222,225,.55); } .chat .ts { display: none; }' });
-  await env.page.addScriptTag({ content: src });
+  await env.page.addScriptTag({ content: source });
   await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' });
   await env.page.waitForFunction(`${sr}.querySelector('[data-role="target-name"]').textContent !== 'detecting…'`);
   await env.page.waitForTimeout(700);
   return env;
 }
-const shot = (page, name, clip) => page.screenshot({ path: `${OUT}/${name}.png`, ...(clip ? { clip } : {}) });
+// Where the panel sits in each picture (device pixels), so tools/marketing.py can lift it out cleanly.
+const panels = { dpr: Number(DPR), boxes: {} };
+async function shot(page, name, clip) {
+  await page.screenshot({ path: `${OUT}/${name}.png`, ...(clip ? { clip } : {}) });
+  const b = await page.locator('.panel').boundingBox();
+  const at = clip || { x: 0, y: 0 };
+  if (b) panels.boxes[name] = [b.x - at.x, b.y - at.y, b.x - at.x + b.width, b.y - at.y + b.height].map((v) => Math.round(v * panels.dpr));
+}
 async function panelClip(page, pad = 40, extra = {}) {
   const b = await page.locator('.panel').boundingBox();
   const t = await page.locator('.term').isVisible() ? await page.locator('.term').boundingBox() : null;
@@ -38,6 +47,14 @@ async function hold(page, ms) {
   await page.waitForTimeout(ms);
 }
 
+// 0 first run: the welcome card
+{
+  const { page, context } = await boot('/channels/4001/5001', { firstRun: true });
+  await page.waitForSelector('[data-role="welcome"]');
+  await page.waitForTimeout(400);
+  await shot(page, '00-welcome', await panelClip(page));
+  await context.close();
+}
 // 1 idle, before scan
 {
   const { page, context } = await boot('/channels/4001/5001');
@@ -53,7 +70,7 @@ async function hold(page, ms) {
   await shot(page, '04-confirm-holding');
   await page.waitForTimeout(600);
   await page.mouse.up();
-  await page.waitForFunction(`Number(${sr}.querySelector('[data-role="count"]').textContent) >= 14`, null, { timeout: 20000 });
+  await page.waitForFunction(`Number(${sr}.querySelector('[data-role="count"]').textContent) >= 14`, null, { timeout: 60000 });
   await page.click('[data-act="logs"]');
   await page.waitForTimeout(500);
   await shot(page, '05-purging-logs', await panelClip(page));
@@ -62,7 +79,7 @@ async function hold(page, ms) {
   await shot(page, '06-paused', await panelClip(page));
   await page.click('[data-act="resume"]');
   await page.click('[data-act="logs"]');
-  await page.waitForFunction(`${sr}.querySelector('[data-role="layer"]').dataset.run === 'idle'`, null, { timeout: 30000 });
+  await page.waitForFunction(`${sr}.querySelector('[data-role="layer"]').dataset.run === 'idle'`, null, { timeout: 120000 });
   await page.waitForTimeout(350);
   await shot(page, '07-done-celebrate', await panelClip(page, 90));
   await page.waitForTimeout(2200);
@@ -75,7 +92,7 @@ async function hold(page, ms) {
 }
 // batch states
 {
-  const { page, context } = await boot('/channels/4001/5001', { deleteDelay: 220 });
+  const { page, context } = await boot('/channels/4001/5001');
   await page.click('.tab[data-tab="batch"]');
   await page.waitForSelector('[data-key="c:3003"]');
   await page.click('[data-key="c:3003"]');
@@ -88,7 +105,7 @@ async function hold(page, ms) {
   await page.waitForTimeout(400);
   await shot(page, '10-batch-selected', await panelClip(page));
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(`/Scan done/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`, null, { timeout: 20000 });
+  await page.waitForFunction(`/Scan done/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`, null, { timeout: 60000 });
   await page.waitForTimeout(300);
   await shot(page, '11-batch-scanned', await panelClip(page));
   await page.click('[data-act="purify"]');
@@ -96,9 +113,9 @@ async function hold(page, ms) {
   await shot(page, '12-batch-confirm');
   await hold(page, 1100);
   await page.mouse.up();
-  await page.waitForFunction(`Number(${sr}.querySelector('[data-role="count"]').textContent) >= 10`, null, { timeout: 30000 });
+  await page.waitForFunction(`Number(${sr}.querySelector('[data-role="count"]').textContent) >= 10`, null, { timeout: 60000 });
   await shot(page, '13-batch-running', await panelClip(page));
-  await page.waitForFunction(`${sr}.querySelector('[data-role="layer"]').dataset.run === 'idle'`, null, { timeout: 60000 });
+  await page.waitForFunction(`${sr}.querySelector('[data-role="layer"]').dataset.run === 'idle'`, null, { timeout: 240000 });
   await page.waitForTimeout(2500);
   await shot(page, '14-batch-done', await panelClip(page));
   await context.close();
@@ -123,5 +140,6 @@ async function hold(page, ms) {
   await shot(page, '17-no-channel', await panelClip(page));
   await context.close();
 }
+fs.writeFileSync(`${OUT}/panels.json`, JSON.stringify(panels));
 await browser.close();
 console.log('shots in', OUT);

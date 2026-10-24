@@ -6,8 +6,9 @@
 // node tools/build.mjs --check    → exits 1 if dist/ or docs/ is out of date (CI runs this)
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const cfg = pkg.purifier;
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
