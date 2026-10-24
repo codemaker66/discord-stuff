@@ -1038,6 +1038,52 @@ await test('T47 batch confirm never leads with "0+" before a scan', async () => 
   await context.close();
 });
 
+// Firefox's accessibility press (NVDA, JAWS, Voice Control, Dragon, TalkBack) is Gecko's
+// DispatchClickEvent: mousedown, mouseup and a click with detail 1, but no pointer events.
+await test('T48 a click no pointer went down for (Firefox assistive tech) confirms with two presses', async () => {
+  const { page, stats, context } = await boot('/channels/4001/5002');
+  const label = () => text(page, '[data-role="confirm-label"]');
+  const geckoPress = () => page.locator('[data-act="confirm"]').evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, composed: true, cancelable: true, button: 0, detail: 1, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+    el.dispatchEvent(new MouseEvent('mousedown', { ...o, buttons: 1 }));
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.dispatchEvent(new MouseEvent('click', o));
+  });
+  const openConfirm = async () => {
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    await page.waitForTimeout(400);
+  };
+  // A hold given up with Esc must not swallow the next dialog's first press.
+  await openConfirm();
+  const c = await page.locator('[data-act="confirm"]').boundingBox();
+  await page.mouse.move(c.x + c.width / 2, c.y + c.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await page.mouse.up();
+  assert(!(await dialogOpen(page)) && stats.deletes.length === 0, 'Esc mid-hold keeps you safe');
+  await openConfirm();
+  // A mouse click and a tap before it aren't first presses.
+  await page.click('[data-act="confirm"]');
+  const cdp = await context.newCDPSession(page);
+  const at = [{ x: c.x + c.width / 2, y: c.y + c.height / 2, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(1600);
+  assert(!/again/.test(await label()), `a click and a tap don't arm: ${await label()}`);
+  await geckoPress();
+  await page.waitForTimeout(200);
+  assert(/Press again/.test(await label()) && await dialogOpen(page) && stats.deletes.length === 0,
+    `first press only arms: ${await label()}, ${stats.deletes.length} deleted`);
+  await geckoPress();
+  await waitEnd(page);
+  assert(stats.deletes.length === 10, `two presses purged ${stats.deletes.length}`);
+  await context.close();
+});
+
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);

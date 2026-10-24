@@ -1389,6 +1389,7 @@
     ].filter(Boolean));
     $('[data-role="confirm-label"]').textContent = confirmLabel;
     modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0 };
+    hold.pointer = false;
     clearTimeout(dialogTimer);
     layer.hidden = false;
     layer.dataset.open = 'true';
@@ -1411,7 +1412,7 @@
     else if (restoreFocus && restoreFocus.focus) restoreFocus.focus();
   }
 
-  const hold = { start: 0, raf: 0, active: false, nudge: 0 };
+  const hold = { start: 0, raf: 0, active: false, nudge: 0, pointer: false };
   const ARMED_LABEL = 'Press again to purify~';
 
   function resetHold() {
@@ -1459,8 +1460,9 @@
     hold.nudge = setTimeout(resetHold, 1400);
   }
 
-  // Screen readers, voice control and switches press with a bare click (detail 0) and can't
-  // hold, so for them two presses confirm. Mouse clicks (detail ≥ 1) still need the hold.
+  // Screen readers, voice control and switches can't hold, so for them two presses confirm. Their
+  // press is a click no pointer went down for: detail 0 in Chromium, detail 1 but no pointerdown
+  // in Firefox. Mouse, pen and touch clicks always follow a pointerdown and still need the hold.
   function pressConfirm() {
     if (!modal || hold.active) return;
     if (modal.armed) { closeDialog(true); return; }
@@ -2026,7 +2028,12 @@
       if (tab) { switchTab(tab.dataset.tab); return; }
       const btn = e.target.closest('[data-act]');
       if (!btn || btn.disabled) return;
-      if (btn.dataset.act === 'confirm') { if (e.detail === 0) pressConfirm(); return; }
+      if (btn.dataset.act === 'confirm') {
+        const assistive = e.detail === 0 || !hold.pointer;
+        hold.pointer = false;
+        if (assistive) pressConfirm();
+        return;
+      }
       // A double-click must not flip a toggle twice (Pause→Resume) or open-then-dismiss a dialog.
       if (e.detail > 1 && TOGGLES.has(btn.dataset.act)) return;
       const fn = ACTIONS[btn.dataset.act];
@@ -2040,7 +2047,12 @@
       $(`.tab[data-tab="${next}"]`).focus();
     });
     const confirmBtn = $('[data-act="confirm"]');
-    confirmBtn.addEventListener('pointerdown', (e) => { if (e.button === 0) { confirmBtn.setPointerCapture(e.pointerId); beginHold(); } });
+    confirmBtn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      hold.pointer = true;
+      confirmBtn.setPointerCapture(e.pointerId);
+      beginHold();
+    });
     // Capture keeps a release anywhere reaching endHold; sliding off (even onto Nevermind) lets go.
     confirmBtn.addEventListener('pointermove', (e) => {
       if (!hold.active) return;
