@@ -572,7 +572,7 @@
     const unscanned = rows.length - scanned.length - later - rows.filter((r) => r.status === 'error').length;
     const text = [
       `${plural(rows.length, 'chat')} selected`, scanned.length ? `${total.toLocaleString()} found` : '',
-      unscanned ? `${unscanned} need a scan` : '', later ? `${plural(later, 'friend')} counted when purged` : '',
+      unscanned ? `${unscanned} need a scan` : '', later ? `${plural(later, 'friend')} at purge` : '',
     ].filter(Boolean).join(' · ');
     return { total, text, tone: total ? 'ready' : 'quiet' };
   }
@@ -631,6 +631,7 @@
     const sub = $('[data-role="hero-sub"]');
     if (mode === 'run') sub.textContent = p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}${known ? '' : '+'}${p.failed ? ` · ${p.failed} failed` : ''}` : 'counting as we go~';
     else sub.textContent = mode === 'done' ? lastEnd.text : idle.text;
+    sub.title = sub.textContent; // the Batch strip truncates; hover shows all of it
 
     // Minimised through the finish line: the orb keeps the full ring and count until reopened.
     const orbC = 2 * Math.PI * 22;
@@ -879,7 +880,7 @@
         }
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
-      if (!searched) setStatus(`${plural(deferred, 'friend')} counted when purged~ nothing to scan yet ♡`, 'info');
+      if (!searched) setStatus(`${plural(deferred, 'friend')} counted at purge~ ♡`, 'info');
       else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')} 📚`, 'warn');
       else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(rows.length - deferred, 'chat')} ✨`, 'success');
     } catch (err) {

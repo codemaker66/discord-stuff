@@ -1070,22 +1070,44 @@ await test('T55 Scan selected paces its searches and can be cancelled between th
   await context.close();
 });
 
-// Friends without a DM are counted when purged (scanning would open their DM), so never "need a scan".
-await test('T56 a friend with no DM yet is "counted when purged", not "needs a scan" for ever', async () => {
+// Friends without a DM are counted at purge (scanning would open their DM), so never "need a scan".
+// Reads the Batch strip's own line (the readout line is hidden there) and checks it stays inside the panel.
+await test('T56 a friend with no DM yet is counted at purge, not "needs a scan" for ever', async () => {
   const { page, stats, context } = await boot('/channels/4001/5001');
-  const readout = () => text(page, '[data-role="readout-line"]');
+  const strip = () => page.evaluate(() => {
+    const root = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const el = root.querySelector('[data-role="hero-sub"]');
+    const body = root.querySelector('.body');
+    return { text: el.textContent, title: el.title, shown: el.offsetWidth > 0, whole: el.scrollWidth <= el.clientWidth,
+      past: Math.round(el.getBoundingClientRect().right - root.querySelector('[data-role="shell"]').getBoundingClientRect().right),
+      sideways: body.scrollWidth - body.clientWidth, ellipsis: getComputedStyle(el).textOverflow === 'ellipsis' };
+  });
+  // Every line stays inside the panel; a line that can't fit ends in an ellipsis and hovers in full.
+  const check = async (when, expected, { fits = true } = {}) => {
+    const s = await strip();
+    assert(s.shown && s.past <= 0 && s.sideways <= 0, `${when}: "${s.text}" runs ${s.past}px past the panel (body ${s.sideways}px sideways)`);
+    assert(fits ? s.whole : s.ellipsis, `${when}: "${s.text}" ${fits ? 'is cut short' : 'has no ellipsis'}`);
+    assert(s.text === expected && s.title === expected, `${when}: "${s.text}" (title "${s.title}")`);
+  };
   await pickBatch(page, ['u:2004']);
-  assert((await readout()) === '1 chat selected · 1 friend counted when purged', `Bob alone: ${await readout()}`);
+  await check('Bob alone', '1 chat selected · 1 friend at purge');
   await page.click('[data-act="scan"]');
-  await untilStatus(page, /counted when purged/);
-  assert(!/0 chats/.test(await status(page)), `status ${await status(page)}`);
+  await untilStatus(page, /counted at purge/);
+  const said = await page.evaluate(() => {
+    const el = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]');
+    return { text: el.textContent, whole: el.scrollWidth <= el.clientWidth };
+  });
+  assert(said.text === '1 friend counted at purge~ ♡' && said.whole, `status "${said.text}"${said.whole ? '' : ' is cut short'}`);
   await page.click('[data-key="c:3002"]');
-  assert((await readout()) === '2 chats selected · 1 need a scan · 1 friend counted when purged', `before scan: ${await readout()}`);
+  await check('before scan', '2 chats selected · 1 need a scan · 1 friend at purge', { fits: false });
   for (let i = 0; i < 2; i++) {
     await page.click('[data-act="scan"]');
     await untilStatus(page, /Scan done/);
-    assert((await readout()) === '2 chats selected · 31 found · 1 friend counted when purged', `after scan ${i + 1}: ${await readout()}`);
+    await check(`after scan ${i + 1}`, '2 chats selected · 31 found · 1 friend at purge');
   }
+  await page.click('[data-key="c:3003"]');
+  await page.click('[data-key="u:2005"]');
+  await check('four chats', '4 chats selected · 31 found · 1 need a scan · 2 friends at purge', { fits: false });
   assert(stats.opened.length === 0, 'scanning opened no DM');
   await context.close();
 });

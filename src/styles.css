@@ -218,17 +218,19 @@
 
 /* Batch: the hero folds into a strip so the lists get the room. */
 .layer[data-tab="batch"] .hero { position: sticky; top: 0; z-index: 3; margin: 0 -16px; padding: 10px 16px 12px; border-radius: 0;
-  background: #1a0e15; box-shadow: 0 1px 0 var(--hair), 0 12px 12px -12px rgba(0, 0, 0, .7); grid-template-areas: 'stack core' 'readout readout'; grid-template-columns: 44px 1fr; column-gap: 12px; justify-items: start; }
+  background: #1a0e15; box-shadow: 0 1px 0 var(--hair), 0 12px 12px -12px rgba(0, 0, 0, .7); grid-template-areas: 'stack core' 'readout readout'; grid-template-columns: 44px minmax(0, 1fr); column-gap: 12px; justify-items: start; }
 .layer[data-tab="batch"] .gauge { grid-area: stack; width: 44px; height: 44px; margin: 0; }
 .layer[data-tab="batch"] .g-dial, .layer[data-tab="batch"] .gauge-pct, .layer[data-tab="batch"] .blood, .layer[data-tab="batch"] .sticker { display: none; }
 .layer[data-tab="batch"] .g-track, .layer[data-tab="batch"] .g-ok, .layer[data-tab="batch"] .g-head { stroke-width: 12; }
 .layer[data-tab="batch"] .g-fail { stroke-width: 18; }
 .layer[data-tab="batch"][data-hero="preview"] .g-track { stroke: rgba(255, 208, 226, .1); }
-.layer[data-tab="batch"] .hero-core { grid-area: core; flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin: 0; align-self: center; }
+/* Capped at its column, or the nowrap line below widens the core past the panel instead of ending in an ellipsis. */
+.layer[data-tab="batch"] .hero-core { grid-area: core; flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin: 0; align-self: center;
+  min-width: 0; max-width: 100%; }
 .layer[data-tab="batch"] .count { font-size: 24px; letter-spacing: -.03em; text-shadow: none; }
 .layer[data-tab="batch"] .count-label { margin: 0; }
 .layer[data-tab="batch"] .hero-sub { display: block; flex-basis: 100%; margin-top: 4px; font: 500 12px/16px var(--font); color: var(--t3);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; pointer-events: auto; }
 .layer[data-tab="batch"] .readout { display: none; }
 .layer[data-tab="batch"][data-hero="run"] .readout { display: flex; margin-top: 10px; }
 
