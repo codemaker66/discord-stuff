@@ -1401,6 +1401,281 @@ await test('T56 a friend with no DM yet is counted at purge, not "needs a scan" 
   await page.click('[data-key="u:2005"]');
   await check('four chats', '4 chats selected · 31 found · 1 need a scan · 2 friends at purge', { fits: false });
   assert(stats.opened.length === 0, 'scanning opened no DM');
+const nameIs = (page, name) => page.waitForFunction((n) => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="target-name"]').textContent === n, name, { timeout: 4000 });
+const statusMatches = (page, re, timeout = 8000) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), re.source, { timeout });
+
+// Any failed lookup of the open chat ends the same way; a 5xx blip that outlasts request()'s
+// retries is the usual cause (one 403 here keeps the test fast). Retry is the user's, never a poll's.
+await test('T60 a failed channel lookup offers Retry, and Retry recovers', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001');
+  let lookups = 0;
+  await page.route('https://discord.com/api/v9/channels/5002', (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    if (++lookups > 1) return route.fallback();
+    return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'Missing Access', code: 50001 }) });
+  });
+  await page.click('a[href="/channels/4001/5002"]');
+  await statusMatches(page, /Couldn't read this channel/);
+  await page.waitForTimeout(1500);
+  assert(lookups === 1, `looked the channel up again by itself (${lookups})`);
+  assert(await page.locator('[data-act="scan"]').isEnabled(), 'Scan is usable after a failed lookup');
+  assert((await text(page, '[data-role="scan-label"]')) === 'Retry', `scan label ${await text(page, '[data-role="scan-label"]')}`);
+  assert(await page.locator('[data-act="purify"]').isDisabled(), 'no purging an unread chat');
+  await page.click('[data-act="scan"]');
+  await nameIs(page, 'art-share');
+  assert(lookups === 2, `retry looked it up once (${lookups})`);
+  assert((await status(page)) === 'Ready to purify~ ✨', `status after retry: ${await status(page)}`);
+  assert((await text(page, '[data-role="scan-label"]')) === 'Scan', 'Retry is Scan again');
+  await page.click('[data-act="scan"]');
+  await statusMatches(page, /found/);
+  assert((await status(page)).startsWith('10 messages found'), await status(page));
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T61 resizing the window never moves the panel for good', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { viewport: { width: 1440, height: 900 } });
+  const spot = () => page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const s = r.querySelector('[data-role="shell"]');
+    return { x: s.offsetLeft, y: s.offsetTop, gap: innerWidth - s.offsetLeft - r.querySelector('.panel').offsetWidth };
+  });
+  const squeeze = async () => {
+    await page.setViewportSize({ width: 720, height: 380 }); // snapped to half a screen, short
+    await page.waitForTimeout(200);
+    const small = await spot();
+    assert(small.x >= 8 && small.gap >= 8 && small.y >= 8, `on screen while small ${JSON.stringify(small)}`);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(200);
+  };
+  const home = await spot();
+  assert(home.gap === 20 && home.y === 56, `default spot ${JSON.stringify(home)}`);
+  await squeeze();
+  const back = await spot();
+  assert(back.gap === 20 && back.y === 56, `never-dragged panel back on the right edge ${JSON.stringify(back)}`);
+  // Dragged to a spot of your own: squeezed onto the screen, then back to that spot, kept across reloads.
+  const head = await page.locator('.head').boundingBox();
+  await page.mouse.move(head.x + 120, head.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(head.x + 120 - 760, head.y + 20 + 244, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const mine = await spot();
+  assert(mine.x === 300 && mine.y === 300, `dragged to ${JSON.stringify(mine)}`);
+  await squeeze();
+  const again = await spot();
+  assert(again.x === 300 && again.y === 300, `dragged spot after a resize ${JSON.stringify(again)}`);
+  await page.reload();
+  await injectUserscript(page, source);
+  await page.waitForSelector('[data-role="layer"]', { state: 'attached' });
+  await page.waitForTimeout(300);
+  const reloaded = await spot();
+  assert(reloaded.x === 300 && reloaded.y === 300, `dragged spot after reload ${JSON.stringify(reloaded)}`);
+  await context.close();
+});
+
+// Discord logs you in without reloading the page, so the panel is already up on /login.
+await test('T62 Batch lists that failed on the login page load once you log in', async () => {
+  const env = await openDiscord(browser, '/login');
+  const { page, context } = env;
+  await page.evaluate(() => {
+    localStorage.removeItem('token');
+    localStorage.setItem('dopa-purifier:prefs', JSON.stringify({ welcomed: true, tab: 'batch' }));
+  });
+  await injectUserscript(page, source);
+  await page.waitForFunction(() => /logged in/.test(document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="server-list"]')?.textContent || ''));
+  assert(/logged in/.test(await text(page, '[data-role="dm-list"]')), 'DM list says why it is empty');
+  await page.evaluate((t) => {
+    localStorage.setItem('token', JSON.stringify(t));
+    history.pushState({}, '', '/channels/4001/5001');
+  }, TOKEN);
+  await page.waitForSelector('[data-key="c:3002"]', { timeout: 4000 });
+  await page.waitForSelector('.guild', { timeout: 4000 });
+  assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T63 the footer drops the last chat\'s verdict when you open another', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('[data-act="scan"]');
+  await statusMatches(page, /40 messages found/);
+  await page.click('a[href="/channels/4001/5002"]');
+  await nameIs(page, 'art-share'); // the footer is settled by the time the name shows
+  assert((await status(page)) === 'Ready to purify~ ✨', `on art-share after scanning general: ${await status(page)}`);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  assert(/^Done in/.test(await status(page)), `done: ${await status(page)}`);
+  await page.click('a[href="/channels/@me/3002"]');
+  await nameIs(page, 'Alice ✿');
+  assert((await status(page)) === 'Ready to purify~ ✨', `on Alice after purging art-share: ${await status(page)}`);
+  // Batch verdicts are about the selection, not the open chat: they stay.
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3003"]');
+  await page.click('[data-key="c:3003"]');
+  await page.click('[data-act="scan"]');
+  await statusMatches(page, /Scan done/);
+  const verdict = await status(page);
+  await page.click('a[href="/channels/4001/5001"]');
+  await nameIs(page, 'general');
+  await page.waitForTimeout(300);
+  assert((await status(page)) === verdict, `batch verdict replaced: ${await status(page)}`);
+  await context.close();
+});
+
+await test('T64 first run: the welcome card takes focus, and Tab never lands behind it', async () => {
+  const focused = (page) => page.evaluate(() => {
+    const el = document.querySelector('#dopa-purifier-host').shadowRoot.activeElement;
+    return el ? { id: el.dataset.act || el.dataset.tab || el.className, behind: !!el.closest('.tabs, [data-role="body"], .foot') } : null;
+  });
+  {
+    const { page, context } = await boot('/channels/4001/5001', { firstRun: true, viewport: { width: 1280, height: 720 } });
+    assert((await focused(page))?.id === 'welcome-ok', `focus on arrival: ${JSON.stringify(await focused(page))}`);
+    const title = await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      return r.getElementById(r.querySelector('[data-role="welcome"]').getAttribute('aria-labelledby'))?.textContent;
+    });
+    assert(title === 'Hi princess~ ♡', `dialog named ${title}`);
+    const stops = [];
+    for (let i = 0; i < 10; i++) {
+      await page.keyboard.press('Tab');
+      stops.push(await focused(page));
+    }
+    const inside = stops.filter(Boolean);
+    assert(inside.every((f) => !f.behind), `Tab reached controls under the card: ${JSON.stringify(inside)}`);
+    assert(inside.some((f) => f.id === 'welcome-batch'), `Tab reaches both card buttons: ${JSON.stringify(inside)}`);
+    await page.locator('[data-act="welcome-ok"]').focus();
+    await page.keyboard.press('Enter');
+    assert(!(await page.locator('[data-role="welcome"]').isVisible()), 'dismissed');
+    assert((await focused(page))?.id === 'current', `focus after "Got it": ${JSON.stringify(await focused(page))}`);
+    assert(await page.evaluate(() => ['.tabs', '[data-role="body"]', '.foot'].every((s) => !document.querySelector('#dopa-purifier-host').shadowRoot.querySelector(s).inert)), 'panel usable again');
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001', { firstRun: true });
+    await page.keyboard.press('Tab');
+    assert((await focused(page))?.id === 'welcome-batch', `second stop: ${JSON.stringify(await focused(page))}`);
+    await page.keyboard.press('Enter');
+    assert((await focused(page))?.id === 'batch', `focus after "Purge many chats": ${JSON.stringify(await focused(page))}`);
+    await page.waitForSelector('[data-key="c:3002"]');
+    await context.close();
+  }
+});
+
+// Words in the panel's faintest ink must still clear WCAG AA (4.5:1) on what is really behind them.
+await test('T65 "no messages found" and the filter placeholder are readable', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  const lum = ([r, g, b]) => [r, g, b].map((c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+    .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  // The text colour as styled, against the median pixel of the rendered box (the backdrop: text is the minority).
+  const contrast = async (locator, pseudo) => {
+    const color = (await locator.evaluate((el, p) => getComputedStyle(el, p).color, pseudo)).match(/\d+/g).slice(0, 3).map(Number);
+    const png = (await locator.screenshot()).toString('base64');
+    const backdrop = await page.evaluate(async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const px = [];
+      for (let i = 0; i < d.length; i += 4) px.push([d[i], d[i + 1], d[i + 2]]);
+      px.sort((a, b) => (a[0] + a[1] + a[2]) - (b[0] + b[1] + b[2]));
+      return px[px.length >> 1];
+    }, png);
+    return { ratio: ratio(color, backdrop), color, backdrop };
+  };
+  await page.click('.tab[data-tab="batch"]');
+  await page.locator('.guild-head').first().click();
+  await page.waitForSelector('[data-key="c:5004"]');
+  await page.click('[data-key="c:5004"]'); // Voice Lounge: none of mine
+  await page.click('[data-act="scan"]');
+  await page.waitForSelector('[data-key="c:5004"][data-state="clean"]', { timeout: 8000 });
+  await page.mouse.move(5, 5);
+  await page.waitForTimeout(300);
+  const meta = page.locator('[data-key="c:5004"] .row-meta');
+  assert((await meta.textContent()) === 'no messages found', `meta ${await meta.textContent()}`);
+  const clean = await contrast(meta, null);
+  assert(clean.ratio >= 4.5, `"no messages found" at ${clean.ratio.toFixed(2)}:1 ${JSON.stringify(clean)}`);
+  const placeholder = await contrast(page.locator('[data-role="filter"]'), '::placeholder');
+  assert(placeholder.ratio >= 4.5, `filter placeholder at ${placeholder.ratio.toFixed(2)}:1 ${JSON.stringify(placeholder)}`);
+  await context.close();
+});
+
+// A list load can sit in request()'s 5xx backoff for ~14 s. Here the first load of each list is
+// held, then fails: by then a newer load has drawn the list, and the old failure must not win.
+await test('T66 Batch lists: a slow old load never overwrites a newer one, and navigating doesn\'t ask twice', async () => {
+  const { page, pageErrors, context } = await boot('/channels/@me/3002'); // a DM: the servers aren't cached yet
+  const gets = { channels: 0, guilds: 0 };
+  const held = [];
+  let failed = 0;
+  let release;
+  const released = new Promise((r) => { release = r; });
+  await page.route(/\/api\/v9\/users\/@me\/(channels|guilds)$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const list = route.request().url().endsWith('/guilds') ? 'guilds' : 'channels';
+    if (++gets[list] > 1) return route.fallback();
+    held.push(list);
+    await released;
+    await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'Missing Access', code: 50001 }) });
+    failed++;
+  });
+  await page.click('.tab[data-tab="batch"]');
+  while (held.length < 2) await page.waitForTimeout(20);
+  await page.evaluate(() => history.pushState({}, '', '/channels/@me/3003'));
+  await page.waitForTimeout(900);
+  await page.click('a[href="/channels/@me/3002"]');
+  await page.waitForTimeout(900);
+  assert(gets.channels === 1 && gets.guilds === 1, `navigating while the lists load asked again ${JSON.stringify(gets)}`);
+  await page.click('[data-act="dm-refresh"]');
+  await page.click('[data-act="server-refresh"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.waitForSelector('.guild');
+  release();
+  while (failed < 2) await page.waitForTimeout(20);
+  await page.waitForTimeout(300);
+  const dms = await text(page, '[data-role="dm-list"]');
+  const servers = await text(page, '[data-role="server-list"]');
+  assert(!/Failed/.test(dms) && await page.locator('[data-key="c:3002"]').count() === 1, `DM list after the old load failed: ${dms.slice(0, 60)}`);
+  assert(!/Failed/.test(servers) && await page.locator('.guild').count() > 0, `server list after the old load failed: ${servers.slice(0, 60)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// The old account's list, still on its way when Discord switches accounts, isn't the new one's.
+await test('T67 a DM list still loading for the old account is dropped after an account switch', async () => {
+  const { page, pageErrors, context } = await boot('/channels/@me/3002');
+  await page.click('[data-act="scan"]'); // binds the panel to this account
+  await statusMatches(page, /found/);
+  let gets = 0;
+  let served = false;
+  let release;
+  const released = new Promise((r) => { release = r; });
+  await page.route('https://discord.com/api/v9/users/@me/channels', async (route) => {
+    if (route.request().method() !== 'GET' || ++gets > 1) return route.fallback();
+    await released;
+    const pal = { id: '3999', type: 1, last_message_id: '9999', recipients: [{ id: '2999', username: 'old.pal', global_name: 'Old Pal' }] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([pal]) });
+    served = true;
+  });
+  await page.click('.tab[data-tab="batch"]');
+  while (!gets) await page.waitForTimeout(20);
+  await page.click('.tab[data-tab="current"]');
+  await page.evaluate(() => localStorage.setItem('token', JSON.stringify('mock-token.b')));
+  await page.click('a[href="/channels/4001/5001"]');
+  await page.waitForFunction(() => /switched Discord accounts/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="term-body"]').textContent));
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]', { timeout: 4000 });
+  release();
+  while (!served) await page.waitForTimeout(20);
+  await page.waitForTimeout(300);
+  assert(await page.locator('[data-key="c:3999"]').count() === 0, 'drew the old account\'s DMs');
+  assert(await page.locator('[data-key="c:3002"]').count() === 1, `DM list: ${(await text(page, '[data-role="dm-list"]')).slice(0, 60)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });
 

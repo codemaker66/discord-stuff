@@ -266,7 +266,7 @@
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a08393' stroke-width='2' stroke-linecap='round'><path d='M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5'/></svg>");
   background-repeat: no-repeat; background-size: 14px; background-position: 11px 50%;
   box-shadow: inset 0 0 0 1px var(--hair); transition: box-shadow .2s; -webkit-appearance: none; appearance: none; }
-.filter::placeholder { color: var(--t4); }
+.filter::placeholder { color: var(--t3); }
 .filter:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--focus), 0 0 0 3px rgba(239, 228, 255, .14); }
 .filter::-webkit-search-cancel-button { -webkit-appearance: none; }
 
@@ -309,8 +309,8 @@
 .chip-need { height: 20px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 999px; font: 600 10.5px/1 var(--font);
   color: var(--t3); border: 1px dashed rgba(255, 208, 226, .2); }
 .row[data-state="scanning"] .row-meta { color: var(--rose-300); animation: dp-breathe 1.2s var(--ease-in-out) infinite; }
-.row[data-state="clean"] .row-meta { color: var(--t4); }
-.row[data-state="queued"] .row-meta { color: var(--t4); }
+/* --t4 is too faint for words (under 3:1); an empty chat reads quieter by weight instead. */
+.row[data-state="clean"] .row-meta { font-weight: 500; }
 .row[data-state="running"] { color: var(--t1); background: rgba(255, 122, 169, .085); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .26); }
 .row[data-state="running"] .row-meta { color: var(--rose-200); }
 .row[data-state="running"] .row-tag { letter-spacing: .03em; color: var(--rose-300); animation: dp-breathe 1.4s var(--ease-in-out) infinite; }
