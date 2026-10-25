@@ -113,8 +113,25 @@
     try { return await res.json(); } catch { return null; }
   }
 
+  // Stop and Cancel drop a read at once. A DELETE or POST already sent is left to land, so
+  // "after this one" and the counts stay true. The timeout bounds both: a dead connection
+  // turns into a network error and takes the usual backoff instead of hanging for ever.
+  async function boundedFetch(url, init, signal) {
+    const ctl = new AbortController();
+    const kill = () => ctl.abort();
+    const linked = !!signal && init.method === 'GET';
+    if (linked) signal.addEventListener('abort', kill, { once: true });
+    const timer = setTimeout(kill, TIMING.requestTimeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: ctl.signal });
+    } finally {
+      clearTimeout(timer);
+      if (linked) signal.removeEventListener('abort', kill);
+    }
+  }
+
   // One request with Discord's retry rules: 429 → wait retry_after, 202 (search
-  // index still building) → wait and retry, 5xx/network → short backoff,
+  // index still building) → wait and retry, 5xx/network/timeout → short backoff,
   // 401 → re-read the token once. Returns the final Response.
   async function request(path, { method = 'GET', body, signal, onWait, beforeRetry } = {}) {
     let authRetried = false;
@@ -128,12 +145,13 @@
       if (!token) throw new DiscordError(401, { message: 'No Discord login token found — are you logged in?' });
       let res;
       try {
-        res = await fetch(API + path, {
+        res = await boundedFetch(API + path, {
           method,
           headers: body ? { Authorization: token, 'Content-Type': 'application/json' } : { Authorization: token },
           body: body ? JSON.stringify(body) : undefined,
-        });
+        }, signal);
       } catch {
+        if (signal && signal.aborted) throw new Stopped();
         if (++networkFails > 5) throw new DiscordError(0, { message: 'Network unreachable' });
         const seconds = 2 ** networkFails;
         if (onWait) onWait({ kind: 'network', seconds });
@@ -206,7 +224,7 @@
 
   const listDMs = () => getJson('/users/@me/channels');
   const listRelationships = () => getJson('/users/@me/relationships');
-  const openDM = (userId, signal) => getJson('/users/@me/channels', { method: 'POST', body: { recipients: [userId] }, signal });
+  const openDM = (userId, opts) => getJson('/users/@me/channels', { ...opts, method: 'POST', body: { recipients: [userId] } });
 
   async function listTextChannels(guildId) {
     const channels = await getJson(`/guilds/${guildId}/channels`);
@@ -386,6 +404,7 @@
     deleteDelay: TIMING.deleteDelayMs,
     calm: 0,
     seen: new Set(),
+    blocked: new Map(), // channelId → why every delete there fails (an archived thread)
   };
 
   const processed = () => run.deleted + run.failed + run.gone;
@@ -431,6 +450,8 @@
     };
   }
 
+  const ARCHIVED_THREAD = 50083; // Discord's code for a write into an archived thread
+
   async function handleMessage(target, msg, signal) {
     if (run.seen.has(msg.id)) return;
     run.seen.add(msg.id);
@@ -442,7 +463,14 @@
     await gate(signal);
     // Channel search also returns messages from the channel's threads, so delete
     // in the channel Discord says the message lives in.
-    const res = await request(`/channels/${msg.channel_id || target.channelId}/messages/${msg.id}`, {
+    const where = msg.channel_id || target.channelId;
+    // An archived thread refuses every delete alike: the first refusal answers for the rest.
+    if (run.blocked.has(where)) {
+      recordFailure(target, msg, run.blocked.get(where), ARCHIVED_THREAD);
+      tick();
+      return;
+    }
+    const res = await request(`/channels/${where}/messages/${msg.id}`, {
       method: 'DELETE', signal, onWait: onWaitFor(target), beforeRetry: () => gate(signal),
     });
     const body = res.ok ? null : await readJson(res);
@@ -462,14 +490,22 @@
     } else {
       const err = new DiscordError(res.status, body);
       if (res.status === 401 || err.code === 'captcha') throw err;
-      run.failed++;
-      target.failed = (target.failed || 0) + 1;
-      const failure = { target, msg: { id: msg.id, content: msg.content, attachments: msg.attachments, pinned: msg.pinned, type: msg.type }, reason: err.message, code: err.code };
-      run.failures.push(failure);
-      emit('fail', failure);
+      if (err.code === ARCHIVED_THREAD) {
+        run.blocked.set(where, err.message);
+        emit('log', { tone: 'warn', text: `${target.name}: ${where === target.channelId ? 'this thread' : 'a thread in here'} is archived~ reopen it in Discord to purge those ♡` });
+      }
+      recordFailure(target, msg, err.message, err.code);
     }
     tick();
     await sleep(run.deleteDelay, signal);
+  }
+
+  function recordFailure(target, msg, reason, code) {
+    run.failed++;
+    target.failed = (target.failed || 0) + 1;
+    const failure = { target, msg: { id: msg.id, content: msg.content, attachments: msg.attachments, pinned: msg.pinned, type: msg.type }, reason, code };
+    run.failures.push(failure);
+    emit('fail', failure);
   }
 
   // Returns { indexing: true } when Discord says older history is not searchable yet.
@@ -502,6 +538,7 @@
       }
       // One cheap look at the newest page catches anything the index added mid-run.
       if (!fresh) break;
+      await gate(signal);
       const top = await searchPage(target, me.id, { signal, onWait });
       if (top.indexing) indexing = true;
       if (!top.hits.some((m) => !run.seen.has(m.id))) break;
@@ -547,7 +584,7 @@
       token: getToken(), accountSwitched: false,
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0,
-      deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(),
+      deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: targets.reduce((sum, t) => sum + (counts.get(t.channelId) || 0), 0),
       uncounted: 0,
     });
@@ -571,7 +608,10 @@
       for (let i = 0; i < targets.length; i++) {
         const target = targets[i];
         if (signal.aborted) break;
+        // Wait out a pause before the shield check, so a shield set while paused still counts.
+        await gate(signal);
         if (target.protected || isProtectedUser(target.partner)) {
+          counted(target, 0);
           emit('target-end', { target, index: i, ok: false, immune: true });
           continue;
         }
@@ -582,13 +622,14 @@
         const before = counts.get(target.channelId);
         try {
           if (target.needsDM) {
-            const dm = await openDM(target.userId, signal);
+            const dm = await openDM(target.userId, { signal, beforeRetry: () => gate(signal) });
             const previousKey = target.key;
             target.channelId = dm.id;
             target.needsDM = false;
             target.openedByUs = true;
             emit('dm-opened', { target, previousKey });
             await sleep(TIMING.searchDelayMs * 2, signal); // don't open DMs in a burst
+            await gate(signal);
           }
           if (counts.has(target.channelId)) counted(target, counts.get(target.channelId));
           else {
@@ -626,6 +667,8 @@
             emit('target-end', { target, index: i, ok: false, stopped: true });
             break;
           }
+          // A skipped chat is settled too, or every later chat would show "N of M+" with no ETA.
+          counted(target, (target.deleted || 0) + (target.failed || 0) + (target.gone || 0));
           counts.delete(target.channelId);
           if (fatalError(err)) { fatal = err; break; }
           run.problems.push({ target, reason: err.message });
