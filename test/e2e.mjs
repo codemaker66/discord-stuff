@@ -826,273 +826,6 @@ await test('T40 sliding off the hold button cancels the purge, mouse and touch',
     await holdConfirm(page); // a real hold still works afterwards
     await waitEnd(page);
     assert(stats.deletes.length === 10, `${input}: hold after the slide-off deleted ${stats.deletes.length}`);
-// ── Engine: hung requests, pause between chats, honest progress, archived threads, pacing ──
-
-const api = (r) => `${r.method()} ${new URL(r.url()).pathname.replace('/api/v9', '')}`;
-
-// Every API request the page starts, with when it started.
-function recordRequests(page) {
-  const sent = [];
-  page.on('request', (r) => { if (r.url().includes('/api/')) sent.push({ t: Date.now(), what: api(r) }); });
-  return { sent, since: (t0) => sent.filter((r) => r.t > t0).map((r) => r.what) };
-}
-
-// Holds matching requests until release() (or for `ms`), so a click can land while one is in flight.
-async function holdRequests(page, pattern, { match = () => true, ms = 0, once = true } = {}) {
-  const hold = { held: 0, done: 0, release: null };
-  const released = new Promise((r) => { hold.release = r; });
-  await page.route(pattern, async (route) => {
-    if ((once && hold.held) || !match(route.request())) return route.fallback();
-    hold.held++;
-    await (ms ? new Promise((r) => setTimeout(r, ms)) : released);
-    hold.done++;
-    try { await route.fallback(); } catch { /* the page gave up on it */ }
-  });
-  return hold;
-}
-
-// Boot a build whose timings the caller set itself.
-async function bootWith(src, path, opts = {}) {
-  const env = await openDiscord(browser, path, opts);
-  await injectUserscript(env.page, src, { fast: false });
-  await env.page.waitForFunction(() => {
-    const el = document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]');
-    return el && el.textContent !== 'detecting…';
-  }, null, { timeout: 8000 });
-  return env;
-}
-
-async function pickBatch(page, keys) {
-  await page.click('.tab[data-tab="batch"]');
-  if (keys.some((k) => /^c:5/.test(k))) await page.locator('.guild-head').first().click();
-  for (const k of keys) {
-    await page.waitForSelector(`[data-key="${k}"]`);
-    await page.click(`[data-key="${k}"]`);
-  }
-}
-
-// What another Discord tab does when it shields someone: write prefs, fire "storage" here.
-const shieldFromOtherTab = (page, userId) => page.evaluate((id) => {
-  const f = document.createElement('iframe');
-  document.body.appendChild(f);
-  const ls = f.contentWindow.localStorage;
-  const p = JSON.parse(ls.getItem('dopa-purifier:prefs') || '{}');
-  p.protectedIds = [...(p.protectedIds || []), id];
-  ls.setItem('dopa-purifier:prefs', JSON.stringify(p));
-  f.remove();
-  window.dispatchEvent(new StorageEvent('storage', { key: 'dopa-purifier:prefs' }));
-}, userId);
-
-const untilStatus = (page, re, timeout = 3000) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), re.source, { timeout });
-
-// fetch() used to get no signal: a request that never answers trapped Cancel scan and Stop.
-await test('T50 Cancel scan and Stop end a hung search at once', async () => {
-  const { page, context } = await boot('/channels/4001/5001');
-  const hold = await holdRequests(page, /\/messages\/search/, { once: false });
-  await page.click('[data-act="scan"]');
-  while (hold.held < 1) await page.waitForTimeout(10);
-  await page.click('[data-act="scan"]'); // Cancel scan
-  await untilStatus(page, /Scan cancelled/, 1500).catch(() => { throw new Error('Cancel scan stuck on a hung search'); });
-  assert((await text(page, '[data-role="scan-label"]')) === 'Scan', 'scan button is back');
-  await page.click('[data-act="purify"]');
-  await holdConfirm(page);
-  while (hold.held < 2) await page.waitForTimeout(10); // the run's count search hangs too
-  await page.click('[data-act="stop"]');
-  await waitEnd(page, 1500).catch(() => { throw new Error('Stop stuck on a hung search'); });
-  assert(/^Stopped!/.test(await status(page)), `status ${await status(page)}`);
-  hold.release();
-  await context.close();
-});
-
-// A DELETE already sent is left to land (counts stay true), but a dead one is bounded by the timeout.
-await test('T51 a DELETE that never answers times out: Stop ends the run, otherwise it retries', async () => {
-  const timed = source.replace(/requestTimeoutMs:\s*\d+/, 'requestTimeoutMs: 1500');
-  for (const stop of [true, false]) {
-    const env = await openDiscord(browser, '/channels/4001/5002');
-    const { page, world } = env;
-    let armed = false;
-    const hold = await holdRequests(page, /\/api\/v9\/channels\/5002\/messages\/\d+$/, { match: (r) => armed && r.method() === 'DELETE' });
-    const reqs = recordRequests(page);
-    await injectUserscript(page, timed);
-    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'art-share');
-    await page.click('[data-act="purify"]');
-    await holdConfirm(page);
-    await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 3);
-    armed = true;
-    while (!hold.held) await page.waitForTimeout(10);
-    if (stop) {
-      const t0 = Date.now();
-      await page.click('[data-act="stop"]');
-      assert(/Stopping after this one/.test(await status(page)), `status ${await status(page)}`);
-      await waitEnd(page, 4000).catch(() => { throw new Error('Stop waited on the hung DELETE for ever'); });
-      assert(reqs.since(t0).length === 0, `sent after Stop: ${reqs.since(t0)}`);
-      assert(/^Stopped!/.test(await status(page)), `status ${await status(page)}`);
-    } else {
-      await waitEnd(page, 10000).catch(() => { throw new Error('run never got past the hung DELETE'); });
-      assert(mine(world, '5002').length === 0, `${mine(world, '5002').length} left`);
-      const log = await page.locator('[data-role="term-body"]').textContent();
-      assert(/Connection hiccup/.test(log), 'the retry wait was shown');
-      assert(/^Done in .* · 0 failed/.test(await status(page)), `status ${await status(page)}`);
-    }
-    hold.release();
-    assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
-// BetterDiscord only updates plugins from its own store, so ours fetches its published file, asks,
-// and rewrites itself in the plugins folder (BetterDiscord then reloads it). BdApi is stubbed with the
-// names and semantics of BetterDiscord 1.14.4: Net.fetch → Response, Utils.semverCompare(current, remote)
-// > 0 when remote is newer, UI.showConfirmationModal(title, content, { onConfirm }), Plugins.folder.
-await test('T70 BetterDiscord plugin offers its own update and rewrites its file', async () => {
-  const plugin = fs.readFileSync(PLUGIN, 'utf8');
-  const raw = JSON.parse(fs.readFileSync(path.join(here, '../package.json'), 'utf8')).purifier.raw;
-  const version = /@version\s+(\S+)/.exec(plugin)[1];
-  const newer = plugin.replace(/(@version\s+)\S+/, (_, head) => `${head}99.0.0`);
-  async function run({ body, status = 200, delay = 0, stopEarly = false }) {
-    const env = await openDiscord(browser, '/channels/4001/5001');
-    await env.page.evaluate(({ code, body, status, delay, stopEarly }) => {
-      const log = window.__bdLog = { fetches: [], modals: [], writes: [] };
-      const folder = '/home/friend/.config/BetterDiscord/plugins';
-      const parts = (v) => v.split('.').map(Number);
-      window.BdApi = {
-        Net: { async fetch(url) {
-          log.fetches.push(url);
-          await new Promise((r) => setTimeout(r, delay));
-          if (body === null) throw new TypeError('Failed to fetch');
-          return new Response(body, { status });
-        } },
-        Utils: { semverCompare(current, remote) {
-          const [a, b] = [parts(current), parts(remote)];
-          for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return b[i] > a[i] ? 1 : -1;
-          return 0;
-        } },
-        UI: {
-          showConfirmationModal(title, content, options) { log.modals.push({ title, content, confirmText: options.confirmText }); window.__bdConfirm = options.onConfirm; },
-          showToast(text) { log.toasts = (log.toasts || []).concat(text); },
-        },
-        Plugins: { folder },
-      };
-      const fsStub = { writeFileSync(file, data) { log.writes.push({ file, data }); } };
-      const pathStub = { join: (...p) => p.join('/') };
-      const require = (m) => ({ fs: fsStub, path: pathStub })[m];
-      const module = { exports: {} };
-      new Function('require', 'module', 'exports', '__filename', '__dirname', code)(require, module, module.exports, `${folder}/Dopa (renamed).plugin.js`, folder);
-      window.__bd = new module.exports({ name: 'DopasPurifier', filename: 'Dopa (renamed).plugin.js' });
-      window.__bd.start();
-      if (stopEarly) window.__bd.stop();
-    }, { code: plugin, body, status, delay, stopEarly });
-    await env.page.waitForTimeout(delay + 400);
-    const log = await env.page.evaluate(() => window.__bdLog);
-    return { env, log };
-  }
-
-  // A newer version is out: one look, one question, and "Update" writes exactly that file over ours.
-  {
-    const { env, log } = await run({ body: newer });
-    assert(log.fetches.length === 1 && log.fetches[0] === `${raw}/dist/DopasPurifier.plugin.js`, `fetched ${log.fetches}`);
-    assert(log.modals.length === 1 && log.modals[0].content.includes('v99.0.0') && log.modals[0].content.includes(`v${version}`), JSON.stringify(log.modals));
-    assert(await env.page.locator('#dopa-purifier-host').count() === 1, 'the panel still starts');
-    assert(log.writes.length === 0, 'nothing written before saying yes');
-    await env.page.evaluate(() => window.__bdConfirm());
-    const writes = await env.page.evaluate(() => window.__bdLog.writes);
-    assert(writes.length === 1 && writes[0].file === '/home/friend/.config/BetterDiscord/plugins/Dopa (renamed).plugin.js', JSON.stringify(writes.map((w) => w.file)));
-    assert(writes[0].data === newer, 'wrote the fetched plugin verbatim');
-    assert(env.pageErrors.length === 0, env.pageErrors.join('; '));
-    await env.context.close();
-  }
-  // Same version, GitHub errors, a page that isn't the plugin, no network, or disabled mid-check: no offer, no noise.
-  for (const [label, opts] of [
-    ['same version', { body: plugin }],
-    ['404', { body: '404: Not Found', status: 404 }],
-    ['not the plugin', { body: '<!doctype html><title>@name DopasPurifier @version 99.0.0</title>' }],
-    ['offline', { body: null }],
-    ['stopped before the answer', { body: newer, delay: 300, stopEarly: true }],
-  ]) {
-    const { env, log } = await run(opts);
-    assert(log.fetches.length === 1, `${label}: looked once`);
-    assert(log.modals.length === 0 && log.writes.length === 0, `${label}: ${JSON.stringify(log.modals)}`);
-    assert(env.pageErrors.length === 0, `${label}: ${env.pageErrors.join('; ')}`);
-    await env.context.close();
-  }
-});
-
-// Pause used to be checked only inside a chat: a paused batch still opened the next DM and searched it.
-await test('T52 Pause holds between chats, before opening a DM, and before the last look', async () => {
-  // Pause while `hold` is in flight, then watch well past its answer: nothing new may start.
-  const pausedHere = async (page, hold, reqs, label) => {
-    await page.click('[data-act="pause"]');
-    const t0 = Date.now();
-    while (!hold.done) await page.waitForTimeout(10);
-    await page.waitForTimeout(600);
-    assert(reqs.since(t0).length === 0, `${label}: sent while paused: ${reqs.since(t0)}`);
-    assert(/^Paused~/.test(await status(page)), `${label}: status ${await status(page)}`);
-  };
-  // (a) group DM → friend Bob: Pause during the group's last history page; Stop then ends the run.
-  {
-    const { page, stats, context } = await boot('/channels/4001/5001');
-    const hold = await holdRequests(page, /\/channels\/3004\/messages\?limit=100&before=/, { ms: 1000 });
-    const reqs = recordRequests(page);
-    await pickBatch(page, ['c:3004', 'u:2004']);
-    await page.click('[data-act="purify"]');
-    await holdConfirm(page);
-    while (!hold.held) await page.waitForTimeout(5);
-    await pausedHere(page, hold, reqs, 'a');
-    assert(stats.opened.length === 0, 'no DM opened while paused');
-    const t0 = Date.now();
-    await page.click('[data-act="stop"]');
-    await waitEnd(page, 2000);
-    assert(reqs.since(t0).length === 0 && stats.opened.length === 0, `after Stop: ${reqs.since(t0)}`);
-    assert(/^Stopped!/.test(await status(page)), `a: status ${await status(page)}`);
-    await context.close();
-  }
-  // (b) Mallory → Alice: Alice is shielded (from another tab) while paused between them.
-  {
-    const { page, stats, world, context } = await boot('/channels/4001/5001');
-    const aliceBefore = mine(world, '3002').length;
-    const hold = await holdRequests(page, /\/channels\/3003\/messages\?limit=100&before=/, { ms: 1000 });
-    await pickBatch(page, ['c:3003', 'c:3002']);
-    await page.click('[data-act="purify"]');
-    await holdConfirm(page);
-    while (!hold.held) await page.waitForTimeout(5);
-    await page.click('[data-act="pause"]');
-    while (!hold.done) await page.waitForTimeout(10);
-    await page.waitForTimeout(300); // Mallory's chat is finished; the run is between chats
-    await shieldFromOtherTab(page, '2002');
-    await page.waitForTimeout(200);
-    await page.click('[data-act="resume"]');
-    await waitEnd(page);
-    assert(mine(world, '3003').length === 0, 'Mallory purged');
-    assert(mine(world, '3002').length === aliceBefore && !stats.deleteChannels.includes('3002'), 'nothing deleted in the DM shielded while paused');
-    await context.close();
-  }
-  // (c) #art-share → #announcements: Pause during art-share's last empty search page.
-  {
-    const { page, stats, world, context } = await boot('/channels/4001/5001');
-    let pages = 0;
-    const hold = await holdRequests(page, /\/guilds\/4001\/messages\/search\?/, {
-      ms: 1000, match: (r) => /channel_id=5002/.test(r.url()) && /max_id=/.test(r.url()) && stats.deleteChannels.length >= 10 && ++pages === 2,
-    });
-    const reqs = recordRequests(page);
-    await pickBatch(page, ['c:5002', 'c:5003']);
-    await page.click('[data-act="purify"]');
-    await holdConfirm(page);
-    while (!hold.held) await page.waitForTimeout(5);
-    await pausedHere(page, hold, reqs, 'c');
-    await page.click('[data-act="resume"]');
-    await waitEnd(page);
-    assert(mine(world, '5002').length === 0 && mine(world, '5003').length === 0 && mine(world, '5103').length === 0, 'both purged after Resume');
-    await context.close();
-  }
-  // (d) friend Bob: Pause while his DM is being opened; nothing is searched until Resume.
-  {
-    const { page, stats, context } = await boot('/channels/4001/5001');
-    const hold = await holdRequests(page, 'https://discord.com/api/v9/users/@me/channels', { ms: 1000, match: (r) => r.method() === 'POST' });
-    const reqs = recordRequests(page);
-    await pickBatch(page, ['u:2004']);
-    await page.click('[data-act="purify"]');
-    await holdConfirm(page);
-    while (!hold.held) await page.waitForTimeout(5);
-    await pausedHere(page, hold, reqs, 'd');
-    await page.click('[data-act="resume"]');
-    await waitEnd(page);
-    assert(stats.opened.length === 1 && stats.closed.length === 1, `opened ${stats.opened} closed ${stats.closed}`);
     await context.close();
   }
 });
@@ -1349,6 +1082,207 @@ await test('T48 a click no pointer went down for (Firefox assistive tech) confir
   await geckoPress();
   await waitEnd(page);
   assert(stats.deletes.length === 10, `two presses purged ${stats.deletes.length}`);
+  await context.close();
+});
+
+// ── Engine: hung requests, pause between chats, honest progress, archived threads, pacing ──
+
+const api = (r) => `${r.method()} ${new URL(r.url()).pathname.replace('/api/v9', '')}`;
+
+// Every API request the page starts, with when it started.
+function recordRequests(page) {
+  const sent = [];
+  page.on('request', (r) => { if (r.url().includes('/api/')) sent.push({ t: Date.now(), what: api(r) }); });
+  return { sent, since: (t0) => sent.filter((r) => r.t > t0).map((r) => r.what) };
+}
+
+// Holds matching requests until release() (or for `ms`), so a click can land while one is in flight.
+async function holdRequests(page, pattern, { match = () => true, ms = 0, once = true } = {}) {
+  const hold = { held: 0, done: 0, release: null };
+  const released = new Promise((r) => { hold.release = r; });
+  await page.route(pattern, async (route) => {
+    if ((once && hold.held) || !match(route.request())) return route.fallback();
+    hold.held++;
+    await (ms ? new Promise((r) => setTimeout(r, ms)) : released);
+    hold.done++;
+    try { await route.fallback(); } catch { /* the page gave up on it */ }
+  });
+  return hold;
+}
+
+// Boot a build whose timings the caller set itself.
+async function bootWith(src, path, opts = {}) {
+  const env = await openDiscord(browser, path, opts);
+  await injectUserscript(env.page, src, { fast: false });
+  await env.page.waitForFunction(() => {
+    const el = document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]');
+    return el && el.textContent !== 'detecting…';
+  }, null, { timeout: 8000 });
+  return env;
+}
+
+async function pickBatch(page, keys) {
+  await page.click('.tab[data-tab="batch"]');
+  if (keys.some((k) => /^c:5/.test(k))) await page.locator('.guild-head').first().click();
+  for (const k of keys) {
+    await page.waitForSelector(`[data-key="${k}"]`);
+    await page.click(`[data-key="${k}"]`);
+  }
+}
+
+// What another Discord tab does when it shields someone: write prefs, fire "storage" here.
+const shieldFromOtherTab = (page, userId) => page.evaluate((id) => {
+  const f = document.createElement('iframe');
+  document.body.appendChild(f);
+  const ls = f.contentWindow.localStorage;
+  const p = JSON.parse(ls.getItem('dopa-purifier:prefs') || '{}');
+  p.protectedIds = [...(p.protectedIds || []), id];
+  ls.setItem('dopa-purifier:prefs', JSON.stringify(p));
+  f.remove();
+  window.dispatchEvent(new StorageEvent('storage', { key: 'dopa-purifier:prefs' }));
+}, userId);
+
+const untilStatus = (page, re, timeout = 3000) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), re.source, { timeout });
+
+// fetch() used to get no signal: a request that never answers trapped Cancel scan and Stop.
+await test('T50 Cancel scan and Stop end a hung search at once', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  const hold = await holdRequests(page, /\/messages\/search/, { once: false });
+  await page.click('[data-act="scan"]');
+  while (hold.held < 1) await page.waitForTimeout(10);
+  await page.click('[data-act="scan"]'); // Cancel scan
+  await untilStatus(page, /Scan cancelled/, 1500).catch(() => { throw new Error('Cancel scan stuck on a hung search'); });
+  assert((await text(page, '[data-role="scan-label"]')) === 'Scan', 'scan button is back');
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  while (hold.held < 2) await page.waitForTimeout(10); // the run's count search hangs too
+  await page.click('[data-act="stop"]');
+  await waitEnd(page, 1500).catch(() => { throw new Error('Stop stuck on a hung search'); });
+  assert(/^Stopped!/.test(await status(page)), `status ${await status(page)}`);
+  hold.release();
+  await context.close();
+});
+
+// A DELETE already sent is left to land (counts stay true), but a dead one is bounded by the timeout.
+await test('T51 a DELETE that never answers times out: Stop ends the run, otherwise it retries', async () => {
+  const timed = source.replace(/requestTimeoutMs:\s*\d+/, 'requestTimeoutMs: 1500');
+  for (const stop of [true, false]) {
+    const env = await openDiscord(browser, '/channels/4001/5002');
+    const { page, world } = env;
+    let armed = false;
+    const hold = await holdRequests(page, /\/api\/v9\/channels\/5002\/messages\/\d+$/, { match: (r) => armed && r.method() === 'DELETE' });
+    const reqs = recordRequests(page);
+    await injectUserscript(page, timed);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'art-share');
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 3);
+    armed = true;
+    while (!hold.held) await page.waitForTimeout(10);
+    if (stop) {
+      const t0 = Date.now();
+      await page.click('[data-act="stop"]');
+      assert(/Stopping after this one/.test(await status(page)), `status ${await status(page)}`);
+      await waitEnd(page, 4000).catch(() => { throw new Error('Stop waited on the hung DELETE for ever'); });
+      assert(reqs.since(t0).length === 0, `sent after Stop: ${reqs.since(t0)}`);
+      assert(/^Stopped!/.test(await status(page)), `status ${await status(page)}`);
+    } else {
+      await waitEnd(page, 10000).catch(() => { throw new Error('run never got past the hung DELETE'); });
+      assert(mine(world, '5002').length === 0, `${mine(world, '5002').length} left`);
+      const log = await page.locator('[data-role="term-body"]').textContent();
+      assert(/Connection hiccup/.test(log), 'the retry wait was shown');
+      assert(/^Done in .* · 0 failed/.test(await status(page)), `status ${await status(page)}`);
+    }
+    hold.release();
+    assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
+    await env.context.close();
+  }
+});
+
+// Pause used to be checked only inside a chat: a paused batch still opened the next DM and searched it.
+await test('T52 Pause holds between chats, before opening a DM, and before the last look', async () => {
+  // Pause while `hold` is in flight, then watch well past its answer: nothing new may start.
+  const pausedHere = async (page, hold, reqs, label) => {
+    await page.click('[data-act="pause"]');
+    const t0 = Date.now();
+    while (!hold.done) await page.waitForTimeout(10);
+    await page.waitForTimeout(600);
+    assert(reqs.since(t0).length === 0, `${label}: sent while paused: ${reqs.since(t0)}`);
+    assert(/^Paused~/.test(await status(page)), `${label}: status ${await status(page)}`);
+  };
+  // (a) group DM → friend Bob: Pause during the group's last history page; Stop then ends the run.
+  {
+    const { page, stats, context } = await boot('/channels/4001/5001');
+    const hold = await holdRequests(page, /\/channels\/3004\/messages\?limit=100&before=/, { ms: 1000 });
+    const reqs = recordRequests(page);
+    await pickBatch(page, ['c:3004', 'u:2004']);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    while (!hold.held) await page.waitForTimeout(5);
+    await pausedHere(page, hold, reqs, 'a');
+    assert(stats.opened.length === 0, 'no DM opened while paused');
+    const t0 = Date.now();
+    await page.click('[data-act="stop"]');
+    await waitEnd(page, 2000);
+    assert(reqs.since(t0).length === 0 && stats.opened.length === 0, `after Stop: ${reqs.since(t0)}`);
+    assert(/^Stopped!/.test(await status(page)), `a: status ${await status(page)}`);
+    await context.close();
+  }
+  // (b) Mallory → Alice: Alice is shielded (from another tab) while paused between them.
+  {
+    const { page, stats, world, context } = await boot('/channels/4001/5001');
+    const aliceBefore = mine(world, '3002').length;
+    const hold = await holdRequests(page, /\/channels\/3003\/messages\?limit=100&before=/, { ms: 1000 });
+    await pickBatch(page, ['c:3003', 'c:3002']);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    while (!hold.held) await page.waitForTimeout(5);
+    await page.click('[data-act="pause"]');
+    while (!hold.done) await page.waitForTimeout(10);
+    await page.waitForTimeout(300); // Mallory's chat is finished; the run is between chats
+    await shieldFromOtherTab(page, '2002');
+    await page.waitForTimeout(200);
+    await page.click('[data-act="resume"]');
+    await waitEnd(page);
+    assert(mine(world, '3003').length === 0, 'Mallory purged');
+    assert(mine(world, '3002').length === aliceBefore && !stats.deleteChannels.includes('3002'), 'nothing deleted in the DM shielded while paused');
+    await context.close();
+  }
+  // (c) #art-share → #announcements: Pause during art-share's last empty search page.
+  {
+    const { page, stats, world, context } = await boot('/channels/4001/5001');
+    let pages = 0;
+    const hold = await holdRequests(page, /\/guilds\/4001\/messages\/search\?/, {
+      ms: 1000, match: (r) => /channel_id=5002/.test(r.url()) && /max_id=/.test(r.url()) && stats.deleteChannels.length >= 10 && ++pages === 2,
+    });
+    const reqs = recordRequests(page);
+    await pickBatch(page, ['c:5002', 'c:5003']);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    while (!hold.held) await page.waitForTimeout(5);
+    await pausedHere(page, hold, reqs, 'c');
+    await page.click('[data-act="resume"]');
+    await waitEnd(page);
+    assert(mine(world, '5002').length === 0 && mine(world, '5003').length === 0 && mine(world, '5103').length === 0, 'both purged after Resume');
+    await context.close();
+  }
+  // (d) friend Bob: Pause while his DM is being opened; nothing is searched until Resume.
+  {
+    const { page, stats, context } = await boot('/channels/4001/5001');
+    const hold = await holdRequests(page, 'https://discord.com/api/v9/users/@me/channels', { ms: 1000, match: (r) => r.method() === 'POST' });
+    const reqs = recordRequests(page);
+    await pickBatch(page, ['u:2004']);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    while (!hold.held) await page.waitForTimeout(5);
+    await pausedHere(page, hold, reqs, 'd');
+    await page.click('[data-act="resume"]');
+    await waitEnd(page);
+    assert(stats.opened.length === 1 && stats.closed.length === 1, `opened ${stats.opened} closed ${stats.closed}`);
+    await context.close();
+  }
+});
+
 // A chat that is skipped (no access, or shielded mid-run) must still settle the uncounted tally.
 await test('T53 a skipped chat leaves progress honest: "N of 40", an ETA, no "+"', async () => {
   const hero = async (page) => ({ pct: await text(page, '[data-role="pct"]'), eta: await text(page, '[data-role="stat-eta"] b') });
@@ -1475,6 +1409,9 @@ await test('T56 a friend with no DM yet is counted at purge, not "needs a scan" 
   await page.click('[data-key="u:2005"]');
   await check('four chats', '4 chats selected · 31 found · 1 need a scan · 2 friends at purge', { fits: false });
   assert(stats.opened.length === 0, 'scanning opened no DM');
+  await context.close();
+});
+
 const nameIs = (page, name) => page.waitForFunction((n) => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="target-name"]').textContent === n, name, { timeout: 4000 });
 const statusMatches = (page, re, timeout = 8000) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), re.source, { timeout });
 
@@ -1751,6 +1688,83 @@ await test('T67 a DM list still loading for the old account is dropped after an 
   assert(await page.locator('[data-key="c:3002"]').count() === 1, `DM list: ${(await text(page, '[data-role="dm-list"]')).slice(0, 60)}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
+});
+
+// BetterDiscord only updates plugins from its own store, so ours fetches its published file, asks,
+// and rewrites itself in the plugins folder (BetterDiscord then reloads it). BdApi is stubbed with the
+// names and semantics of BetterDiscord 1.14.4: Net.fetch → Response, Utils.semverCompare(current, remote)
+// > 0 when remote is newer, UI.showConfirmationModal(title, content, { onConfirm }), Plugins.folder.
+await test('T70 BetterDiscord plugin offers its own update and rewrites its file', async () => {
+  const plugin = fs.readFileSync(PLUGIN, 'utf8');
+  const raw = JSON.parse(fs.readFileSync(path.join(here, '../package.json'), 'utf8')).purifier.raw;
+  const version = /@version\s+(\S+)/.exec(plugin)[1];
+  const newer = plugin.replace(/(@version\s+)\S+/, (_, head) => `${head}99.0.0`);
+  async function run({ body, status = 200, delay = 0, stopEarly = false }) {
+    const env = await openDiscord(browser, '/channels/4001/5001');
+    await env.page.evaluate(({ code, body, status, delay, stopEarly }) => {
+      const log = window.__bdLog = { fetches: [], modals: [], writes: [] };
+      const folder = '/home/friend/.config/BetterDiscord/plugins';
+      const parts = (v) => v.split('.').map(Number);
+      window.BdApi = {
+        Net: { async fetch(url) {
+          log.fetches.push(url);
+          await new Promise((r) => setTimeout(r, delay));
+          if (body === null) throw new TypeError('Failed to fetch');
+          return new Response(body, { status });
+        } },
+        Utils: { semverCompare(current, remote) {
+          const [a, b] = [parts(current), parts(remote)];
+          for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return b[i] > a[i] ? 1 : -1;
+          return 0;
+        } },
+        UI: {
+          showConfirmationModal(title, content, options) { log.modals.push({ title, content, confirmText: options.confirmText }); window.__bdConfirm = options.onConfirm; },
+          showToast(text) { log.toasts = (log.toasts || []).concat(text); },
+        },
+        Plugins: { folder },
+      };
+      const fsStub = { writeFileSync(file, data) { log.writes.push({ file, data }); } };
+      const pathStub = { join: (...p) => p.join('/') };
+      const require = (m) => ({ fs: fsStub, path: pathStub })[m];
+      const module = { exports: {} };
+      new Function('require', 'module', 'exports', '__filename', '__dirname', code)(require, module, module.exports, `${folder}/Dopa (renamed).plugin.js`, folder);
+      window.__bd = new module.exports({ name: 'DopasPurifier', filename: 'Dopa (renamed).plugin.js' });
+      window.__bd.start();
+      if (stopEarly) window.__bd.stop();
+    }, { code: plugin, body, status, delay, stopEarly });
+    await env.page.waitForTimeout(delay + 400);
+    const log = await env.page.evaluate(() => window.__bdLog);
+    return { env, log };
+  }
+
+  // A newer version is out: one look, one question, and "Update" writes exactly that file over ours.
+  {
+    const { env, log } = await run({ body: newer });
+    assert(log.fetches.length === 1 && log.fetches[0] === `${raw}/dist/DopasPurifier.plugin.js`, `fetched ${log.fetches}`);
+    assert(log.modals.length === 1 && log.modals[0].content.includes('v99.0.0') && log.modals[0].content.includes(`v${version}`), JSON.stringify(log.modals));
+    assert(await env.page.locator('#dopa-purifier-host').count() === 1, 'the panel still starts');
+    assert(log.writes.length === 0, 'nothing written before saying yes');
+    await env.page.evaluate(() => window.__bdConfirm());
+    const writes = await env.page.evaluate(() => window.__bdLog.writes);
+    assert(writes.length === 1 && writes[0].file === '/home/friend/.config/BetterDiscord/plugins/Dopa (renamed).plugin.js', JSON.stringify(writes.map((w) => w.file)));
+    assert(writes[0].data === newer, 'wrote the fetched plugin verbatim');
+    assert(env.pageErrors.length === 0, env.pageErrors.join('; '));
+    await env.context.close();
+  }
+  // Same version, GitHub errors, a page that isn't the plugin, no network, or disabled mid-check: no offer, no noise.
+  for (const [label, opts] of [
+    ['same version', { body: plugin }],
+    ['404', { body: '404: Not Found', status: 404 }],
+    ['not the plugin', { body: '<!doctype html><title>@name DopasPurifier @version 99.0.0</title>' }],
+    ['offline', { body: null }],
+    ['stopped before the answer', { body: newer, delay: 300, stopEarly: true }],
+  ]) {
+    const { env, log } = await run(opts);
+    assert(log.fetches.length === 1, `${label}: looked once`);
+    assert(log.modals.length === 0 && log.writes.length === 0, `${label}: ${JSON.stringify(log.modals)}`);
+    assert(env.pageErrors.length === 0, `${label}: ${env.pageErrors.join('; ')}`);
+    await env.context.close();
+  }
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
