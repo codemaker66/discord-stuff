@@ -235,12 +235,12 @@
           <p><b>On your phone, princess? ♡</b> Discord's phone app can't wear the Purifier~ Open this page on your computer and it takes two minutes ✨</p>
           <div class="note-act">
             <button class="btn btn-primary btn-sm" type="button" data-act="send-link">Send me this link</button>
-            <button class="btn btn-quiet btn-sm" type="button" data-act="show-steps" hidden>Show the computer steps</button>
+            <button class="btn btn-quiet btn-sm" type="button" data-act="show-steps" aria-controls="browser-picker setup-steps" aria-expanded="true" hidden>Show the computer steps</button>
           </div>
           <p>Firefox for Android works too: add Tampermonkey, then open discord.com in “Desktop site” mode.</p>
         </div>
       </div>
-      <div class="picker" role="group" aria-label="Your browser">
+      <div class="picker" id="browser-picker" role="group" aria-label="Your browser">
         <span>Your browser:</span>
         <button class="chip" type="button" data-browser="chrome">Chrome</button>
         <button class="chip" type="button" data-browser="edge">Edge</button>
@@ -249,10 +249,10 @@
         <button class="chip" type="button" data-browser="brave">Brave</button>
         <button class="chip" type="button" data-browser="safari">Safari</button>
       </div>
-      <ol class="steps">
+      <ol class="steps" id="setup-steps">
         <li class="step" data-step="manager">
           <div>
-            <h3>Add Tampermonkey to <span data-role="browser-name">Chrome</span></h3>
+            <h3 tabindex="-1">Add Tampermonkey to <span data-role="browser-name">Chrome</span></h3>
             <p data-role="manager-note">Free, made for exactly this. Click <b>Add to <span data-role="browser-name">Chrome</span></b> on the page that opens.</p>
           </div>
           <div class="act"><a class="btn btn-quiet btn-sm" data-role="manager-link" target="_blank" rel="noopener" href="https://www.tampermonkey.net/">Get Tampermonkey</a></div>
@@ -325,7 +325,8 @@
     <div class="eyebrow">Questions</div>
     <h2 id="faq-title">Good to know</h2>
     <details><summary>Is it safe? Does it send my login anywhere?</summary><div>
-      <p>It runs entirely in your own browser, inside Discord, using the session you're already logged in with. It talks to Discord and nothing else — no servers, no tracking. The whole thing is <a href="https://github.com/codemaker66/discord-stuff">open source</a>, so anyone can check.</p>
+      <p>It runs entirely inside your own Discord tab (or the app, with BetterDiscord), using the session you're already logged in with — your login and messages never leave Discord.</p>
+      <p>The userscript talks to Discord and nothing else; Tampermonkey itself fetches new versions of it from GitHub. The BetterDiscord plugin also asks GitHub once each time it starts whether there's a new version. No servers of ours, no tracking~ ♡ The whole thing is <a href="https://github.com/codemaker66/discord-stuff">open source</a>, so anyone can check.</p>
     </div></details>
     <details><summary>Can it delete other people's messages?</summary><div>
       <p>No. Discord only lets you delete your own messages, and the purifier only ever asks for yours. Anyone you shield (and Bardo, always~) is skipped entirely.</p>
@@ -334,10 +335,10 @@
       <p>No — deleted means deleted. That's why there's a scan first and a hold-to-confirm button. Pause or Stop any time; nothing after that point is touched.</p>
     </div></details>
     <details><summary>Could my account get in trouble?</summary><div>
-      <p>Honest answer: Discord's terms don't allow automating your account, and any tool like this carries a small risk. The purifier works at a human-ish pace (about one message a second), slows down whenever Discord asks, and never runs on its own — you start every purge. Use it at your own discretion.</p>
+      <p>Honest answer: Discord's terms don't allow automating your account, and any tool like this carries a small risk. The purifier works at a human-ish pace (about 40 messages a minute), slows down whenever Discord asks, and never runs on its own — you start every purge. Use it at your own discretion.</p>
     </div></details>
     <details><summary>How long does it take?</summary><div>
-      <p>About a second per message, because that's what Discord allows. A scan tells you the estimate up front; you can minimise the panel and keep chatting while it works. Keep the Discord tab open until it's done.</p>
+      <p>About 40 messages a minute, so 1,000 messages take around 25 minutes — a pace Discord is happy with, and slower whenever it asks for a break. A scan tells you the estimate up front; you can minimise the panel and keep chatting while it works. Keep the Discord tab open until it's done.</p>
     </div></details>
     <details><summary>How do updates work?</summary><div>
       <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Utilities</b> → <b>Check for userscript updates</b>, or just click Install above again.</p>
@@ -415,15 +416,22 @@
   // Phones read "use your computer" first. The computer steps wait behind a button,
   // except on Firefox for Android, which really can run it.
   const PHONE = /Android|iPhone|iPad|Mobile/.test(navigator.userAgent);
+  const stepsButton = $('[data-act="show-steps"]');
   const computerSteps = (show) => {
     for (const el of $$('.setup > .picker, .setup > .steps')) el.hidden = !show;
-    $('[data-act="show-steps"]').hidden = show;
+    stepsButton.hidden = show;
+    stepsButton.setAttribute('aria-expanded', String(show));
   };
   if (PHONE) {
     $('[data-role="mobile-note"]').hidden = false;
     if (detect() !== 'firefox') computerSteps(false);
   }
-  $('[data-act="show-steps"]').addEventListener('click', () => computerSteps(true));
+  // The button hides itself once used, so hand focus to what it opened (the chosen browser, else step 1)
+  // instead of letting it fall to the top of the page.
+  stepsButton.addEventListener('click', () => {
+    computerSteps(true);
+    ($('.setup > .picker .chip[aria-pressed="true"]') || $('.setup > .steps .step h3')).focus();
+  });
 
   // ── "Installed ✓": the purifier announces itself on this page ──
   $('[data-role="latest"]').textContent = LATEST;

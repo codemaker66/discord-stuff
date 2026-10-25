@@ -312,8 +312,11 @@ await test('S14 each store\'s button is named as it really reads', async () => {
 // The pictures show ETAs and rates, so they must be taken at the pace the purifier ships with:
 // tools/marketing.py refuses other shots and stamps the pace into every picture it makes.
 await test('S15 page pictures and the link preview were taken at the shipped pace', async () => {
-  const timing = /const TIMING = \{ deleteDelayMs: (\d+), searchDelayMs: (\d+) \};/.exec(fs.readFileSync(path.join(root, 'src/main.js'), 'utf8'));
-  const stamp = `dopa-pace: deleteDelayMs=${timing[1]} searchDelayMs=${timing[2]}`;
+  const timing = (/const TIMING = \{([^}]*)\}/.exec(fs.readFileSync(path.join(root, 'src/main.js'), 'utf8')) || [])[1];
+  assert(timing, 'src/main.js has a const TIMING block');
+  const [del, search] = ['deleteDelayMs', 'searchDelayMs'].map((key) => (new RegExp(`\\b${key}:\\s*(\\d+)`).exec(timing) || [])[1]);
+  assert(del && search, `deleteDelayMs and searchDelayMs in TIMING: ${timing}`);
+  const stamp = `dopa-pace: deleteDelayMs=${del} searchDelayMs=${search}`;
   const pictures = ['og.png', 'purging.webp', 'scanned.webp', 'confirm.webp', 'batch.webp', 'immune.webp', 'welcome.webp', 'done.webp'];
   const unstamped = pictures.filter((f) => !fs.readFileSync(path.join(root, 'docs/img', f)).includes(stamp));
   assert(unstamped.length === 0, `not taken at ${stamp}: ${unstamped.join(', ')}`);
@@ -345,6 +348,76 @@ await test('S17 the page says to hold the red button, not Purify', async () => {
   assert(/then Purify, and hold the red button/.test(await page.locator('[data-step="open"]').textContent()), 'step 4');
   assert(!/hold Purify/i.test(await page.locator('body').textContent()), 'no "hold Purify" anywhere');
   await context.close();
+});
+
+// The button hides itself once used; focus must follow into the steps, not drop to <body>.
+await test('S18 phones: "Show the computer steps" hands focus to the steps it opens', async () => {
+  for (const key of ['iphone', 'android']) {
+    const { page, context, errors } = await open({ ua: UA[key], viewport: { width: 390, height: 844 } });
+    const button = page.locator('[data-act="show-steps"]');
+    assert((await button.getAttribute('aria-expanded')) === 'false', `${key}: button says the steps are collapsed`);
+    const controls = (await button.getAttribute('aria-controls') || '').split(/\s+/).filter(Boolean);
+    assert(controls.length > 0, `${key}: button names what it controls`);
+    for (const id of controls) {
+      assert(await page.locator(`.setup > #${id}:is(.picker, .steps)`).count() === 1, `${key}: aria-controls "${id}" is the picker or the steps`);
+    }
+    await button.focus();
+    await page.keyboard.press('Enter');
+    assert(await page.locator('.steps').isVisible(), `${key}: steps shown`);
+    const focus = await page.evaluate(() => {
+      const el = document.activeElement;
+      return { tag: el.tagName, text: el.textContent.trim().slice(0, 40), inside: !!el.closest('.setup > .picker, .setup > .steps') };
+    });
+    assert(focus.inside, `${key}: focus fell to <${focus.tag.toLowerCase()}> "${focus.text}", not into the steps`);
+    // The page scrolls smoothly, so give the focus scroll a moment to land.
+    const onScreen = await page.waitForFunction(() => {
+      const r = document.activeElement.getBoundingClientRect();
+      return r.top >= 0 && r.bottom <= innerHeight;
+    }, null, { timeout: 2000 }).then(() => true, () => false);
+    assert(onScreen, `${key}: focused "${focus.text}" is scrolled into view`);
+    assert(errors.length === 0, errors.join('; '));
+    await context.close();
+  }
+});
+
+// Speed claims follow the shipped pacing the way the panel's own estimate does (src/ui.js estimateSeconds).
+await test('S19 every speed claim on the page and in the README matches the panel\'s estimate', async () => {
+  const timing = (/const TIMING = \{([^}]*)\}/.exec(fs.readFileSync(path.join(root, 'src/main.js'), 'utf8')) || [])[1] || '';
+  const del = Number((/\bdeleteDelayMs:\s*(\d+)/.exec(timing) || [])[1]);
+  const extra = Number((/estimateSeconds\s*=[^;]*TIMING\.deleteDelayMs\s*\+\s*(\d+)/.exec(fs.readFileSync(path.join(root, 'src/ui.js'), 'utf8')) || [])[1]);
+  assert(del > 0 && extra >= 0, `pace from source (deleteDelayMs ${del}, +${extra} ms)`);
+  const perMessage = (del + extra) / 1000;
+  const { page, context } = await open({ ua: UA.chrome });
+  const sources = { page: await page.locator('body').textContent(), README: fs.readFileSync(path.join(root, 'README.md'), 'utf8').replace(/\s+/g, ' ') };
+  await context.close();
+  let claims = 0;
+  for (const [where, text] of Object.entries(sources)) {
+    assert(!/\b(?:a|one) message (?:a|per) second|\ba second (?:per|a) message/i.test(text), `${where} still says a message a second`);
+    for (const [, n] of text.matchAll(/about (\d+) messages a minute/gi)) {
+      claims++;
+      assert(Math.abs(Number(n) - 60 / perMessage) / (60 / perMessage) < 0.15, `${where}: "${n} a minute", the panel estimates ${(60 / perMessage).toFixed(1)}`);
+    }
+    for (const [, n, min] of text.matchAll(/([\d,]+) messages take around (\d+) minutes/gi)) {
+      claims++;
+      const panel = Math.ceil((Number(n.replace(/,/g, '')) * perMessage) / 60); // formatDuration rounds minutes up
+      assert(Number(min) === panel, `${where}: ${n} messages in ${min} min, the panel says ~${panel} min`);
+    }
+  }
+  assert(claims >= 3, `found ${claims} speed claims to check`);
+});
+
+await test('S20 the safety answer says what reaches GitHub (and nothing claims Discord only)', async () => {
+  const plugin = fs.readFileSync(path.join(root, 'src/betterdiscord.js'), 'utf8');
+  assert(/BdApi\.Net\.fetch\(PLUGIN_URL\)/.test(plugin) && /@@PLUGIN_URL@@/.test(plugin), 'the plugin checks its own GitHub file for updates');
+  const { page, context } = await open({ ua: UA.chrome });
+  const faq = await page.locator('details', { hasText: 'Is it safe?' }).textContent();
+  await context.close();
+  assert(/BetterDiscord plugin also asks GitHub once each time it starts/.test(faq), `plugin's update check named: ${faq}`);
+  assert(/Tampermonkey itself fetches new versions of it from GitHub/.test(faq), 'Tampermonkey\'s own update check named');
+  for (const [where, text] of [['page', faq], ['README', fs.readFileSync(path.join(root, 'README.md'), 'utf8').replace(/\s+/g, ' ')]]) {
+    assert(!/It talks to Discord and nothing else|and talks to Discord and nothing else/.test(text), `${where} says it talks only to Discord`);
+    assert(/No servers of ours, no tracking/.test(text), `${where}: no servers, no tracking`);
+  }
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));

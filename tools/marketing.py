@@ -28,8 +28,17 @@ def font(style, size):
 
 
 def shipped_pace():
-    timing = re.search(r'const TIMING = \{ deleteDelayMs: (\d+), searchDelayMs: (\d+) \};', (ROOT / 'src/main.js').read_text('utf8'))
-    return {'deleteDelayMs': int(timing[1]), 'searchDelayMs': int(timing[2])}
+    # Each key on its own, so a new TIMING field (or a reorder) can't make this miss.
+    block = re.search(r'const TIMING = \{([^}]*)\}', (ROOT / 'src/main.js').read_text('utf8'))
+    if not block:
+        sys.exit('src/main.js has no const TIMING block')
+    pace = {}
+    for key in ('deleteDelayMs', 'searchDelayMs'):
+        found = re.search(rf'\b{key}:\s*(\d+)', block[1])
+        if not found:
+            sys.exit(f'src/main.js: no {key} in const TIMING')
+        pace[key] = int(found[1])
+    return pace
 
 
 def main(shots):

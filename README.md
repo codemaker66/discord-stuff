@@ -27,10 +27,14 @@ and asks before updating itself.
 - **Hold to purify** — no accidental clicks.
 - **Batch**: tick DMs, groups and server channels (threads and forum posts included), then purge them in one go.
 - **Shield** anyone and their chat is immune. Bardo is shielded from the start ♡
-- Paces itself to Discord's rate limits, pauses and resumes, and tells you honestly what was skipped.
+- Paces itself to Discord's rate limits (about 40 messages a minute), pauses and resumes,
+  and tells you honestly what was skipped.
 
-It runs inside Discord in your own browser, with the session you're already logged in with,
-and talks to Discord and nothing else.
+It runs inside Discord in your own browser (or the desktop app, with BetterDiscord), with the session
+you're already logged in with, and your login and messages never leave Discord. The userscript talks to
+Discord and nothing else; your userscript manager fetches its updates from GitHub itself. The
+BetterDiscord plugin also asks GitHub once each time it starts whether there's a new version.
+No servers of ours, no tracking ♡
 
 ## Working on it
 

@@ -10,8 +10,14 @@ const SHOWCASE = process.argv.includes('--showcase');
 const [SRC, OUT, DPR = '2'] = process.argv.slice(2).filter((a) => a !== '--showcase');
 fs.mkdirSync(OUT, { recursive: true });
 const source = fs.readFileSync(SRC, 'utf8');
-const pace = /const TIMING = \{ deleteDelayMs: (\d+), searchDelayMs: (\d+) \};/.exec(source);
-fs.writeFileSync(`${OUT}/pace.json`, JSON.stringify({ deleteDelayMs: Number(pace[1]), searchDelayMs: Number(pace[2]) }));
+// Each key on its own, so a new TIMING field (or a reorder) can't make this miss.
+const timing = (/const TIMING = \{([^}]*)\}/.exec(source) || [])[1];
+const paceOf = (key) => {
+  const m = timing && new RegExp(`\\b${key}:\\s*(\\d+)`).exec(timing);
+  if (!m) throw new Error(`${SRC}: no ${key} in const TIMING`);
+  return Number(m[1]);
+};
+fs.writeFileSync(`${OUT}/pace.json`, JSON.stringify({ deleteDelayMs: paceOf('deleteDelayMs'), searchDelayMs: paceOf('searchDelayMs') }));
 const browser = await chromium.launch();
 const sr = "document.querySelector('#dopa-purifier-host').shadowRoot";
 
