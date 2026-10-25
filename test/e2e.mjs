@@ -572,7 +572,7 @@ await test('T30 after Stop the cached count matches what is left', async () => {
 await test('T31 first run: welcome card explains the three steps, "Got it" sticks', async () => {
   const { page, context } = await boot('/channels/4001/5001', { firstRun: true });
   assert(await page.locator('[data-role="welcome"]').isVisible(), 'welcome shown on first run');
-  assert(/Hold Purify/.test(await text(page, '.welcome-steps')), 'steps listed');
+  assert(/Purify, then hold the red button/.test(await text(page, '.welcome-steps')), 'steps listed');
   await page.click('[data-act="welcome-ok"]');
   assert(!(await page.locator('[data-role="welcome"]').isVisible()), 'dismissed');
   await page.waitForTimeout(400);
@@ -783,6 +783,305 @@ await test('T38 Stop interrupts a rate-limited DM open', async () => {
     assert(env.pageErrors.length === 0, `${kind}: ${env.pageErrors.join('; ')}`);
     await env.context.close();
   }
+});
+
+const dialogOpen = async (page) => (await page.locator('.modal-layer').getAttribute('data-open')) === 'true';
+const tone = (page) => page.locator('[data-role="status"]').getAttribute('data-tone');
+
+// Like any native button, sliding off the hold button (here onto "Nevermind~") lets go of it.
+await test('T40 sliding off the hold button cancels the purge, mouse and touch', async () => {
+  for (const input of ['mouse', 'touch']) {
+    const { page, stats, context } = await boot('/channels/4001/5002');
+    await page.click('[data-act="purify"]');
+    const confirm = page.locator('[data-act="confirm"]');
+    await confirm.waitFor({ state: 'visible' });
+    await page.waitForTimeout(400);
+    const c = await confirm.boundingBox();
+    const n = await page.locator('[data-act="cancel"]').boundingBox();
+    const from = [c.x + c.width / 2, c.y + c.height / 2];
+    const to = [n.x + n.width / 2, n.y + n.height / 2];
+    if (input === 'mouse') {
+      await page.mouse.move(...from);
+      await page.mouse.down();
+      await page.waitForTimeout(150);
+      await page.mouse.move(...to, { steps: 5 });
+      await page.waitForTimeout(1000);
+      await page.mouse.up();
+    } else {
+      const cdp = await context.newCDPSession(page);
+      const at = ([x, y]) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(from) });
+      await page.waitForTimeout(150);
+      for (let i = 1; i <= 5; i++) {
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at([from[0] + ((to[0] - from[0]) * i) / 5, from[1]]) });
+        await page.waitForTimeout(20);
+      }
+      await page.waitForTimeout(1000);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    }
+    await page.waitForTimeout(500);
+    assert(stats.deletes.length === 0, `${input}: ${stats.deletes.length} deleted after sliding onto Nevermind`);
+    assert(await dialogOpen(page), `${input}: dialog still open`);
+    await holdConfirm(page); // a real hold still works afterwards
+    await waitEnd(page);
+    assert(stats.deletes.length === 10, `${input}: hold after the slide-off deleted ${stats.deletes.length}`);
+    await context.close();
+  }
+});
+
+// Screen readers, voice control and switches activate with a bare click (detail 0) and can't hold.
+await test('T41 assistive tech confirms with two presses; mouse clicks and keys still need the hold', async () => {
+  const { page, stats, context } = await boot('/channels/4001/5002');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const cdp = await context.newCDPSession(page);
+  const { nodes } = await cdp.send('Accessibility.getFullAXTree');
+  const ax = nodes.find((x) => x.role && x.role.value === 'button' && /purify/i.test((x.name && x.name.value) || '') && !/Nevermind/.test(x.name.value));
+  const described = ax && ax.description ? ax.description.value : '';
+  assert(/press twice/.test(described), `confirm button's accessible description: ${JSON.stringify(described)}`);
+  const label = () => text(page, '[data-role="confirm-label"]');
+  const press = () => page.locator('[data-act="confirm"]').evaluate((el) => el.click()); // a bare click, as assistive tech sends
+  await page.waitForTimeout(400);
+  // Ordinary clicks, key taps, and a held key's repeats after the hold was let go are not presses.
+  await page.click('[data-act="confirm"]');
+  await page.waitForTimeout(700);
+  await page.click('[data-act="confirm"]');
+  await page.locator('[data-act="confirm"]').focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press(' ');
+  await page.keyboard.down('Enter');
+  await page.click('[data-act="confirm"]');
+  for (let i = 0; i < 3; i++) await page.keyboard.down('Enter');
+  await page.keyboard.up('Enter');
+  await page.waitForTimeout(300);
+  assert(await dialogOpen(page) && stats.deletes.length === 0, 'clicks and keys did not confirm');
+  assert(!/again/.test(await label()), `not armed by clicks or keys: ${await label()}`);
+  await press();
+  assert(/Press again/.test(await label()) && await dialogOpen(page), `first press arms: ${await label()}`);
+  await page.waitForTimeout(5300);
+  assert(/^Hold to purify/.test(await label()), `the first press expires: ${await label()}`);
+  await press();
+  assert(await dialogOpen(page) && stats.deletes.length === 0, 'one press after expiry only arms again');
+  await press();
+  await waitEnd(page);
+  assert(stats.deletes.length === 10, `two presses purged ${stats.deletes.length}`);
+  await context.close();
+});
+
+await test('T42 copy says which button to hold, and an early release says to hold it', async () => {
+  const { page, stats, context } = await boot('/channels/4001/5001', { firstRun: true });
+  const steps = await text(page, '.welcome-steps');
+  assert(/Purify, then hold the red button/.test(steps) && !/Hold Purify/.test(steps), `welcome steps: ${steps}`);
+  await page.click('[data-act="welcome-ok"]');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const label = () => text(page, '[data-role="confirm-label"]');
+  assert((await label()) === 'Hold to purify ✨', `confirm label: ${await label()}`);
+  await page.waitForTimeout(400);
+  await page.click('[data-act="confirm"]');
+  await page.waitForTimeout(300);
+  assert(/Hold it down/.test(await label()), `after a quick click: ${await label()}`);
+  await page.waitForTimeout(1500);
+  assert((await label()) === 'Hold to purify ✨', `settles back: ${await label()}`);
+  assert(stats.deletes.length === 0 && await dialogOpen(page), 'a click never purges');
+  await page.click('[data-act="cancel"]');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3003"]');
+  await page.click('[data-key="c:3003"]');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  assert((await label()) === 'Hold to purify all ✨', `batch confirm label: ${await label()}`);
+  await context.close();
+});
+
+// A shield clicked mid-purge used to do nothing at all, then that chat was purged.
+await test('T43 shields are disabled mid-purge, say why, and work again after', async () => {
+  const { page, stats, world, context } = await boot('/channels/@me/3003');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.click('[data-key="c:3003"]');
+  await page.click('[data-key="c:3002"]');
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  while (stats.deletes.length < 1) await page.waitForTimeout(20);
+  await page.click('[data-act="pause"]');
+  const row = page.locator('[data-key="c:3002"] .shield-btn');
+  const card = page.locator('[data-role="target-tools"] .shield-btn');
+  for (const [what, btn] of [['row', row], ['card', card]]) {
+    assert(await btn.isDisabled(), `${what} shield disabled mid-purge`);
+    assert(/Stop the purge/.test(await btn.getAttribute('title')), `${what} title: ${await btn.getAttribute('title')}`);
+  }
+  await page.click('[data-act="resume"]');
+  await waitEnd(page);
+  assert(mine(world, '3002').length === 1, 'the confirmed DM was purged (only the call message stays)');
+  assert(await row.isEnabled(), 'row shield usable after the run');
+  assert(/^Protect/.test(await row.getAttribute('title')), `title after: ${await row.getAttribute('title')}`);
+  await page.hover('[data-key="c:3002"]');
+  await row.click();
+  await page.waitForTimeout(200);
+  assert(await page.locator('[data-key="c:3002"].row-immune').count() === 1, 'shield works after the run');
+  await context.close();
+});
+
+const storedPrefs = (page) => page.evaluate(() => {
+  const f = document.createElement('iframe');
+  document.body.appendChild(f);
+  try { return JSON.parse(f.contentWindow.localStorage.getItem('dopa-purifier:prefs')); } finally { f.remove(); }
+});
+
+// Discord's storage can be full or blocked; a shield that didn't save must not claim "immune now".
+await test('T44 a shield that cannot be saved is refused, and nothing changes', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.waitForTimeout(400); // the tab switch's own save lands first
+  const fill = () => page.evaluate(() => {
+    // To the last code unit: big chunks alone leave room for a shield.
+    for (const size of [256 * 1024, 4096, 256, 16, 1]) {
+      const s = 'x'.repeat(size);
+      try { for (let i = 0; ; i++) localStorage.setItem(`fill-${size}-${i}`, s); } catch {}
+    }
+  });
+  await fill();
+  const before = await storedPrefs(page);
+  await page.hover('[data-key="c:3002"]');
+  await page.click('[data-key="c:3002"] .shield-btn');
+  await page.waitForTimeout(200);
+  assert(/Couldn't save/.test(await status(page)) && !/immune now/.test(await status(page)), `status: ${await status(page)}`);
+  assert(await tone(page) === 'error', 'shown as an error');
+  assert(await page.locator('[data-key="c:3002"].row-immune').count() === 0, 'Alice is not shown as immune');
+  assert(await page.locator('[data-key="c:3002"] .shield-btn').getAttribute('aria-pressed') === 'false', 'shield not pressed');
+  // Releasing Bardo is refused the same way, and leaves him immune.
+  await page.hover('[data-key="c:3001"]');
+  await page.click('[data-key="c:3001"] .shield-btn');
+  await page.waitForTimeout(200);
+  assert(/still immune/.test(await status(page)), `release status: ${await status(page)}`);
+  assert(await page.locator('[data-key="c:3001"].row-immune').count() === 1, 'Bardo still immune');
+  assert(JSON.stringify(await storedPrefs(page)) === JSON.stringify(before), 'stored prefs untouched');
+  // After a reload the page agrees with what it said.
+  await page.reload();
+  await injectUserscript(page, source);
+  await page.waitForSelector('[data-key="c:3002"]');
+  assert(await page.locator('[data-key="c:3002"].row-immune').count() === 0, 'still not immune after reload');
+  // With room again, the same click saves exactly that one shield.
+  await page.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('fill-')) localStorage.removeItem(k); });
+  await page.hover('[data-key="c:3002"]');
+  await page.click('[data-key="c:3002"] .shield-btn');
+  await page.waitForTimeout(200);
+  assert(/immune now/.test(await status(page)), `status with room: ${await status(page)}`);
+  const saved = await storedPrefs(page);
+  assert(JSON.stringify(saved.protectedIds) === '["2002"]' && JSON.stringify(saved.released) === '[]', `saved shields: ${JSON.stringify(saved)}`);
+  await context.close();
+});
+
+await test('T45 shielding the open DM mid-scan ends on "immune", not an offer to purge', async () => {
+  const { page, context } = await boot('/channels/@me/3002', { latencyMs: 600 });
+  const scanLabel = () => text(page, '[data-role="scan-label"]');
+  await page.click('[data-act="scan"]');
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="scan-label"]').textContent === 'Cancel scan');
+  await page.click('[data-role="target-tools"] .shield-btn');
+  assert((await scanLabel()) === 'Cancel scan', 'shielded while the scan was still running');
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="scan-label"]').textContent !== 'Cancel scan', null, { timeout: 15000 });
+  assert(/is immune~/.test(await status(page)) && !/found/.test(await status(page)), `status: ${await status(page)}`);
+  assert(await tone(page) === 'immune', 'immune tone');
+  assert(await page.locator('[data-act="purify"]').isDisabled(), 'purify stays off');
+  await context.close();
+});
+
+// Purify asks Discord who you are before its dialog; a Scan pressed meanwhile must not run under it.
+await test('T46 Scan pressed while Purify is still asking never opens the dialog over the scan', async () => {
+  const env = await openDiscord(browser, '/channels/4001/5002');
+  const { page, stats } = env;
+  let slow = false;
+  const later = (ms) => async (route) => { if (slow) await new Promise((r) => setTimeout(r, ms)); return route.fallback(); };
+  await page.route('https://discord.com/api/v9/users/@me', later(1500));
+  await page.route('https://discord.com/api/v9/guilds/*/messages/search*', later(3000));
+  await injectUserscript(page, source);
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'art-share');
+  slow = true;
+  await page.click('[data-act="purify"]');
+  await page.waitForTimeout(300);
+  await page.click('[data-act="scan"]');
+  await page.waitForTimeout(1900); // Purify's question has been answered; the scan hasn't
+  assert((await text(page, '[data-role="scan-label"]')) === 'Cancel scan', 'scan still running');
+  assert(!(await dialogOpen(page)), 'no dialog over a running scan');
+  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 15000 });
+  slow = false;
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  assert(/all 10 of your messages/.test(await text(page, '.modal-lead')), `dialog after the scan: ${await text(page, '.modal-lead')}`);
+  assert(stats.deletes.length === 0, 'nothing deleted');
+  await env.context.close();
+});
+
+await test('T47 batch confirm never leads with "0+" before a scan', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.click('[data-act="dm-all"]');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  let lead = await text(page, '.modal-lead');
+  assert(!/\b0\+/.test(lead) && /^Purging all your messages in 3\schats \(not\scounted\syet\):$/.test(lead), `nothing counted: ${lead}`);
+  assert((await text(page, '.modal-lead b')) === 'all', 'the bold word is "all"');
+  await page.click('[data-act="cancel"]');
+  // One chat counted, two not: the known number, plus all of yours in the rest.
+  await page.click('[data-act="dm-none"]');
+  await page.click('[data-key="c:3003"]');
+  await page.click('[data-act="scan"]');
+  await page.waitForFunction(() => /Scan done/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  await page.click('[data-act="dm-all"]');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  lead = await text(page, '.modal-lead');
+  assert(/^Purging 7 found \+ all of yours in 2\suncounted\schats:$/.test(lead), `partly counted: ${lead}`);
+  await context.close();
+});
+
+// Firefox's accessibility press (NVDA, JAWS, Voice Control, Dragon, TalkBack) is Gecko's
+// DispatchClickEvent: mousedown, mouseup and a click with detail 1, but no pointer events.
+await test('T48 a click no pointer went down for (Firefox assistive tech) confirms with two presses', async () => {
+  const { page, stats, context } = await boot('/channels/4001/5002');
+  const label = () => text(page, '[data-role="confirm-label"]');
+  const geckoPress = () => page.locator('[data-act="confirm"]').evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, composed: true, cancelable: true, button: 0, detail: 1, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+    el.dispatchEvent(new MouseEvent('mousedown', { ...o, buttons: 1 }));
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.dispatchEvent(new MouseEvent('click', o));
+  });
+  const openConfirm = async () => {
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    await page.waitForTimeout(400);
+  };
+  // A hold given up with Esc must not swallow the next dialog's first press.
+  await openConfirm();
+  const c = await page.locator('[data-act="confirm"]').boundingBox();
+  await page.mouse.move(c.x + c.width / 2, c.y + c.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await page.mouse.up();
+  assert(!(await dialogOpen(page)) && stats.deletes.length === 0, 'Esc mid-hold keeps you safe');
+  await openConfirm();
+  // A mouse click and a tap before it aren't first presses.
+  await page.click('[data-act="confirm"]');
+  const cdp = await context.newCDPSession(page);
+  const at = [{ x: c.x + c.width / 2, y: c.y + c.height / 2, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(1600);
+  assert(!/again/.test(await label()), `a click and a tap don't arm: ${await label()}`);
+  await geckoPress();
+  await page.waitForTimeout(200);
+  assert(/Press again/.test(await label()) && await dialogOpen(page) && stats.deletes.length === 0,
+    `first press only arms: ${await label()}, ${stats.deletes.length} deleted`);
+  await geckoPress();
+  await waitEnd(page);
+  assert(stats.deletes.length === 10, `two presses purged ${stats.deletes.length}`);
+  await context.close();
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
