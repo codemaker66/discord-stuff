@@ -1821,7 +1821,47 @@ await test('T80 a shield from another tab stops the purge inside that chat', asy
   assert(mine('3002') > 20, `Alice's DM kept its messages (${mine('3002')} left)`);
   assert(/shielded in another tab/.test(await text(b.page, '[data-role="term-body"]')), 'tab B logs why it stopped');
   assert(await b.page.locator('[data-role="eyebrow"]').first().textContent() === 'Immune', 'tab B shows the chat as immune');
+  // What's left there stays on purpose: no "All clean", no purified card.
+  assert(/stays shielded/.test(await status(b.page)), `tab B status: ${await status(b.page)}`);
+  assert(!/All clean/.test(await text(b.page, '[data-role="readout-line"]')), `tab B verdict: ${await text(b.page, '[data-role="readout-line"]')}`);
+  assert(await b.page.locator('[data-role="target"]').getAttribute('data-state') !== 'purified', 'card not marked purified');
   await context.close();
+});
+
+// A friend shielded while we wait to open their DM: no DM gets opened, and nothing is looked at.
+await test('T85 shielding a friend while their DM is being opened opens nothing', async () => {
+  const env = await openDiscord(browser, '/channels/4001/5001');
+  const { page, stats } = env;
+  let throttle = true;
+  await page.route('https://discord.com/api/v9/users/@me/channels', (route) => {
+    if (route.request().method() !== 'POST' || !throttle) return route.fallback();
+    return route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ message: 'You are being rate limited.', retry_after: 0.5, global: false }) });
+  });
+  await injectUserscript(page, source);
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'general');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="u:2004"]');
+  await page.click('[data-key="u:2004"]'); // Bob: a friend with no DM yet
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.waitForTimeout(200);
+  // Another tab shields Bob during the 429 wait.
+  await page.evaluate(() => {
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    const ls = f.contentWindow.localStorage;
+    const p = JSON.parse(ls.getItem('dopa-purifier:prefs') || '{}');
+    p.protectedIds = [...(p.protectedIds || []), '2004'];
+    ls.setItem('dopa-purifier:prefs', JSON.stringify(p));
+    f.remove();
+    window.dispatchEvent(new StorageEvent('storage', { key: 'dopa-purifier:prefs' }));
+  });
+  throttle = false;
+  await waitEnd(page);
+  assert(stats.opened.length === 0, `opened ${stats.opened.length} DM(s) for a shielded friend`);
+  assert(stats.deletes.length === 0, 'nothing deleted');
+  assert(env.pageErrors.length === 0, env.pageErrors.join('; '));
+  await env.context.close();
 });
 
 // Noticing an account switch by opening another chat must not bury the stopped run's error.

@@ -677,7 +677,7 @@ function createPurifier() {
     Object.assign(run, {
       active: true, paused: false, stopping: false, controller: new AbortController(),
       token: getToken(), accountSwitched: false,
-      deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [],
+      deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [], shielded: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0,
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: 0,
@@ -729,7 +729,7 @@ function createPurifier() {
         const before = counts.get(target.channelId);
         try {
           if (target.needsDM) {
-            const dm = await openDM(target.userId, { signal, beforeRetry: () => gate(signal) });
+            const dm = await openDM(target.userId, { signal, beforeRetry: async () => { await gate(signal); checkShield(target); } });
             const previousKey = target.key;
             target.channelId = dm.id;
             target.needsDM = false;
@@ -737,6 +737,7 @@ function createPurifier() {
             emit('dm-opened', { target, previousKey });
             await sleep(TIMING.searchDelayMs * 2, signal); // don't open DMs in a burst
             await gate(signal);
+            checkShield(target);
           }
           if (target.uncounted && !counts.has(target.channelId)) {
             // A cheap search count only; history targets find their total as they go.
@@ -776,7 +777,12 @@ function createPurifier() {
           if (err instanceof Shielded) {
             settleCount(target, before);
             settleImmune(target);
+            run.shielded.push(target);
             emit('target-end', { target, index: i, ok: false, immune: true, midway: true });
+            // A DM we opened only to purge, untouched, goes back to how it was.
+            if (target.openedByUs && !target.deleted && !target.failed) {
+              try { await request(`/channels/${target.channelId}`, { method: 'DELETE', signal }); } catch { /* cosmetic */ }
+            }
             continue;
           }
           // A skipped chat is settled too, or every later chat would show "N of M+" with no ETA.
@@ -799,7 +805,7 @@ function createPurifier() {
       tick();
       emit('end', {
         stopped, error: fatal ? fatal.message : null, ...progressSnapshot(),
-        failures: run.failures.slice(), problems: run.problems.slice(),
+        failures: run.failures.slice(), problems: run.problems.slice(), shielded: run.shielded.map((t) => t.name),
       });
       if (run.accountSwitched) syncAccount(); // now idle: adopt the new account and reset
     }
@@ -1483,7 +1489,7 @@ function createPurifier() {
 
     let mood = 'awaiting orders, princess~';
     if (mode === 'run') mood = run.stopping ? 'wrapping up~' : run.paused ? 'paused~ take your time' : "purging… don't look~";
-    else if (mode === 'done') mood = lastEnd.error ? 'oh no… something broke' : lastEnd.stopped ? 'stopped~ the rest can wait' : lastEnd.problems ? 'some chats fought back~' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
+    else if (mode === 'done') mood = lastEnd.error ? 'oh no… something broke' : lastEnd.stopped ? 'stopped~ the rest can wait' : lastEnd.problems ? 'some chats fought back~' : lastEnd.shielded ? 'a shield went up~ ♡' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
     else if (state.tab === 'batch') mood = "who's first, princess~?";
     else if (state.target && state.target.protected) mood = 'this one is protected~';
     setMood(mood);
@@ -1556,7 +1562,8 @@ function createPurifier() {
     const shown = runningHere ? state.runTargets[0] : state.target;
     const card = $('[data-role="target"]');
     card.dataset.state = runningHere ? (run.paused ? 'paused' : 'live') : (shown && shown.protected ? 'immune' : 'idle');
-    const purified = !runningHere && lastEnd && lastEnd.key === contextKey() && !lastEnd.stopped && !lastEnd.error && !lastEnd.problems && state.tab === 'current';
+    const purified = !runningHere && lastEnd && lastEnd.key === contextKey() && !lastEnd.stopped && !lastEnd.error && !lastEnd.problems && !lastEnd.shielded
+      && !(shown && shown.protected) && state.tab === 'current';
     if (purified) card.dataset.state = 'purified';
     const eyebrow = $('[data-role="eyebrow-text"]');
     if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purging']));
@@ -2837,6 +2844,7 @@ function createPurifier() {
       const minimised = $('[data-role="shell"]').hidden;
       const purged = plural(p.deleted, 'message');
       const problems = p.problems || [];
+      const shielded = p.shielded || [];
       if (problems.length) {
         addLog(`NEEDS ANOTHER LOOK: ${problems.map((x) => `${x.target.name} (${shortReason(x.reason)})`).join(', ')}`, 'warn');
       }
@@ -2851,6 +2859,11 @@ function createPurifier() {
         const indexingOnly = problems.every((x) => /indexing/i.test(x.reason));
         setStatus(`${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go~ see logs`, 'warn');
         lastEnd = { key: state.runKey, text: indexingOnly ? `Purged ${purged} · run again later for older ones` : `Purged ${purged} · ${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
+      } else if (shielded.length) {
+        // Shielded from another tab mid-purge: what's left there stays on purpose, so no "all clean".
+        const who = shielded.length === 1 ? shielded[0] : plural(shielded.length, 'chat');
+        setStatus(`Done~ ${who} stays shielded 🛡`, 'immune');
+        lastEnd = { key: state.runKey, text: `Purged ${purged} · ${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
       } else if (p.failed) {
         setStatus(`Done~ ${p.failed.toLocaleString()} wouldn't go · see logs`, 'warn');
         lastEnd = { key: state.runKey, text: `Purged ${purged} · ${p.failed.toLocaleString()} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
@@ -2861,7 +2874,7 @@ function createPurifier() {
         if (p.deleted > 0) celebrate();
       }
       // Minimised through the finish line: the orb carries the outcome until reopened.
-      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length, tone: lastEnd ? lastEnd.tone : 'warn' } : null;
+      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd ? lastEnd.tone : 'warn' } : null;
       renderCurrent();
       renderActions();
       if (state.tab === 'batch') loadPendingLists();

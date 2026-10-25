@@ -591,7 +591,7 @@
     Object.assign(run, {
       active: true, paused: false, stopping: false, controller: new AbortController(),
       token: getToken(), accountSwitched: false,
-      deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [],
+      deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [], shielded: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0,
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: 0,
@@ -643,7 +643,7 @@
         const before = counts.get(target.channelId);
         try {
           if (target.needsDM) {
-            const dm = await openDM(target.userId, { signal, beforeRetry: () => gate(signal) });
+            const dm = await openDM(target.userId, { signal, beforeRetry: async () => { await gate(signal); checkShield(target); } });
             const previousKey = target.key;
             target.channelId = dm.id;
             target.needsDM = false;
@@ -651,6 +651,7 @@
             emit('dm-opened', { target, previousKey });
             await sleep(TIMING.searchDelayMs * 2, signal); // don't open DMs in a burst
             await gate(signal);
+            checkShield(target);
           }
           if (target.uncounted && !counts.has(target.channelId)) {
             // A cheap search count only; history targets find their total as they go.
@@ -690,7 +691,12 @@
           if (err instanceof Shielded) {
             settleCount(target, before);
             settleImmune(target);
+            run.shielded.push(target);
             emit('target-end', { target, index: i, ok: false, immune: true, midway: true });
+            // A DM we opened only to purge, untouched, goes back to how it was.
+            if (target.openedByUs && !target.deleted && !target.failed) {
+              try { await request(`/channels/${target.channelId}`, { method: 'DELETE', signal }); } catch { /* cosmetic */ }
+            }
             continue;
           }
           // A skipped chat is settled too, or every later chat would show "N of M+" with no ETA.
@@ -713,7 +719,7 @@
       tick();
       emit('end', {
         stopped, error: fatal ? fatal.message : null, ...progressSnapshot(),
-        failures: run.failures.slice(), problems: run.problems.slice(),
+        failures: run.failures.slice(), problems: run.problems.slice(), shielded: run.shielded.map((t) => t.name),
       });
       if (run.accountSwitched) syncAccount(); // now idle: adopt the new account and reset
     }
