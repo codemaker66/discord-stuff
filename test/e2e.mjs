@@ -1723,7 +1723,9 @@ await test('T70 BetterDiscord plugin offers its own update and rewrites its file
         },
         Plugins: { folder },
       };
-      const fsStub = { writeFileSync(file, data) { log.writes.push({ file, data }); } };
+      // The plugins folder holds our own file until something writes over it.
+      window.__bdDisk = code;
+      const fsStub = { readFileSync: () => window.__bdDisk, writeFileSync(file, data) { log.writes.push({ file, data }); window.__bdDisk = data; } };
       const pathStub = { join: (...p) => p.join('/') };
       const require = (m) => ({ fs: fsStub, path: pathStub })[m];
       const module = { exports: {} };
@@ -1765,6 +1767,192 @@ await test('T70 BetterDiscord plugin offers its own update and rewrites its file
     assert(env.pageErrors.length === 0, `${label}: ${env.pageErrors.join('; ')}`);
     await env.context.close();
   }
+  // A dialog that outlived its copy (plugin turned off, or reloaded) writes nothing when confirmed.
+  {
+    const { env, log } = await run({ body: newer });
+    assert(log.modals.length === 1, 'offered');
+    await env.page.evaluate(() => { window.__bd.stop(); window.__bdConfirm(); });
+    assert((await env.page.evaluate(() => window.__bdLog.writes)).length === 0, 'stale dialog wrote the plugin');
+    await env.context.close();
+  }
+  // Another Discord window already updated the shared file: confirming here never writes over it.
+  {
+    const { env, log } = await run({ body: newer });
+    assert(log.modals.length === 1, 'offered');
+    await env.page.evaluate((v) => { window.__bdDisk = v; window.__bdConfirm(); }, newer.replace(/(@version\s+)\S+/, (_, head) => `${head}99.1.0`));
+    const writes = await env.page.evaluate(() => window.__bdLog.writes);
+    assert(writes.length === 0, `wrote over a newer file: ${writes.map((w) => /@version\s+(\S+)/.exec(w.data)[1])}`);
+    assert(env.pageErrors.length === 0, env.pageErrors.join('; '));
+    await env.context.close();
+  }
+});
+
+// Another tab shields the very chat this tab is purging: deleting there stops at the next message.
+await test('T80 a shield from another tab stops the purge inside that chat', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await context.addInitScript((t) => {
+    if (window.top !== window || localStorage.getItem('token')) return;
+    localStorage.setItem('token', JSON.stringify(t));
+    localStorage.setItem('dopa-purifier:prefs', JSON.stringify({ welcomed: true }));
+  }, TOKEN);
+  const world = buildWorld();
+  const open = async (path) => {
+    const page = await context.newPage();
+    const { stats } = await installMockDiscord(page, { world, latencyMs: 60 });
+    await page.goto('https://discord.com' + path);
+    await injectUserscript(page, source);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent !== 'detecting…');
+    return { page, stats };
+  };
+  const mine = (cid) => world.messages[cid].filter((m) => m.author.id === world.me.id && m.type === 0).length;
+  const a = await open('/channels/4001/5001');
+  const b = await open('/channels/@me/3002'); // tab B purges Alice's DM
+  await a.page.click('.tab[data-tab="batch"]');
+  await a.page.waitForSelector('[data-key="c:3002"]');
+  await b.page.click('[data-act="purify"]');
+  await holdConfirm(b.page);
+  while (b.stats.deletes.length < 3) await b.page.waitForTimeout(10);
+  await a.page.hover('[data-key="c:3002"]');
+  await a.page.click('[data-key="c:3002"] .shield-btn');
+  const atShield = b.stats.deletes.length;
+  await waitEnd(b.page);
+  const after = b.stats.deletes.length - atShield;
+  assert(after <= 2, `${after} more deleted after the shield`);
+  assert(mine('3002') > 20, `Alice's DM kept its messages (${mine('3002')} left)`);
+  assert(/shielded in another tab/.test(await text(b.page, '[data-role="term-body"]')), 'tab B logs why it stopped');
+  assert(await b.page.locator('[data-role="eyebrow"]').first().textContent() === 'Immune', 'tab B shows the chat as immune');
+  await context.close();
+});
+
+// Noticing an account switch by opening another chat must not bury the stopped run's error.
+await test('T81 after a mid-run account switch the error stays on screen', async () => {
+  for (const tab of ['current', 'batch']) {
+    const { page, stats, context } = await boot('/channels/4001/5001', { latencyMs: 30 });
+    if (tab === 'batch') {
+      await page.click('.tab[data-tab="batch"]');
+      await page.waitForSelector('[data-key="c:3003"]');
+      await page.click('[data-key="c:3003"]');
+      await page.click('[data-key="c:3002"]');
+    }
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    while (stats.deletes.length < 3) await page.waitForTimeout(10);
+    await page.evaluate(() => localStorage.setItem('token', JSON.stringify('mock-token.b')));
+    if (tab === 'current') await page.click('a[href="/channels/4001/5002"]');
+    await waitEnd(page, 15000);
+    await page.waitForTimeout(1500); // the re-read of the chat and the lists have landed by now
+    assert(/switched Discord accounts/.test(await status(page)), `${tab}: status ${await status(page)}`);
+    assert(await page.locator('[data-role="status"]').getAttribute('data-tone') === 'error', `${tab}: error tone`);
+    await context.close();
+  }
+});
+
+// Headers arrive, then the body never finishes: Cancel scan, Stop and the timeout all still work.
+await test('T82 a response that stalls mid-body can be cancelled, stopped, or times out', async () => {
+  const stall = async (page) => page.evaluate(() => {
+    window.__stalls = 0;
+    const real = window.fetch;
+    window.fetch = (url, init = {}) => {
+      if (!/\/messages\/search/.test(String(url))) return real(url, init);
+      window.__stalls++;
+      // Like a real fetch: the body errors only when the request's signal aborts.
+      const body = new ReadableStream({ start(c) {
+        c.enqueue(new TextEncoder().encode('{"total_results": 40, "messages": ['));
+        if (init.signal) init.signal.addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError')), { once: true });
+      } });
+      return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }));
+    };
+  });
+  const stalls = (page) => page.evaluate(() => window.__stalls);
+  {
+    const { page, context } = await boot('/channels/4001/5001');
+    await stall(page);
+    await page.click('[data-act="scan"]');
+    while (!(await stalls(page))) await page.waitForTimeout(20);
+    await page.waitForTimeout(300);
+    await page.click('[data-act="scan"]'); // Cancel scan
+    await page.waitForFunction(() => /Scan cancelled/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 2000 });
+    await context.close();
+  }
+  {
+    const { page, stats, context } = await boot('/channels/4001/5001');
+    await stall(page);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    while (!(await stalls(page))) await page.waitForTimeout(20);
+    await page.waitForTimeout(300);
+    await page.click('[data-act="stop"]');
+    await waitEnd(page, 2000);
+    assert(stats.deletes.length === 0, 'nothing deleted');
+    await context.close();
+  }
+  {
+    // A short timeout: the stalled read is given up and retried with the usual backoff.
+    const env = await openDiscord(browser, '/channels/4001/5001');
+    await injectUserscript(env.page, source.replace(/requestTimeoutMs:\s*\d+/, 'requestTimeoutMs: 800'));
+    await env.page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'general');
+    await stall(env.page);
+    await env.page.click('[data-act="scan"]');
+    await env.page.waitForFunction(() => window.__stalls >= 2, null, { timeout: 5000 });
+    await env.context.close();
+  }
+});
+
+// A count taken while Discord was still indexing is a floor: the run doesn't treat it as the total.
+await test('T83 a "found so far" scan doesn\'t cap the run\'s progress', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { latencyMs: 30 });
+  let first = true;
+  await page.route(/\/guilds\/4001\/messages\/search/, (route) => {
+    if (!first) return route.fallback();
+    first = false;
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ total_results: 3, messages: [], doing_deep_historical_index: true }) });
+  });
+  await page.click('[data-act="scan"]');
+  await page.waitForFunction(() => /so far/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  assert(await count(page) === 10, `purged ${await count(page)}`);
+  assert(await text(page, '[data-role="pct"]') === '10 of 10', `progress ${await text(page, '[data-role="pct"]')}`);
+  await context.close();
+});
+
+// A scanned chat that turns immune mid-run leaves the total, so the finish reads whole.
+await test('T84 a chat shielded mid-run drops out of the run total', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { latencyMs: 25 });
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3003"]');
+  await page.click('[data-key="c:3003"]');
+  await page.click('[data-key="c:3002"]');
+  await page.click('[data-act="scan"]');
+  await page.waitForFunction(() => /Scan done/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  let release;
+  const released = new Promise((r) => { release = r; });
+  let held = false;
+  await page.route(/\/channels\/3003\/messages\?limit=100&before=/, async (route) => {
+    if (held) return route.fallback();
+    held = true;
+    await released;
+    return route.fallback();
+  });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  while (!held) await page.waitForTimeout(10);
+  // Another tab shields Alice while Mallory's DM is still going.
+  await page.evaluate(() => {
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    const ls = f.contentWindow.localStorage;
+    const p = JSON.parse(ls.getItem('dopa-purifier:prefs') || '{}');
+    p.protectedIds = [...(p.protectedIds || []), '2002'];
+    ls.setItem('dopa-purifier:prefs', JSON.stringify(p));
+    f.remove();
+    window.dispatchEvent(new StorageEvent('storage', { key: 'dopa-purifier:prefs' }));
+  });
+  release();
+  await waitEnd(page);
+  assert(await text(page, '[data-role="pct"]') === '7 of 7', `progress ${await text(page, '[data-role="pct"]')}`);
+  await context.close();
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));

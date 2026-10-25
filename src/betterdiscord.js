@@ -49,8 +49,16 @@ module.exports = class DopasPurifier {
         confirmText: 'Update',
         cancelText: 'Later',
         onConfirm: () => {
-          try { require('fs').writeFileSync(require('path').join(BdApi.Plugins.folder, file), text); }
-          catch { BdApi.UI.showToast("Couldn't update~ grab the new file from the install page ♡", { type: 'error' }); }
+          // A dialog left open can outlive this copy, and another Discord window may have updated
+          // the shared file already: write only from the live copy, and never over a newer file.
+          if (this.updateCheck !== check) return;
+          try {
+            const fs = require('fs');
+            const dest = require('path').join(BdApi.Plugins.folder, file);
+            const onDisk = (/@version\s+(\S+)/.exec(fs.readFileSync(dest, 'utf8')) || [])[1];
+            if (onDisk && BdApi.Utils.semverCompare(onDisk, remote) <= 0) return;
+            fs.writeFileSync(dest, text);
+          } catch { BdApi.UI.showToast("Couldn't update~ grab the new file from the install page ♡", { type: 'error' }); }
         },
       });
     } catch { /* no offer this time */ }

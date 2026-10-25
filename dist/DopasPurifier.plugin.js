@@ -49,8 +49,16 @@ module.exports = class DopasPurifier {
         confirmText: 'Update',
         cancelText: 'Later',
         onConfirm: () => {
-          try { require('fs').writeFileSync(require('path').join(BdApi.Plugins.folder, file), text); }
-          catch { BdApi.UI.showToast("Couldn't update~ grab the new file from the install page ♡", { type: 'error' }); }
+          // A dialog left open can outlive this copy, and another Discord window may have updated
+          // the shared file already: write only from the live copy, and never over a newer file.
+          if (this.updateCheck !== check) return;
+          try {
+            const fs = require('fs');
+            const dest = require('path').join(BdApi.Plugins.folder, file);
+            const onDisk = (/@version\s+(\S+)/.exec(fs.readFileSync(dest, 'utf8')) || [])[1];
+            if (onDisk && BdApi.Utils.semverCompare(onDisk, remote) <= 0) return;
+            fs.writeFileSync(dest, text);
+          } catch { BdApi.UI.showToast("Couldn't update~ grab the new file from the install page ♡", { type: 'error' }); }
         },
       });
     } catch { /* no offer this time */ }
@@ -201,7 +209,11 @@ function createPurifier() {
     if (linked) signal.addEventListener('abort', kill, { once: true });
     const timer = setTimeout(kill, TIMING.requestTimeoutMs);
     try {
-      return await fetch(url, { ...init, signal: ctl.signal });
+      // Read the body here too, so a server that stalls mid-answer is covered as well.
+      const res = await fetch(url, { ...init, signal: ctl.signal });
+      const body = await res.arrayBuffer();
+      const empty = res.status === 204 || res.status === 205 || res.status === 304;
+      return new Response(empty ? null : body, { status: res.status, statusText: res.statusText, headers: res.headers });
     } finally {
       clearTimeout(timer);
       if (linked) signal.removeEventListener('abort', kill);
@@ -530,6 +542,10 @@ function createPurifier() {
 
   const ARCHIVED_THREAD = 50083; // Discord's code for a write into an archived thread
 
+  // Another tab shielded the chat we're in: stop deleting there before the next message.
+  class Shielded extends Error {}
+  const checkShield = (target) => { if (isProtectedUser(target.partner)) throw new Shielded(); };
+
   async function handleMessage(target, msg, signal) {
     if (run.seen.has(msg.id)) return;
     run.seen.add(msg.id);
@@ -539,6 +555,7 @@ function createPurifier() {
       return;
     }
     await gate(signal);
+    checkShield(target);
     // Channel search also returns messages from the channel's threads, so delete
     // in the channel Discord says the message lives in.
     const where = msg.channel_id || target.channelId;
@@ -549,7 +566,7 @@ function createPurifier() {
       return;
     }
     const res = await request(`/channels/${where}/messages/${msg.id}`, {
-      method: 'DELETE', signal, onWait: onWaitFor(target), beforeRetry: () => gate(signal),
+      method: 'DELETE', signal, onWait: onWaitFor(target), beforeRetry: async () => { await gate(signal); checkShield(target); },
     });
     const body = res.ok ? null : await readJson(res);
     if (res.status === 404 && body && body.code === 10008) {
@@ -663,18 +680,30 @@ function createPurifier() {
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0,
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
-      total: targets.reduce((sum, t) => sum + (counts.get(t.channelId) || 0), 0),
+      total: 0,
       uncounted: 0,
     });
+    // Only exact counts go into the total. A chat counted while Discord was still indexing
+    // stays open, like an unscanned one, until its purge shows how many there really were.
     for (const t of targets) {
-      t.uncounted = !t.protected && !counts.has(t.channelId);
+      const exact = counts.has(t.channelId) && !partialCounts.has(t.channelId);
+      t.planned = !t.protected && exact ? counts.get(t.channelId) : 0;
+      t.uncounted = !t.protected && !exact;
+      run.total += t.planned;
       if (t.uncounted) run.uncounted++;
     }
     const counted = (t, n) => {
       if (!t.uncounted) return;
       t.uncounted = false;
       run.uncounted--;
+      t.planned = n;
       run.total += n;
+    };
+    const done = (t) => (t.deleted || 0) + (t.failed || 0) + (t.gone || 0);
+    // A chat that turns immune keeps only what was already done there in the total.
+    const settleImmune = (t) => {
+      if (t.uncounted) counted(t, done(t));
+      else run.total -= Math.max(0, t.planned - done(t));
     };
     const { signal } = run.controller;
     emit('start', { targets });
@@ -689,7 +718,7 @@ function createPurifier() {
         // Wait out a pause before the shield check, so a shield set while paused still counts.
         await gate(signal);
         if (target.protected || isProtectedUser(target.partner)) {
-          counted(target, 0);
+          settleImmune(target);
           emit('target-end', { target, index: i, ok: false, immune: true });
           continue;
         }
@@ -709,13 +738,12 @@ function createPurifier() {
             await sleep(TIMING.searchDelayMs * 2, signal); // don't open DMs in a burst
             await gate(signal);
           }
-          if (counts.has(target.channelId)) counted(target, counts.get(target.channelId));
-          else {
+          if (target.uncounted && !counts.has(target.channelId)) {
             // A cheap search count only; history targets find their total as they go.
             try {
               const n = await countMine(target, { signal, onWait: onWaitFor(target), searchOnly: true });
               counts.set(target.channelId, n);
-              counted(target, n);
+              if (!partialCounts.has(target.channelId)) counted(target, n);
               tick();
             } catch (err) {
               if (err instanceof Stopped || fatalError(err)) throw err;
@@ -724,7 +752,7 @@ function createPurifier() {
           const countedBefore = counts.get(target.channelId);
           const result = await (target.guildId ? purgeBySearch(target, signal) : purgeByHistory(target, signal));
           // A chat we couldn't count up front is now fully known.
-          counted(target, (target.deleted || 0) + (target.failed || 0) + (target.gone || 0));
+          counted(target, done(target));
           if (result.indexing) {
             counts.delete(target.channelId);
             run.problems.push({ target, reason: 'Discord is still indexing older messages — run it again later' });
@@ -745,8 +773,14 @@ function createPurifier() {
             emit('target-end', { target, index: i, ok: false, stopped: true });
             break;
           }
+          if (err instanceof Shielded) {
+            settleCount(target, before);
+            settleImmune(target);
+            emit('target-end', { target, index: i, ok: false, immune: true, midway: true });
+            continue;
+          }
           // A skipped chat is settled too, or every later chat would show "N of M+" with no ETA.
-          counted(target, (target.deleted || 0) + (target.failed || 0) + (target.gone || 0));
+          counted(target, done(target));
           counts.delete(target.channelId);
           if (fatalError(err)) { fatal = err; break; }
           run.problems.push({ target, reason: err.message });
@@ -1487,7 +1521,7 @@ function createPurifier() {
   const describeFailed = () => !!state.targetError && state.targetError !== 'none';
 
   let describeSeq = 0;
-  async function refreshRoute({ keepScan = false } = {}) {
+  async function refreshRoute({ keepScan = false, keepStatus = false } = {}) {
     const route = routeTarget();
     const key = route ? route.channelId : '';
     if (state.route && route && state.route.channelId === key && !describeFailed()) return;
@@ -1495,7 +1529,7 @@ function createPurifier() {
     if (state.scanning && state.scanKind === 'current' && !keepScan) cancelScan();
     // The footer may still be talking about the last chat (or the failed lookup); an account
     // switch re-reads the same chat and keeps its notice.
-    const freshStatus = !state.target || state.target.channelId !== key || describeFailed();
+    const freshStatus = !keepStatus && (!state.target || state.target.channelId !== key || describeFailed());
     state.route = route;
     state.target = null;
     state.targetError = route ? null : 'none';
@@ -1506,7 +1540,7 @@ function createPurifier() {
       const target = await describeRoute(route);
       if (seq !== describeSeq) return; // user moved on while we were asking
       state.target = target;
-      if (target.protected && !run.active) setStatus(`${target.name} is immune~`, 'immune');
+      if (target.protected && !run.active && !keepStatus) setStatus(`${target.name} is immune~`, 'immune');
       else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~ ✨', 'info');
     } catch (err) {
       if (seq !== describeSeq) return;
@@ -1924,7 +1958,8 @@ function createPurifier() {
       if (seq !== dmSeq) return;
       state.dmData = { channels, relationships };
       const counted = renderDMs();
-      if (state.tab === 'batch' && !run.active) setStatus(`Loaded ${plural(counted.dms, 'DM')} + ${plural(counted.friends, 'friend')} ✨`, 'success');
+      // A routine "loaded" never buries an error the user hasn't read yet.
+      if (state.tab === 'batch' && !run.active && $('[data-role="status"]').dataset.tone !== 'error') setStatus(`Loaded ${plural(counted.dms, 'DM')} + ${plural(counted.friends, 'friend')} ✨`, 'success');
     } catch (err) {
       if (seq !== dmSeq) return;
       list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load DMs 😿 ${err.message}` }));
@@ -2759,7 +2794,8 @@ function createPurifier() {
       addLog('switched Discord accounts — counts and lists reset', 'warn');
       if (!keepVerdict) setStatus('New account~ counts cleared 🔄', 'warn');
       if (state.tab === 'batch' && !run.active) { loadDMs(); loadServers({ refresh: true }); }
-      setTimeout(() => refreshRoute({ keepScan: true }), 0);
+      // Re-read the chat without a fresh "Ready~": the switch notice (or the stopped run's error) stays.
+      setTimeout(() => refreshRoute({ keepScan: true, keepStatus: true }), 0);
     });
     on('skip', ({ msg }) => addLog(`skipped a system message (type ${msg.type}) — Discord won't delete those`, 'skip'));
     on('wait', (w) => {
@@ -2767,8 +2803,8 @@ function createPurifier() {
       addLog(waitText(w), 'warn');
     });
     on('log', ({ text, tone }) => addLog(text, tone));
-    on('target-end', ({ target, ok, error, immune, stopped, warn }) => {
-      if (immune) addLog(`${target.name} is immune 👑 — skipped`, 'warn');
+    on('target-end', ({ target, ok, error, immune, midway, stopped, warn }) => {
+      if (immune) addLog(midway ? `${target.name} was shielded in another tab 👑 — stopped purging there` : `${target.name} is immune 👑 — skipped`, 'warn');
       else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${(target.deleted || 0).toLocaleString()} purged) ──`, 'info');
       if (target.row) setRowState(target, immune ? 'immune' : ok ? 'done' : warn ? 'partial' : stopped ? 'stopped' : 'error', error || warn);
     });

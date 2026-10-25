@@ -123,7 +123,11 @@
     if (linked) signal.addEventListener('abort', kill, { once: true });
     const timer = setTimeout(kill, TIMING.requestTimeoutMs);
     try {
-      return await fetch(url, { ...init, signal: ctl.signal });
+      // Read the body here too, so a server that stalls mid-answer is covered as well.
+      const res = await fetch(url, { ...init, signal: ctl.signal });
+      const body = await res.arrayBuffer();
+      const empty = res.status === 204 || res.status === 205 || res.status === 304;
+      return new Response(empty ? null : body, { status: res.status, statusText: res.statusText, headers: res.headers });
     } finally {
       clearTimeout(timer);
       if (linked) signal.removeEventListener('abort', kill);
@@ -452,6 +456,10 @@
 
   const ARCHIVED_THREAD = 50083; // Discord's code for a write into an archived thread
 
+  // Another tab shielded the chat we're in: stop deleting there before the next message.
+  class Shielded extends Error {}
+  const checkShield = (target) => { if (isProtectedUser(target.partner)) throw new Shielded(); };
+
   async function handleMessage(target, msg, signal) {
     if (run.seen.has(msg.id)) return;
     run.seen.add(msg.id);
@@ -461,6 +469,7 @@
       return;
     }
     await gate(signal);
+    checkShield(target);
     // Channel search also returns messages from the channel's threads, so delete
     // in the channel Discord says the message lives in.
     const where = msg.channel_id || target.channelId;
@@ -471,7 +480,7 @@
       return;
     }
     const res = await request(`/channels/${where}/messages/${msg.id}`, {
-      method: 'DELETE', signal, onWait: onWaitFor(target), beforeRetry: () => gate(signal),
+      method: 'DELETE', signal, onWait: onWaitFor(target), beforeRetry: async () => { await gate(signal); checkShield(target); },
     });
     const body = res.ok ? null : await readJson(res);
     if (res.status === 404 && body && body.code === 10008) {
@@ -585,18 +594,30 @@
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0,
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
-      total: targets.reduce((sum, t) => sum + (counts.get(t.channelId) || 0), 0),
+      total: 0,
       uncounted: 0,
     });
+    // Only exact counts go into the total. A chat counted while Discord was still indexing
+    // stays open, like an unscanned one, until its purge shows how many there really were.
     for (const t of targets) {
-      t.uncounted = !t.protected && !counts.has(t.channelId);
+      const exact = counts.has(t.channelId) && !partialCounts.has(t.channelId);
+      t.planned = !t.protected && exact ? counts.get(t.channelId) : 0;
+      t.uncounted = !t.protected && !exact;
+      run.total += t.planned;
       if (t.uncounted) run.uncounted++;
     }
     const counted = (t, n) => {
       if (!t.uncounted) return;
       t.uncounted = false;
       run.uncounted--;
+      t.planned = n;
       run.total += n;
+    };
+    const done = (t) => (t.deleted || 0) + (t.failed || 0) + (t.gone || 0);
+    // A chat that turns immune keeps only what was already done there in the total.
+    const settleImmune = (t) => {
+      if (t.uncounted) counted(t, done(t));
+      else run.total -= Math.max(0, t.planned - done(t));
     };
     const { signal } = run.controller;
     emit('start', { targets });
@@ -611,7 +632,7 @@
         // Wait out a pause before the shield check, so a shield set while paused still counts.
         await gate(signal);
         if (target.protected || isProtectedUser(target.partner)) {
-          counted(target, 0);
+          settleImmune(target);
           emit('target-end', { target, index: i, ok: false, immune: true });
           continue;
         }
@@ -631,13 +652,12 @@
             await sleep(TIMING.searchDelayMs * 2, signal); // don't open DMs in a burst
             await gate(signal);
           }
-          if (counts.has(target.channelId)) counted(target, counts.get(target.channelId));
-          else {
+          if (target.uncounted && !counts.has(target.channelId)) {
             // A cheap search count only; history targets find their total as they go.
             try {
               const n = await countMine(target, { signal, onWait: onWaitFor(target), searchOnly: true });
               counts.set(target.channelId, n);
-              counted(target, n);
+              if (!partialCounts.has(target.channelId)) counted(target, n);
               tick();
             } catch (err) {
               if (err instanceof Stopped || fatalError(err)) throw err;
@@ -646,7 +666,7 @@
           const countedBefore = counts.get(target.channelId);
           const result = await (target.guildId ? purgeBySearch(target, signal) : purgeByHistory(target, signal));
           // A chat we couldn't count up front is now fully known.
-          counted(target, (target.deleted || 0) + (target.failed || 0) + (target.gone || 0));
+          counted(target, done(target));
           if (result.indexing) {
             counts.delete(target.channelId);
             run.problems.push({ target, reason: 'Discord is still indexing older messages — run it again later' });
@@ -667,8 +687,14 @@
             emit('target-end', { target, index: i, ok: false, stopped: true });
             break;
           }
+          if (err instanceof Shielded) {
+            settleCount(target, before);
+            settleImmune(target);
+            emit('target-end', { target, index: i, ok: false, immune: true, midway: true });
+            continue;
+          }
           // A skipped chat is settled too, or every later chat would show "N of M+" with no ETA.
-          counted(target, (target.deleted || 0) + (target.failed || 0) + (target.gone || 0));
+          counted(target, done(target));
           counts.delete(target.channelId);
           if (fatalError(err)) { fatal = err; break; }
           run.problems.push({ target, reason: err.message });

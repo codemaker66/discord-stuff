@@ -691,7 +691,7 @@
   const describeFailed = () => !!state.targetError && state.targetError !== 'none';
 
   let describeSeq = 0;
-  async function refreshRoute({ keepScan = false } = {}) {
+  async function refreshRoute({ keepScan = false, keepStatus = false } = {}) {
     const route = routeTarget();
     const key = route ? route.channelId : '';
     if (state.route && route && state.route.channelId === key && !describeFailed()) return;
@@ -699,7 +699,7 @@
     if (state.scanning && state.scanKind === 'current' && !keepScan) cancelScan();
     // The footer may still be talking about the last chat (or the failed lookup); an account
     // switch re-reads the same chat and keeps its notice.
-    const freshStatus = !state.target || state.target.channelId !== key || describeFailed();
+    const freshStatus = !keepStatus && (!state.target || state.target.channelId !== key || describeFailed());
     state.route = route;
     state.target = null;
     state.targetError = route ? null : 'none';
@@ -710,7 +710,7 @@
       const target = await describeRoute(route);
       if (seq !== describeSeq) return; // user moved on while we were asking
       state.target = target;
-      if (target.protected && !run.active) setStatus(`${target.name} is immune~`, 'immune');
+      if (target.protected && !run.active && !keepStatus) setStatus(`${target.name} is immune~`, 'immune');
       else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~ ✨', 'info');
     } catch (err) {
       if (seq !== describeSeq) return;
@@ -1128,7 +1128,8 @@
       if (seq !== dmSeq) return;
       state.dmData = { channels, relationships };
       const counted = renderDMs();
-      if (state.tab === 'batch' && !run.active) setStatus(`Loaded ${plural(counted.dms, 'DM')} + ${plural(counted.friends, 'friend')} ✨`, 'success');
+      // A routine "loaded" never buries an error the user hasn't read yet.
+      if (state.tab === 'batch' && !run.active && $('[data-role="status"]').dataset.tone !== 'error') setStatus(`Loaded ${plural(counted.dms, 'DM')} + ${plural(counted.friends, 'friend')} ✨`, 'success');
     } catch (err) {
       if (seq !== dmSeq) return;
       list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load DMs 😿 ${err.message}` }));
@@ -1963,7 +1964,8 @@
       addLog('switched Discord accounts — counts and lists reset', 'warn');
       if (!keepVerdict) setStatus('New account~ counts cleared 🔄', 'warn');
       if (state.tab === 'batch' && !run.active) { loadDMs(); loadServers({ refresh: true }); }
-      setTimeout(() => refreshRoute({ keepScan: true }), 0);
+      // Re-read the chat without a fresh "Ready~": the switch notice (or the stopped run's error) stays.
+      setTimeout(() => refreshRoute({ keepScan: true, keepStatus: true }), 0);
     });
     on('skip', ({ msg }) => addLog(`skipped a system message (type ${msg.type}) — Discord won't delete those`, 'skip'));
     on('wait', (w) => {
@@ -1971,8 +1973,8 @@
       addLog(waitText(w), 'warn');
     });
     on('log', ({ text, tone }) => addLog(text, tone));
-    on('target-end', ({ target, ok, error, immune, stopped, warn }) => {
-      if (immune) addLog(`${target.name} is immune 👑 — skipped`, 'warn');
+    on('target-end', ({ target, ok, error, immune, midway, stopped, warn }) => {
+      if (immune) addLog(midway ? `${target.name} was shielded in another tab 👑 — stopped purging there` : `${target.name} is immune 👑 — skipped`, 'warn');
       else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${(target.deleted || 0).toLocaleString()} purged) ──`, 'info');
       if (target.row) setRowState(target, immune ? 'immune' : ok ? 'done' : warn ? 'partial' : stopped ? 'stopped' : 'error', error || warn);
     });
