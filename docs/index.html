@@ -83,6 +83,7 @@
   .btn svg { width: 18px; height: 18px; flex: none; }
   .meta { margin: 18px 0 0; font-size: 14px; color: var(--t3); }
   .meta b { color: var(--t2); font-weight: 600; }
+  .meta .nb { white-space: nowrap; }
   .shot { position: relative; }
   .shot img { display: block; width: 100%; height: auto; border-radius: 22px; box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 208, 226, .06); }
   .shot::after { content: ''; position: absolute; inset: -40px -16px; z-index: -1; background: radial-gradient(closest-side, rgba(255, 122, 169, .22), transparent); }
@@ -130,6 +131,14 @@
   .copy:hover { background: rgba(255, 236, 244, .14); }
   .note { margin-top: 18px; display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--t3); }
   .note svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--ember-300); }
+  .setup > .note { margin: 0; }
+  .setup > .note:not([hidden]) + .picker { margin-top: 18px; }
+  .note p { margin: 0; }
+  .note p + p { margin-top: 8px; }
+  .note b { color: var(--t1); }
+  .note-act { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 10px; }
+  .hint:not(:empty) { margin-top: 10px; font-size: 14.5px; color: var(--ember-200); }
+  .hint b { color: var(--t1); }
 
   /* features */
   .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
@@ -144,6 +153,7 @@
   .panel h3 { margin: 0 0 8px; font: 700 19px/1.3 var(--font); }
   .panel p, .panel li { color: var(--t2); font-size: 15px; }
   .panel ol { margin: 10px 0 18px; padding-left: 20px; display: grid; gap: 6px; }
+  .panel ol + p { margin: -6px 0 18px; }
   details { border-radius: 16px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
   details + details { margin-top: 10px; }
   summary { list-style: none; cursor: pointer; padding: 18px 52px 18px 20px; position: relative; font: 700 16.5px/1.35 var(--font); }
@@ -204,7 +214,7 @@
           Share with a friend
         </button>
       </div>
-      <p class="meta"><b>v<span data-role="latest"></span></b> · free, no sign-up · Chrome, Edge, Firefox, Opera, Brave, Safari</p>
+      <p class="meta"><b>v<span data-role="latest"></span></b> · free, no sign-up · Chrome, Edge, Firefox, Opera, Brave · <span class="nb">Safari's helper app costs $2.99</span></p>
       <div class="installed" data-role="installed" hidden>
         <span class="tick" aria-hidden="true">✓</span>
         <p data-role="installed-text"></p>
@@ -217,8 +227,19 @@
   <section id="install" aria-labelledby="install-title">
     <div class="eyebrow">Two minutes, once</div>
     <h2 id="install-title">Set it up</h2>
-    <p class="sub">It runs inside Discord in your browser through a free "userscript manager" extension. You only do this once — updates arrive by themselves.</p>
+    <p class="sub">It runs inside Discord in your browser through a "userscript manager" extension: free on Chrome, Edge, Firefox, Opera and Brave, $2.99 on Safari. You only do this once — updates arrive by themselves.</p>
     <div class="setup">
+      <div class="note" data-role="mobile-note" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.6l7.6 3.1v5.9c0 4.9-3.2 8.4-7.6 10.1-4.4-1.7-7.6-5.2-7.6-10.1V5.7z"/></svg>
+        <div>
+          <p><b>On your phone, princess? ♡</b> Discord's phone app can't wear the Purifier~ Open this page on your computer and it takes two minutes ✨</p>
+          <div class="note-act">
+            <button class="btn btn-primary btn-sm" type="button" data-act="send-link">Send me this link</button>
+            <button class="btn btn-quiet btn-sm" type="button" data-act="show-steps" hidden>Show the computer steps</button>
+          </div>
+          <p>Firefox for Android works too: add Tampermonkey, then open discord.com in “Desktop site” mode.</p>
+        </div>
+      </div>
       <div class="picker" role="group" aria-label="Your browser">
         <span>Your browser:</span>
         <button class="chip" type="button" data-browser="chrome">Chrome</button>
@@ -252,21 +273,18 @@
           <div>
             <h3>Install the Purifier</h3>
             <p>Tampermonkey opens a page showing the script — click <b>Install</b> there. Come back here afterwards and this page ticks itself off.</p>
+            <div class="hint" data-role="install-help" role="status" aria-live="polite"></div>
           </div>
           <div class="act"><a class="btn btn-primary btn-sm" data-role="install-link" href="https://raw.githubusercontent.com/codemaker66/discord-stuff/main/dist/dopas-discord-purifier.user.js">Install</a></div>
         </li>
         <li class="step" data-step="open">
           <div>
             <h3>Open Discord in this browser</h3>
-            <p>Look top-right for the panel. Open any chat, press <b>Scan</b>, then <b>hold Purify</b>. That's it~</p>
+            <p>Look top-right for the panel. Open any chat, press <b>Scan</b>, then <b>Purify</b>, and hold the red button. That's it~</p>
           </div>
           <div class="act"><a class="btn btn-quiet btn-sm" href="https://discord.com/app" target="_blank" rel="noopener">Open Discord</a></div>
         </li>
       </ol>
-      <div class="note" data-role="mobile-note" hidden>
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.6l7.6 3.1v5.9c0 4.9-3.2 8.4-7.6 10.1-4.4-1.7-7.6-5.2-7.6-10.1V5.7z"/></svg>
-        <span>On a phone? Discord's app can't run scripts. Open this page on a computer — or use Firefox for Android with Tampermonkey and discord.com in "Desktop site" mode.</span>
-      </div>
     </div>
   </section>
 
@@ -297,6 +315,7 @@
           <li>In Discord: <b>User Settings → Plugins → Open Plugins Folder</b>, drop the file in.</li>
           <li>Switch <b>DopasPurifier</b> on. The panel appears top-right.</li>
         </ol>
+        <p>New versions ask first, right inside Discord — press <b>Update</b> ♡</p>
         <a class="btn btn-quiet btn-sm" href="downloads/DopasPurifier.plugin.js" download>Download plugin</a>
       </div>
     </div>
@@ -321,7 +340,8 @@
       <p>About a second per message, because that's what Discord allows. A scan tells you the estimate up front; you can minimise the panel and keep chatting while it works. Keep the Discord tab open until it's done.</p>
     </div></details>
     <details><summary>How do updates work?</summary><div>
-      <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Dashboard</b> → <b>Check for updates</b>, or just click Install above again.</p>
+      <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Utilities</b> → <b>Check for userscript updates</b>, or just click Install above again.</p>
+      <p>On BetterDiscord, the plugin checks each time Discord starts and asks before it updates.</p>
     </div></details>
     <details><summary>Nothing shows up in Discord — help!</summary><div>
       <p>Nine times out of ten it's step 2: on Chrome, Edge, Opera and Brave the <b>Allow User Scripts</b> switch (or Developer mode) must be on. Then make sure Tampermonkey is enabled, the script is switched on in its dashboard, and reload Discord. Still stuck? <a href="https://github.com/codemaker66/discord-stuff/issues">Open an issue</a>.</p>
@@ -356,12 +376,13 @@
   // ── Browser-specific steps ──
   const BROWSERS = {
     chrome:  { name: 'Chrome',  store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo', ext: 'chrome://extensions', allow: true },
-    edge:    { name: 'Edge',    store: 'https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd', ext: 'edge://extensions', allow: true },
+    edge:    { name: 'Edge',    store: 'https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd', ext: 'edge://extensions', allow: true,
+               cta: 'Get', then: 'Add extension' },
     firefox: { name: 'Firefox', store: 'https://addons.mozilla.org/firefox/addon/tampermonkey/', allow: false },
     opera:   { name: 'Opera',   store: 'https://addons.opera.com/extensions/details/tampermonkey-beta/', ext: 'opera://extensions', allow: true },
     brave:   { name: 'Brave',   store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo', ext: 'brave://extensions', allow: true },
     safari:  { name: 'Safari',  store: 'https://apps.apple.com/app/tampermonkey/id6738342400', allow: false,
-               note: 'Get it from the App Store, then turn it on in <b>Safari → Settings → Extensions</b> and allow it on discord.com.' },
+               note: 'Tampermonkey for Safari costs $2.99 on the App Store~ Free instead: open this page in Chrome, Edge or Firefox ♡ Staying on Safari? Get it, then turn it on in <b>Safari → Settings → Extensions</b> and allow it on discord.com.' },
   };
 
   function detect() {
@@ -375,20 +396,34 @@
     return 'chrome';
   }
 
+  let chosen = 'chrome';
   function choose(key) {
-    const b = BROWSERS[key];
+    const b = BROWSERS[chosen = key];
     for (const chip of $$('.chip')) chip.setAttribute('aria-pressed', String(chip.dataset.browser === key));
     for (const el of $$('[data-role="browser-name"]')) el.textContent = b.name;
     $('[data-role="manager-link"]').href = b.store;
-    $('[data-role="manager-link"]').textContent = key === 'safari' ? 'Open App Store' : `Add to ${b.name}`;
-    $('[data-role="manager-note"]').innerHTML = b.note || `Free, made for exactly this. Click <b>Add to ${b.name}</b> on the page that opens.`;
+    $('[data-role="manager-link"]').textContent = key === 'safari' ? 'Open App Store ($2.99)' : `Add to ${b.name}`;
+    $('[data-role="manager-note"]').innerHTML = b.note
+      || `Free, made for exactly this. Click <b>${b.cta || `Add to ${b.name}`}</b> on the page that opens${b.then ? `, then <b>${b.then}</b>` : ''}.`;
     $('[data-step="allow"]').hidden = !b.allow;
     if (b.ext) $('[data-role="ext-url"]').textContent = b.ext;
   }
 
   for (const chip of $$('.chip')) chip.addEventListener('click', () => choose(chip.dataset.browser));
   choose(detect());
-  if (/Android|iPhone|iPad|Mobile/.test(navigator.userAgent)) $('[data-role="mobile-note"]').hidden = false;
+
+  // Phones read "use your computer" first. The computer steps wait behind a button,
+  // except on Firefox for Android, which really can run it.
+  const PHONE = /Android|iPhone|iPad|Mobile/.test(navigator.userAgent);
+  const computerSteps = (show) => {
+    for (const el of $$('.setup > .picker, .setup > .steps')) el.hidden = !show;
+    $('[data-act="show-steps"]').hidden = show;
+  };
+  if (PHONE) {
+    $('[data-role="mobile-note"]').hidden = false;
+    if (detect() !== 'firefox') computerSteps(false);
+  }
+  $('[data-act="show-steps"]').addEventListener('click', () => computerSteps(true));
 
   // ── "Installed ✓": the purifier announces itself on this page ──
   $('[data-role="latest"]').textContent = LATEST;
@@ -400,6 +435,8 @@
   function showInstalled(version) {
     const box = $('[data-role="installed"]');
     const outdated = newer(LATEST, version);
+    if (!outdated) setAwaiting(null);
+    $('[data-role="install-help"]').textContent = '';
     box.hidden = false;
     box.classList.toggle('is-update', outdated);
     $('[data-role="installed-text"]').innerHTML = outdated
@@ -414,18 +451,36 @@
     cta.querySelector('span').textContent = outdated ? 'Update now' : 'Open Discord';
     if (!outdated) cta.querySelector('path').setAttribute('d', 'M7 17L17 7M9 7h8v8');
   }
-  const check = () => { const v = document.documentElement.dataset.dopaPurifier; if (v) showInstalled(v); return !!v; };
+  const check = () => { const v = document.documentElement.dataset.dopaPurifier; if (v) showInstalled(v); };
   window.addEventListener('dopa-purifier:installed', (e) => showInstalled(e.detail.version));
   setTimeout(check, 0);
 
-  // After clicking Install, coming back to this tab reloads it once so the tick can appear.
-  $('[data-role="install-link"]').addEventListener('click', () => { try { sessionStorage.setItem('dopa-await', '1'); } catch {} });
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible' || check()) return;
-    let waiting = false;
-    try { waiting = sessionStorage.getItem('dopa-await') === '1'; sessionStorage.removeItem('dopa-await'); } catch {}
-    if (waiting) location.reload();
+  // After Install (or Update now), coming back to this tab reloads it, a few times at most, until the
+  // latest version says hello; the marker counts the reloads left. Still nothing? Say what's usually missing.
+  const AWAIT = 'dopa-await';
+  function awaiting() { try { const n = sessionStorage.getItem(AWAIT); return n === null ? null : Number(n) || 0; } catch { return null; } }
+  function setAwaiting(n) { try { if (n === null) sessionStorage.removeItem(AWAIT); else sessionStorage.setItem(AWAIT, String(n)); } catch {} }
+  function notDetected() {
+    if (document.documentElement.dataset.dopaPurifier) return; // an older copy: the update box already says so
+    $('[data-role="install-help"]').innerHTML = "Hmm, I can't see the Purifier yet~ ♡ Saw a page full of code? Add Tampermonkey first (step 1). "
+      + (BROWSERS[chosen].allow ? 'Already have it? Switch on <b>Allow User Scripts</b> (step 2)' : "Already have it? Make sure it's switched on")
+      + ', then press <b>Install</b> again ✨';
+  }
+  let reloading = false;
+  function onReturn() {
+    check();
+    const left = awaiting();
+    if (reloading || left === null) return;
+    if (left > 0) { reloading = true; setAwaiting(left - 1); location.reload(); }
+    else notDetected();
+  }
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a');
+    if (a && a.href === $('[data-role="install-link"]').href) setAwaiting(3);
   });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') onReturn(); });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) onReturn(); });
+  if (awaiting() !== null) setTimeout(() => { if (awaiting() !== null) notDetected(); }, 2000);
 
   // ── Sharing ──
   $('[data-role="share-url"]').textContent = SHARE_URL;
@@ -436,15 +491,16 @@
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => t.classList.remove('show'), 2200);
   };
-  async function share() {
+  async function share(copied = 'Link copied~ send it to a friend ♡') {
     const data = { title: "Dopa's Discord Purifier", text: 'Wipe your own Discord messages in a few clicks~ ✨', url: SHARE_URL };
-    if (navigator.share && /Android|iPhone|iPad|Mobile/.test(navigator.userAgent)) {
+    if (navigator.share && PHONE) {
       try { await navigator.share(data); return; } catch { /* fall back to copying */ }
     }
-    try { await navigator.clipboard.writeText(SHARE_URL); toast('Link copied~ send it to a friend ♡'); }
+    try { await navigator.clipboard.writeText(SHARE_URL); toast(copied); }
     catch { toast(SHARE_URL); }
   }
-  for (const b of $$('[data-act="share"]')) b.addEventListener('click', share);
+  for (const b of $$('[data-act="share"]')) b.addEventListener('click', () => share());
+  $('[data-act="send-link"]').addEventListener('click', () => share('Link copied~ open it on your computer ♡'));
   $('[data-act="copy-ext"]').addEventListener('click', async () => {
     const text = $('[data-role="ext-url"]').textContent;
     try { await navigator.clipboard.writeText(text); toast(`Copied — paste it into the address bar`); } catch { toast(text); }

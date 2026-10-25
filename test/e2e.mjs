@@ -3,9 +3,10 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openDiscord, injectUserscript, installMockDiscord, buildWorld, TOKEN } from './mock.mjs';
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(process.argv[2] || path.join(here, '../dist/dopas-discord-purifier.user.js'));
 const PLUGIN = path.join(path.dirname(SRC), 'DopasPurifier.plugin.js');
 const OUT = process.argv[3] || path.join(here, 'out/e2e');
@@ -935,6 +936,79 @@ await test('T51 a DELETE that never answers times out: Stop ends the run, otherw
     }
     hold.release();
     assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
+// BetterDiscord only updates plugins from its own store, so ours fetches its published file, asks,
+// and rewrites itself in the plugins folder (BetterDiscord then reloads it). BdApi is stubbed with the
+// names and semantics of BetterDiscord 1.14.4: Net.fetch → Response, Utils.semverCompare(current, remote)
+// > 0 when remote is newer, UI.showConfirmationModal(title, content, { onConfirm }), Plugins.folder.
+await test('T70 BetterDiscord plugin offers its own update and rewrites its file', async () => {
+  const plugin = fs.readFileSync(PLUGIN, 'utf8');
+  const raw = JSON.parse(fs.readFileSync(path.join(here, '../package.json'), 'utf8')).purifier.raw;
+  const version = /@version\s+(\S+)/.exec(plugin)[1];
+  const newer = plugin.replace(/(@version\s+)\S+/, (_, head) => `${head}99.0.0`);
+  async function run({ body, status = 200, delay = 0, stopEarly = false }) {
+    const env = await openDiscord(browser, '/channels/4001/5001');
+    await env.page.evaluate(({ code, body, status, delay, stopEarly }) => {
+      const log = window.__bdLog = { fetches: [], modals: [], writes: [] };
+      const folder = '/home/friend/.config/BetterDiscord/plugins';
+      const parts = (v) => v.split('.').map(Number);
+      window.BdApi = {
+        Net: { async fetch(url) {
+          log.fetches.push(url);
+          await new Promise((r) => setTimeout(r, delay));
+          if (body === null) throw new TypeError('Failed to fetch');
+          return new Response(body, { status });
+        } },
+        Utils: { semverCompare(current, remote) {
+          const [a, b] = [parts(current), parts(remote)];
+          for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return b[i] > a[i] ? 1 : -1;
+          return 0;
+        } },
+        UI: {
+          showConfirmationModal(title, content, options) { log.modals.push({ title, content, confirmText: options.confirmText }); window.__bdConfirm = options.onConfirm; },
+          showToast(text) { log.toasts = (log.toasts || []).concat(text); },
+        },
+        Plugins: { folder },
+      };
+      const fsStub = { writeFileSync(file, data) { log.writes.push({ file, data }); } };
+      const pathStub = { join: (...p) => p.join('/') };
+      const require = (m) => ({ fs: fsStub, path: pathStub })[m];
+      const module = { exports: {} };
+      new Function('require', 'module', 'exports', '__filename', '__dirname', code)(require, module, module.exports, `${folder}/Dopa (renamed).plugin.js`, folder);
+      window.__bd = new module.exports({ name: 'DopasPurifier', filename: 'Dopa (renamed).plugin.js' });
+      window.__bd.start();
+      if (stopEarly) window.__bd.stop();
+    }, { code: plugin, body, status, delay, stopEarly });
+    await env.page.waitForTimeout(delay + 400);
+    const log = await env.page.evaluate(() => window.__bdLog);
+    return { env, log };
+  }
+
+  // A newer version is out: one look, one question, and "Update" writes exactly that file over ours.
+  {
+    const { env, log } = await run({ body: newer });
+    assert(log.fetches.length === 1 && log.fetches[0] === `${raw}/dist/DopasPurifier.plugin.js`, `fetched ${log.fetches}`);
+    assert(log.modals.length === 1 && log.modals[0].content.includes('v99.0.0') && log.modals[0].content.includes(`v${version}`), JSON.stringify(log.modals));
+    assert(await env.page.locator('#dopa-purifier-host').count() === 1, 'the panel still starts');
+    assert(log.writes.length === 0, 'nothing written before saying yes');
+    await env.page.evaluate(() => window.__bdConfirm());
+    const writes = await env.page.evaluate(() => window.__bdLog.writes);
+    assert(writes.length === 1 && writes[0].file === '/home/friend/.config/BetterDiscord/plugins/Dopa (renamed).plugin.js', JSON.stringify(writes.map((w) => w.file)));
+    assert(writes[0].data === newer, 'wrote the fetched plugin verbatim');
+    assert(env.pageErrors.length === 0, env.pageErrors.join('; '));
+    await env.context.close();
+  }
+  // Same version, GitHub errors, a page that isn't the plugin, no network, or disabled mid-check: no offer, no noise.
+  for (const [label, opts] of [
+    ['same version', { body: plugin }],
+    ['404', { body: '404: Not Found', status: 404 }],
+    ['not the plugin', { body: '<!doctype html><title>@name DopasPurifier @version 99.0.0</title>' }],
+    ['offline', { body: null }],
+    ['stopped before the answer', { body: newer, delay: 300, stopEarly: true }],
+  ]) {
+    const { env, log } = await run(opts);
+    assert(log.fetches.length === 1, `${label}: looked once`);
+    assert(log.modals.length === 0 && log.writes.length === 0, `${label}: ${JSON.stringify(log.modals)}`);
+    assert(env.pageErrors.length === 0, `${label}: ${env.pageErrors.join('; ')}`);
     await env.context.close();
   }
 });

@@ -18,7 +18,8 @@ it updates itself from the same link.
 
 On the Discord desktop app with BetterDiscord? Drop
 [`DopasPurifier.plugin.js`](https://codemaker66.github.io/discord-stuff/downloads/DopasPurifier.plugin.js)
-into your plugins folder and switch it on.
+into your plugins folder and switch it on. Each time Discord starts it looks for a new version
+and asks before updating itself.
 
 ## What it does
 
@@ -39,10 +40,16 @@ npm run build   # src/ → dist/ (userscript + BetterDiscord plugin) and docs/
 npm run check   # fails if dist/ or docs/ are out of date with src/
 npm test        # end-to-end tests against a mock Discord (Playwright + Chromium)
 node test/site.mjs                                   # install-page tests
-node test/shots.mjs dist/dopas-discord-purifier.user.js test/out/shots 2 --showcase
+node test/shots.mjs dist/dopas-discord-purifier.user.js test/out/shots 2 --showcase   # every UI state, at the shipped pace
+python3 tools/marketing.py test/out/shots            # those shots → docs/img/*.webp and the og.png link preview
 ```
 
 Edit `src/`, never `dist/` — the build rewrites it. Bump `version` in `package.json` to ship an
-update: installed copies pick it up from `dist/` on `main`, and the install page shows the new version.
+update: installed copies pick it up from `dist/` on `main` (the BetterDiscord plugin asks first), and the
+install page shows the new version.
+
+When the panel changes, retake the page's pictures with the two commands above. `tools/marketing.py`
+needs Python 3, Pillow and the Inter font (it finds it with `fc-match`). It refuses shots taken at any
+pace but the shipped one, so no picture promises a speed the purifier doesn't have.
 
 Made with ♡ by Bardo & Dopa · not affiliated with Discord
