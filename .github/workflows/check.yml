@@ -1,0 +1,22 @@
+# Installed copies update themselves from dist/ on main, so nothing reaches main unchecked.
+name: check
+on:
+  push:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: dist/ and docs/ match src/
+        run: npm run check
+      - name: purifier end-to-end
+        run: npm test
+      - name: install page
+        run: node test/site.mjs
