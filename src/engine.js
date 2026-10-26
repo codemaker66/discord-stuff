@@ -405,6 +405,8 @@
     startedAt: 0,
     pausedMs: 0,
     pausedAt: 0,
+    firstAt: 0,        // when the first message was handled: the pace is measured from there
+    pausedAtFirst: 0,  // pausedMs at that moment, so pauses after it don't count as pace
     deleteDelay: TIMING.deleteDelayMs,
     calm: 0,
     seen: new Set(),
@@ -415,11 +417,15 @@
   // Every counted message is handled and the run is taking its last look: re-checking, not purging.
   const verifying = () => run.active && run.total > 0 && run.uncounted <= 0 && processed() >= run.total;
 
+  // The first message goes before any pacing delay, so the pace is the time between handled
+  // messages, measured from the first. Until three have gone it is the same guess the panel's
+  // preview makes, so the first ETA in a run agrees with the "about 58s" before it.
   function progressSnapshot() {
     const done = processed();
     const now = run.paused ? run.pausedAt : Date.now();
-    const elapsed = Math.max(1, now - run.startedAt - run.pausedMs);
-    const perMessage = done ? elapsed / done : run.deleteDelay + 300;
+    const prior = run.deleteDelay + 250;
+    const perMessage = done >= 3 && run.firstAt
+      ? Math.max(1, now - run.firstAt - (run.pausedMs - run.pausedAtFirst)) / (done - 1) : prior;
     const remaining = run.total ? Math.max(0, run.total - done) : 0;
     const honest = run.total > 0 && run.uncounted <= 0;
     return {
@@ -429,13 +435,20 @@
       gone: run.gone,
       total: run.total,
       fraction: honest ? Math.min(1, done / run.total) : null,
-      etaSeconds: honest && done >= 3 ? (remaining * perMessage) / 1000 : null,
+      etaSeconds: honest ? (remaining * perMessage) / 1000 : null,
       partial: run.uncounted > 0,
-      rate: done ? done / (elapsed / 1000) : 0,
+      rate: done >= 3 ? 1000 / perMessage : 0,
+      elapsedMs: Math.max(0, now - run.startedAt - run.pausedMs),
     };
   }
 
-  const tick = () => emit('progress', progressSnapshot());
+  function tick() {
+    if (!run.firstAt && processed() >= 1) {
+      run.firstAt = Date.now();
+      run.pausedAtFirst = run.pausedMs;
+    }
+    emit('progress', progressSnapshot());
+  }
 
   async function gate(signal) {
     while (run.paused) await sleep(150, signal);
@@ -594,7 +607,7 @@
       active: true, paused: false, stopping: false, controller: new AbortController(),
       token: getToken(), accountSwitched: false,
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [], shielded: [],
-      startedAt: Date.now(), pausedMs: 0, pausedAt: 0,
+      startedAt: Date.now(), pausedMs: 0, pausedAt: 0, firstAt: 0, pausedAtFirst: 0,
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: 0,
       uncounted: 0,

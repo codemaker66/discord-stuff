@@ -304,9 +304,10 @@
         svg('g', { class: 'g-glow' },
           svg('circle', { ...ARC, class: 'g-ok', stroke: ROSE_STROKE }),
           svg('circle', { ...ARC, class: 'g-head' })),
-        svg('circle', { ...ARC, class: 'g-fail' }),
-        svg('g', { class: 'g-comet' },
-          svg('circle', { ...ARC, stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': `${(G.len * 0.16).toFixed(2)} ${G.c.toFixed(2)}` }))),
+        // The sweep for work with no end in sight yet. It runs along the arc only, so it never
+        // crosses the "3 of 31+" under the ring, and sits under the failure notches.
+        svg('path', { class: 'g-sweep', d: 'M40.6 159.4 A84 84 0 1 1 159.4 159.4', pathLength: '100', fill: 'none', stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': '16 116' }),
+        svg('circle', { ...ARC, class: 'g-fail' })),
       h('div', { class: 'blood' }),
       h('div', { class: 'sticker', 'data-role': 'sticker', hidden: true }),
       h('div', { class: 'gauge-pct', 'data-role': 'pct' }));
@@ -317,15 +318,15 @@
       h('div', { class: 'burst', 'data-role': 'burst', 'aria-hidden': 'true' }),
       buildGauge(),
       h('div', { class: 'hero-core' },
+        h('div', { class: 'hero-face', 'data-role': 'hero-face', 'aria-hidden': 'true' }),
         h('div', { class: 'count', 'data-role': 'count', text: '0' }),
-        h('div', { class: 'count-label', text: 'messages purged' }),
+        h('div', { class: 'count-label', 'data-role': 'count-label', text: 'messages purged' }),
         h('div', { class: 'hero-sub', 'data-role': 'hero-sub' })),
       h('div', { class: 'readout', 'data-role': 'readout' },
         h('div', { class: 'readout-line', 'data-role': 'readout-line', text: '' }),
         h('div', { class: 'stats', 'data-role': 'stats', hidden: true },
-          h('div', { class: 'stat stat-fail', 'data-role': 'stat-fail' }, h('i', { class: 'stat-dot' }), h('b', { text: '0' }), h('span', { text: ' failed' })),
-          h('div', { class: 'stat', 'data-role': 'stat-eta' }, h('b', { text: '—' })),
-          h('div', { class: 'stat', 'data-role': 'stat-rate' }, h('b', { text: '—' })))));
+          h('div', { class: 'stat stat-eta', 'data-role': 'stat-eta' }, h('b', { text: '—' })),
+          h('div', { class: 'stat stat-fail', 'data-role': 'stat-fail' }, h('i', { class: 'stat-dot' }), h('b', { text: '0' }), h('span', { text: ' failed' })))));
   }
 
   // Notches in processing order for the current (or last) run.
@@ -346,12 +347,16 @@
     el.setAttribute('stroke-dashoffset', (-ranges[0][0]).toFixed(2));
   }
 
-  function drawRing({ total, done: doneRaw, fails, spinning }) {
-    const key = `${total}|${doneRaw}|${fails.length}|${spinning}`;
+  // The sweep moves only while work is really happening: a run with no known end (spinning), a
+  // count (scanning) or the run's last look once every counted message is handled (verifying).
+  function drawRing({ total, done: doneRaw, fails, spinning = false, scanning = false, verifying: checking = false }) {
+    const key = `${total}|${doneRaw}|${fails.length}|${spinning}|${scanning}|${checking}`;
     if (key === ring.drawn) return;
     ring.drawn = key;
     const dial = $('.dial');
     dial.classList.toggle('is-spinning', spinning);
+    dial.classList.toggle('is-scanning', scanning);
+    dial.classList.toggle('is-verifying', checking);
     const beads = total > 0 && total <= G.maxBeads;
     dial.classList.toggle('is-beaded', beads);
     const step = total ? G.len / total : G.len;
@@ -565,9 +570,13 @@
     $('[data-role="mood"]').textContent = text;
   }
 
-  let shownCount = 0;
+  let shownCount = null;
+  let shownEta = null;  // the run's ETA as shown (see renderHero)
+  let beaten = null;    // the verdict whose finish has played its beats
   let lastSnapshot = null;
-  let lastEnd = null; // { key, text, tone } summary of the last finished run, shown until the context changes
+  // { key, text, flair?, tone, sticker?, error?, stopped?, problems?, shielded?, failed? }: the last
+  // finished run, shown until the context changes.
+  let lastEnd = null;
 
   function renderProgress(p) {
     lastSnapshot = p;
@@ -576,35 +585,52 @@
 
   const contextKey = () => (state.tab === 'current' ? `c:${state.target ? state.target.channelId : ''}` : 'batch');
 
-  // Idle preview for whatever the tab points at: the scan verdict and its notch count.
-  function previewFor() {
+  // A shield the person set, rather than one of the names that are immune from the start.
+  const shieldedByYou = (t) => !!t.partner && protection.ids.has(t.partner.id);
+
+  // What the ring says before a run, for each hero state: an icon or the number of your messages
+  // found (a count, never a promise of how many will go), the label under it, the readout line and
+  // the strip's sub-line (This chat's strip repeats the readout). total sizes the notches.
+  function previewFor(name) {
     if (state.tab === 'current') {
       const t = state.target;
-      if (!t) return { total: 0, text: state.targetError === 'none' ? 'open a DM or channel to purify it~' : '', tone: 'quiet' };
-      if (t.protected) return { total: 0, text: 'Protected forever~ nothing here can be purged 🛡', tone: 'immune' };
-      const n = counts.get(t.channelId);
-      if (n === undefined) return { total: 0, text: 'scan first for an honest ETA~', tone: 'quiet' };
-      if (isPartialCount(t.channelId)) {
-        return n
-          ? { total: n, text: `${plural(n, 'message')} found so far · Discord is still indexing older ones`, tone: 'ready' }
-          : { total: 0, text: 'Discord is still indexing this chat~ purify anyway, or scan again later 📚', tone: 'quiet' };
+      const n = t ? counts.get(t.channelId) : undefined;
+      switch (name) {
+        case 'none': return { icon: 'sparkle', label: 'open a chat', line: ['Any DM, group or server channel works~'], tone: 'quiet' };
+        case 'lookup': return { label: 'finding this chat…', line: [], tone: 'quiet' };
+        case 'lookup-error': return { label: "can't read this chat", labelTone: 'error', line: [state.targetPlain.line], tone: 'error' };
+        case 'immune': return {
+          icon: 'shield', label: 'immune', labelTone: 'immune', tone: 'immune',
+          line: shieldedByYou(t) ? [...flaired('Immune', '♡'), ' tap the shield to undo'] : [...flaired('Immune from the start', '♡'), ' nothing here gets purged'],
+        };
+        case 'counting': return { icon: 'scan', label: 'counting…', line: [], tone: 'quiet' };
+        case 'blocked': return { label: 'no access', labelTone: 'error', line: [state.scanError.line], tone: 'error' };
+        case 'scan-error': return { icon: 'scan', label: 'not counted yet', line: [state.scanError.line], tone: 'error' };
+        case 'unscanned': return { icon: 'scan', label: 'not counted yet', line: flaired('Purify counts them first', '♡'), tone: 'quiet' };
+        case 'indexing': return { icon: 'scan', label: 'still indexing', line: ['Discord is still sorting this chat~ purify anyway, or scan again soon'], tone: 'quiet' };
+        case 'partial': return { count: n, total: n, label: 'found so far', line: ['Discord is still indexing older ones~'], tone: 'ready' };
+        case 'clear': return { count: 0, label: 'messages found', line: flaired('All clear~ nothing of yours here', '✨'), tone: 'clear' };
+        default: return { count: n, total: n, label: 'ready for purge', labelTone: 'ready', line: [`about ${formatDuration(estimateSeconds(n))} to purge~`], tone: 'ready' };
       }
-      return n
-        ? { total: n, text: `${plural(n, 'message')} found · ~${formatDuration(estimateSeconds(n))} to purge`, tone: 'ready' }
-        : { total: 0, text: 'All clear! No messages to purge here~ ✨', tone: 'clear' };
     }
+    if (name === 'none') return { label: 'nothing picked yet', line: [], sub: ['tick any DMs or channels below~'], tone: 'quiet' };
     const rows = selectedRows();
-    if (!rows.length) return { total: 0, text: 'pick some chats to purify~', tone: 'quiet' };
     const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
     const total = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
-    // A friend without a DM can't be scanned (that would open one); the run counts them.
-    const later = rows.filter((r) => r.needsDM && r.status !== 'error').length;
-    const unscanned = rows.length - scanned.length - later - rows.filter((r) => r.status === 'error').length;
-    const text = [
-      `${plural(rows.length, 'chat')} selected`, scanned.length ? `${total.toLocaleString()} found` : '',
-      unscanned ? `${unscanned} need a scan` : '', later ? `${plural(later, 'friend')} at purge` : '',
-    ].filter(Boolean).join(' · ');
-    return { total, text, tone: total ? 'ready' : 'quiet' };
+    // A closed DM (a friend with no DM open) can't be counted without opening one; the run counts it.
+    const closed = rows.filter((r) => r.needsDM && r.status !== 'error').length;
+    const toScan = rows.length - scanned.length - closed - rows.filter((r) => r.status === 'error').length;
+    const chats = plural(rows.length, 'chat');
+    // The numeral already says how many were found, so the line says what is still unknown.
+    const parts = [[chats, toScan ? `${toScan.toLocaleString()} to scan` : '', closed ? plural(closed, 'closed DM') : ''].filter(Boolean).join(' · ')];
+    const shared = { line: [], tone: total ? 'ready' : 'quiet' };
+    if (name === 'unscanned') return { ...shared, label: 'not counted yet', sub: parts };
+    if (name === 'partial') return { ...shared, count: total, total, label: 'found so far', sub: parts };
+    if (name === 'clear') return { ...shared, count: 0, label: 'messages found', sub: closed ? parts : flaired(`${chats} · all clear`, '✨') };
+    return {
+      ...shared, count: total, total, label: 'ready for purge', labelTone: 'ready',
+      sub: closed ? parts : [`${chats} · about ${formatDuration(estimateSeconds(total))} to purge~`],
+    };
   }
 
   // The moment the ring describes, for styles and tests (hero[data-state]). This chat before a run:
@@ -642,38 +668,73 @@
     return ['ready', 'partial', 'clear'].includes(name) ? 'count' : ['lookup', 'lookup-error', 'blocked'].includes(name) ? 'label' : 'icon';
   }
 
+  // How a run that ended on an error sounds, by cause (lastEnd.error is plainError's code when the
+  // end handler knows it, else true).
+  const ERROR_MOODS = { captcha: 'Discord wants a captcha~', network: 'lost Discord for a sec~', switched: 'stopped to be safe~' };
+
   function renderHero() {
     const p = lastSnapshot || progressSnapshot();
     const mode = run.active ? 'run' : (lastEnd && lastEnd.key === contextKey() ? 'done' : 'preview');
     const processedNow = p.deleted + p.failed + (p.gone || 0);
-    const idle = mode === 'preview' ? previewFor() : null;
     const layer = $('[data-role="layer"]');
     layer.dataset.hero = mode;
     const hero = $('.hero');
-    hero.dataset.state = heroState(mode);
-    hero.dataset.face = heroFace(hero.dataset.state);
+    const name = heroState(mode);
+    hero.dataset.state = name;
+    hero.dataset.face = heroFace(name);
+    const idle = mode === 'preview' ? previewFor(name) : null;
+    // The finish plays its beats once, when its verdict first shows.
+    const finishing = mode === 'done' && lastEnd !== beaten;
+    if (finishing) beaten = lastEnd;
     // While some chats are still uncounted the total is a floor, not a promise.
     const known = p.total > 0 && !p.partial;
     const ringTotal = mode === 'done' && p.partial ? processedNow : p.total;
+    const checking = mode === 'run' && verifying();
 
-    const shown = mode === 'preview' ? 0 : p.deleted;
+    const face = $('[data-role="hero-face"]');
+    const faceIcon = (idle && idle.icon) || '';
+    if (face.dataset.icon !== faceIcon) {
+      face.dataset.icon = faceIcon;
+      face.replaceChildren(...(faceIcon ? [icon(faceIcon)] : []));
+    }
+
+    // Before a run the number is how many of yours were found; in and after one, how many went.
+    const shown = idle ? idle.count || 0 : p.deleted;
     const countEl = $('[data-role="count"]');
     if (shown !== shownCount) {
       shownCount = shown;
       countEl.textContent = shown.toLocaleString();
     }
+    countEl.classList.toggle('is-found', !!idle && shown > 0);
     countEl.classList.toggle('is-zero', shown === 0);
+    // Sized from the larger of the count and the run's total, so it is set once and never jumps mid-run.
+    countEl.dataset.len = String(Math.max(shown, idle ? 0 : p.total).toLocaleString().length);
 
-    if (mode === 'preview') drawRing({ total: idle.total, done: 0, fails: [], spinning: false });
-    else drawRing({ total: mode === 'run' && !known ? 0 : ringTotal, done: ring.done, fails: ring.fails, spinning: mode === 'run' && !known });
+    const label = $('[data-role="count-label"]');
+    const labelText = idle ? idle.label : 'messages purged';
+    const labelTone = (idle && idle.labelTone) || '';
+    if (label.textContent !== labelText || (label.dataset.tone || '') !== labelTone) {
+      // The dagger flourish shows only in strips.
+      label.replaceChildren(...(labelTone === 'ready' ? [icon('dagger', 'ico-dagger ico-dagger-l'), labelText, icon('dagger', 'ico-dagger ico-dagger-r')] : [labelText]));
+      label.dataset.tone = labelTone;
+    }
 
-    // "18 of 40" counts processed messages (purged + failed), matching the ring.
+    if (idle) drawRing({ total: idle.total || 0, done: 0, fails: [], scanning: name === 'counting' });
+    else drawRing({ total: mode === 'run' && !known ? 0 : ringTotal, done: ring.done, fails: ring.fails, spinning: mode === 'run' && !known, verifying: checking });
+
+    // "18 of 40" counts processed messages (purged + failed), matching the ring. A finished run with
+    // failures says how many really went, and only a clean finish turns rose.
     const pct = $('[data-role="pct"]');
-    pct.textContent = mode === 'preview'
-      ? (idle.total ? `0 of ${idle.total.toLocaleString()}` : '')
-      : known ? `${Math.min(processedNow, p.total).toLocaleString()} of ${p.total.toLocaleString()}`
-        : p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}+` : '';
-    pct.classList.toggle('is-full', mode === 'done' && processedNow >= ringTotal && ringTotal > 0);
+    const went = mode === 'done' && p.failed && !lastEnd.stopped && !lastEnd.error ? p.deleted : processedNow;
+    pct.textContent = idle ? ''
+      : known ? `${Math.min(went, p.total).toLocaleString()} of ${p.total.toLocaleString()}`
+        : p.total ? `${went.toLocaleString()} of ${p.total.toLocaleString()}+` : '';
+    pct.classList.toggle('is-full', mode === 'done' && !p.failed && processedNow >= ringTotal && ringTotal > 0);
+
+    // The ETA counts down freely and goes up only for a real slow-down (over 15 %), never a jitter.
+    if (mode !== 'run' || p.etaSeconds == null) shownEta = null;
+    else if (shownEta == null || p.etaSeconds < shownEta || p.etaSeconds > shownEta * 1.15) shownEta = p.etaSeconds;
+    const left = checking ? 'double-checking…' : shownEta != null ? `~${formatDuration(shownEta)} left` : '';
 
     const readout = $('[data-role="readout"]');
     const line = $('[data-role="readout-line"]');
@@ -681,27 +742,38 @@
     stats.hidden = mode !== 'run';
     line.hidden = mode === 'run';
     if (mode === 'run') {
+      $('[data-role="stat-eta"] b').textContent = left || 'counting as we go~';
       const fail = $('[data-role="stat-fail"]');
       fail.querySelector('b').textContent = p.failed.toLocaleString();
       fail.classList.toggle('has-fails', p.failed > 0);
-      $('[data-role="stat-eta"] b').textContent = verifying() ? 'double-checking…'
-        : p.etaSeconds != null ? `~${formatDuration(p.etaSeconds)} left` : (known ? 'estimating…' : '—');
-      $('[data-role="stat-rate"] b').textContent = p.rate ? `${p.rate.toFixed(1)}/s` : '—';
       readout.dataset.tone = run.paused ? 'paused' : 'live';
     } else if (mode === 'done') {
-      line.textContent = lastEnd.text;
+      line.replaceChildren(...flaired(lastEnd.text, lastEnd.flair));
       readout.dataset.tone = lastEnd.tone;
     } else {
-      line.textContent = idle.text;
+      line.replaceChildren(...idle.line);
       readout.dataset.tone = idle.tone;
     }
+    // The verdict settles in just after the count's last pop.
+    if (finishing) {
+      line.animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }],
+        { duration: reducedMotion() ? 200 : 220, delay: 60, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+    }
 
+    // A strip has one line under the count: the run's facts, the verdict, or what the ring would say.
     const sub = $('[data-role="hero-sub"]');
-    if (mode === 'run') sub.textContent = p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}${known ? '' : '+'}${p.failed ? ` · ${p.failed} failed` : ''}` : 'counting as we go~';
-    else sub.textContent = mode === 'done' ? lastEnd.text : idle.text;
-    sub.title = sub.textContent; // the Batch strip truncates; hover shows all of it
+    if (mode === 'run') {
+      sub.replaceChildren(...(p.total ? [
+        `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}${known ? '' : '+'}`,
+        left && ` · ${left}`,
+        p.failed > 0 && h('span', { class: 'sub-fail', text: ` · ${p.failed.toLocaleString()} failed` }),
+      ].filter(Boolean) : ['counting as we go~']));
+    } else if (mode === 'done') sub.replaceChildren(...flaired(lastEnd.text, lastEnd.flair));
+    else sub.replaceChildren(...(idle.sub || idle.line.map((x) => (x instanceof Node ? x.cloneNode(true) : x))));
+    sub.title = sub.textContent; // the strip truncates; hover shows all of it
 
     // Minimised through the finish line: the orb keeps the full ring and count until reopened.
+    const orb = $('.orb');
     const orbC = 2 * Math.PI * 22;
     const orbFrac = run.active ? (known ? Math.min(1, processedNow / p.total) : 0)
       : state.orbDone ? (state.orbDone.clean ? 1 : (p.total ? Math.min(1, processedNow / p.total) : 0)) : 0;
@@ -710,26 +782,36 @@
     const badge = $('[data-role="orb-badge"]');
     badge.textContent = p.deleted.toLocaleString();
     badge.hidden = !(run.active || state.orbDone) || !p.deleted;
-    $('.orb').dataset.live = run.active ? 'true' : state.orbDone ? (state.orbDone.clean ? 'done' : 'trouble') : 'false';
+    orb.dataset.live = run.active ? 'true' : state.orbDone ? (state.orbDone.clean ? 'done' : 'trouble') : 'false';
+    // Hovering the orb says how it's going, so a minimised purge needs no reopening to check on.
+    const progress = p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}` : `${p.deleted.toLocaleString()} so far`;
+    const orbSays = run.active ? (run.paused ? 'Paused~ click to open' : `Purging~ ${progress}${p.total && !known ? '+' : ''}`)
+      : state.orbDone ? (state.orbDone.clean ? `All clean~ ${p.deleted.toLocaleString()} purged` : 'Done~ something needs a look') : "Open Dopa's Purifier";
+    orb.title = orbSays;
+    orb.setAttribute('aria-label', run.active && !run.paused ? `Open Dopa's Purifier — purging, ${progress}` : orbSays);
 
     let mood = 'awaiting orders, princess~';
     if (mode === 'run') mood = run.stopping ? 'wrapping up~' : run.paused ? 'paused~ take your time' : "purging… don't look~";
-    else if (mode === 'done') mood = lastEnd.error ? 'oh no… something broke' : lastEnd.stopped ? 'stopped~ the rest can wait' : lastEnd.problems ? 'some chats fought back~' : lastEnd.shielded ? 'a shield went up~ ♡' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
-    else if (state.tab === 'batch') mood = "who's first, princess~?";
-    else if (state.target && state.target.protected) mood = 'this one is protected~';
+    else if (mode === 'done') {
+      mood = lastEnd.error ? ERROR_MOODS[lastEnd.error] || 'oh no… something broke' : lastEnd.stopped ? 'stopped~ no rush ♡' : lastEnd.problems ? 'some chats fought back~'
+        : lastEnd.shielded ? 'a shield went up~ ♡' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
+    } else if (state.tab === 'batch') mood = "who's first, princess~?";
+    else if (state.target && state.target.protected) mood = "this one's immune~";
     setMood(mood);
 
+    // The sticker is stamped beside the ring on the next beat; with reduced motion it fades in.
     const sticker = $('[data-role="sticker"]');
     const stickerText = mode === 'done' && state.tab === 'current' && lastEnd.sticker ? lastEnd.sticker : '';
     if (stickerText !== sticker.textContent || sticker.hidden === !!stickerText) {
       sticker.textContent = stickerText;
       sticker.hidden = !stickerText;
-      if (stickerText && !reducedMotion()) {
+      if (stickerText && finishing && reducedMotion()) sticker.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, delay: 200, fill: 'backwards' });
+      else if (stickerText && finishing) {
         sticker.animate([
-          { transform: 'rotate(-28deg) scale(0)', opacity: 0 },
-          { transform: 'rotate(14deg) scale(1.15)', opacity: 1, offset: 0.6 },
+          { transform: 'rotate(4deg) scale(1.6)', opacity: 0 },
+          { transform: 'rotate(10deg) scale(.94)', opacity: 1, offset: 0.6 },
           { transform: 'rotate(9deg) scale(1)' },
-        ], { duration: 520, delay: 380, easing: 'cubic-bezier(.2,.9,.3,1.2)', fill: 'backwards' });
+        ], { duration: 340, delay: 380, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
       }
     }
 
@@ -737,7 +819,7 @@
     $('[data-role="tf-failed"]').textContent = String(p.failed).padStart(3, '0');
     $('.tf-fail').classList.toggle('has-fails', p.failed > 0);
     $('[data-role="tf-rate"]').textContent = run.active && p.rate ? `${p.rate.toFixed(1)}/s` : '';
-    $('[data-role="tf-eta"]').textContent = run.active && p.etaSeconds != null ? clockTime(p.etaSeconds) : '--:--';
+    $('[data-role="tf-eta"]').textContent = run.active && shownEta != null ? clockTime(shownEta) : '--:--';
   }
 
   function clockTime(seconds) {
@@ -922,6 +1004,7 @@
     state.scanning = false;
     state.scanAbort = null;
     state.scanKind = null;
+    renderHero(); // the sweep stops with the count
     if (state.tab === 'batch') setTimeout(loadPendingLists, 0);
   }
 
@@ -1535,7 +1618,8 @@
   // ── Tabs ────────────────────────────────────────────────
 
   function switchTab(tab, { initial = false } = {}) {
-    if (tab !== state.tab) cancelCount();
+    const changed = tab !== state.tab;
+    if (changed) cancelCount();
     state.tab = tab;
     prefs.tab = tab;
     if (!initial) savePrefs('tab');
@@ -1551,7 +1635,7 @@
       if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
       if (!state.guildsLoaded && !state.guildsLoading) loadServers();
     }
-    if (!initial) kick({ stretch: tab === 'batch' ? 0.025 : -0.025 });
+    if (!initial && changed) $('[data-role="body"]').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
     renderCurrent();
     layoutPanel();
   }
@@ -1604,7 +1688,7 @@
     layer.dataset.open = 'false';
     const finish = () => { if (!modal) layer.hidden = true; };
     clearTimeout(dialogTimer);
-    if (reducedMotion()) finish(); else dialogTimer = setTimeout(finish, 160);
+    dialogTimer = setTimeout(finish, 160);
     if (confirmed) onConfirm();
     else if (restoreFocus && restoreFocus.focus) restoreFocus.focus();
   }
@@ -1786,7 +1870,7 @@
 
   // ── Motion: springs, blood, confetti ────────────────────
 
-  const wob = { rot: new Spring(220, 16, 0), sx: new Spring(260, 15, 1), sy: new Spring(260, 15, 1), raf: 0, last: 0 };
+  const wob = { rot: new Spring(260, 24, 0), sx: new Spring(260, 15, 1), sy: new Spring(260, 15, 1), raf: 0, last: 0 };
 
   function animateWobble(now) {
     const dt = Math.min(0.032, (now - wob.last) / 1000 || 1 / 60);
@@ -1803,25 +1887,29 @@
     }
   }
 
-  function kick({ spin = 0, squash = 0, stretch = 0 } = {}) {
+  function kick({ spin = 0, squash = 0 } = {}) {
     if (reducedMotion()) return;
     wob.rot.velocity += spin;
-    wob.sx.velocity += stretch + squash;
-    wob.sy.velocity += -squash - stretch * 0.6;
+    wob.sx.velocity += squash;
+    wob.sy.velocity += -squash;
     if (!wob.raf) {
       wob.last = performance.now();
       wob.raf = requestAnimationFrame(animateWobble);
     }
   }
 
+  // Kills are the panel's only clock: each one pops the count, pings the live dot and brings the
+  // footer's new line in. Nothing else keeps time, so a wait or a stall is visibly still.
   function popCount() {
-    const el = $('[data-role="count"]');
-    if (reducedMotion() || !fxVisible()) return;
-    el.animate([
-      { transform: 'scale(1.07)', color: 'var(--rose-300)', textShadow: '0 0 22px rgba(255, 122, 169, .8)' },
-      { transform: 'scale(0.99)', offset: 0.6 },
+    if (!fxVisible()) return;
+    if (!run.paused && !run.stopping) $('[data-role="status-text"]').animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
+    if (reducedMotion()) return;
+    $('[data-role="count"]').animate([
+      { transform: 'scale(1.04)', color: 'var(--rose-300)', textShadow: '0 0 22px rgba(255, 122, 169, .8)' },
       { transform: 'none' },
-    ], { duration: 420, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    ], { duration: 300, easing: 'cubic-bezier(.22,1,.36,1)' });
+    $('.live-dot').animate([{ boxShadow: '0 0 0 0 rgba(255, 122, 169, .6)' }, { boxShadow: '0 0 0 6px rgba(255, 122, 169, 0)' }],
+      { duration: 600, easing: 'cubic-bezier(.22,1,.36,1)' });
   }
 
   // A couple of drops fall from just outside the ring's leading edge, clear of the number.
@@ -1853,7 +1941,7 @@
 
   // Confetti bursts outward from the ring's rim, so it frames the number instead of covering it.
   function celebrate() {
-    kick({ spin: (Math.random() - 0.5) * 24, squash: 0.8 });
+    kick({ squash: 0.35 }); // an exhale, not a jolt
     if (reducedMotion() || !fxVisible()) return;
     const fx = $('[data-role="burst"]');
     const box = fx.getBoundingClientRect();
@@ -1936,9 +2024,10 @@
     }
     const maxH = Math.max(240, innerHeight - top - 12);
     $('.panel').style.maxHeight = `${maxH}px`;
-    // The height tier (full, snug or strip) follows the real cap, and never reshapes under a drag.
+    // The height tier follows the real cap, and never reshapes under a drag. Natural heights: full
+    // 536, snug 460 and strip 344 px, plus 18 for a chat name on two lines.
     const layer = $('[data-role="layer"]');
-    if (!layer.dataset.dragging) layer.dataset.fit = maxH >= 556 ? 'full' : maxH >= 466 ? 'snug' : 'strip';
+    if (!layer.dataset.dragging) layer.dataset.fit = maxH >= 556 ? 'full' : maxH >= 482 ? 'snug' : 'strip';
     placeTerminal();
     placeOrb();
   }
@@ -1947,20 +2036,28 @@
     return { x: innerWidth - (panelSize().w || 360) - 20, y: 56 };
   }
 
+  // A drag begins after 3px of movement, so a click on the header never jiggles the panel or moves
+  // its remembered spot. The tilt follows the hand gently; on release the spring swings back through
+  // rest on its own.
   function makeDraggable() {
     const handle = $('[data-role="drag"]');
+    const layer = $('[data-role="layer"]');
     let drag = null;
     handle.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.target.closest('button')) return;
       const shell = $('[data-role="shell"]');
-      drag = { id: e.pointerId, dx: e.clientX - shell.offsetLeft, dy: e.clientY - shell.offsetTop, lastX: e.clientX, vx: 0, t: performance.now() };
+      drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: e.clientX - shell.offsetLeft, dy: e.clientY - shell.offsetTop, lastX: e.clientX, vx: 0, t: performance.now(), moved: false };
       handle.setPointerCapture(e.pointerId);
-      $('[data-role="layer"]').dataset.dragging = 'true';
-      kick({ squash: -0.35 });
       e.preventDefault();
     });
     handle.addEventListener('pointermove', (e) => {
       if (!drag || e.pointerId !== drag.id) return;
+      if (!drag.moved) {
+        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 3) return;
+        drag.moved = true;
+        layer.dataset.dragging = 'true';
+        kick({ squash: -0.2 });
+      }
       const now = performance.now();
       const dt = Math.max(1, now - drag.t);
       drag.vx = drag.vx * 0.6 + ((e.clientX - drag.lastX) / dt) * 16 * 0.4;
@@ -1968,16 +2065,18 @@
       drag.t = now;
       placeShell(e.clientX - drag.dx, e.clientY - drag.dy, { remember: true });
       if (!reducedMotion()) {
-        wob.rot.target = clamp(drag.vx * 0.35, -7, 7);
+        wob.rot.target = clamp(drag.vx * 0.25, -3.5, 3.5);
         kick();
       }
     });
     const end = (e) => {
       if (!drag || e.pointerId !== drag.id) return;
-      wob.rot.target = 0;
-      kick({ spin: clamp(drag.vx * 1.8, -40, 40), squash: Math.min(0.6, Math.abs(drag.vx) * 0.02) });
+      const { moved, vx } = drag;
       drag = null;
-      delete $('[data-role="layer"]').dataset.dragging;
+      if (!moved) return;
+      wob.rot.target = 0;
+      kick({ squash: Math.min(0.25, Math.abs(vx) * 0.01) });
+      delete layer.dataset.dragging;
       layoutPanel(); // the height tier waited for the drop
       savePrefs('x', 'y');
     };
@@ -1994,38 +2093,73 @@
     orb.style.top = `${Math.round(clamp(parseFloat(shell.style.top) || 56, 8, innerHeight - 60))}px`;
   }
 
+  // Minimising folds the panel into the orb along one path, and restoring plays it back; a click
+  // mid-way reverses what is running instead of starting over. With reduced motion the two
+  // cross-fade in place.
+  const DRAWER = 'cubic-bezier(.32, .72, 0, 1)';
+  let fold = null; // { open, anims }: the fold in flight, settled when its last animation ends
+
+  function foldAnimations(open, panel, orb) {
+    if (reducedMotion()) {
+      const fade = { duration: 150, easing: 'ease-out', fill: 'both' };
+      return [panel.animate([{ opacity: open ? 0 : 1 }, { opacity: open ? 1 : 0 }], fade),
+        orb.animate([{ opacity: open ? 1 : 0 }, { opacity: open ? 0 : 1 }], fade)];
+    }
+    // The panel shrinks into the orb's centre on the drawer curve, while its opacity follows the
+    // clock: it holds for the first 35 % of the way, so the orb has appeared before it has gone.
+    const pr = panel.getBoundingClientRect();
+    const transformOrigin = `${parseFloat(orb.style.left) + 30 - pr.left}px ${parseFloat(orb.style.top) + 30 - pr.top}px`;
+    const small = { transform: `scale(${(60 / pr.width).toFixed(3)})`, transformOrigin };
+    const whole = { transform: 'none', transformOrigin };
+    if (open) {
+      return [panel.animate([small, whole], { duration: 320, easing: DRAWER, fill: 'both' }),
+        panel.animate([{ opacity: 0 }, { opacity: 1, offset: 0.65 }, { opacity: 1 }], { duration: 320, fill: 'both' }),
+        orb.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: 'ease-out', fill: 'both' })];
+    }
+    return [orb.animate([{ transform: 'scale(.8)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 200, delay: 120, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'both' }),
+      panel.animate([whole, small], { duration: 260, easing: DRAWER, fill: 'both' }),
+      panel.animate([{ opacity: 1 }, { opacity: 1, offset: 0.35 }, { opacity: 0 }], { duration: 260, fill: 'both' })];
+  }
+
   function setOpen(open, { initial = false } = {}) {
     prefs.open = open;
     if (!initial) savePrefs('open');
     const shell = $('[data-role="shell"]');
     const orb = $('.orb');
     const layer = $('[data-role="layer"]');
+    if (fold) {
+      if (fold.open !== open) {
+        fold.open = open;
+        for (const a of fold.anims) a.reverse();
+      }
+      return;
+    }
+    const settle = () => {
+      const now = fold ? fold.open : open;
+      if (fold) for (const a of fold.anims) a.cancel();
+      fold = null;
+      shell.hidden = !now;
+      orb.hidden = now;
+      layer.dataset.open = String(now);
+      applyFocus();
+    };
     if (open) {
       state.orbDone = null;
       shell.hidden = false;
-      orb.hidden = true;
-      layer.dataset.open = 'true';
       const home = homePosition();
       placeShell(home.x, home.y);
       applyFocus();
-      if (!initial && !reducedMotion()) {
-        $('.panel').animate([
-          { transform: 'translate(24px, -12px) scale(0.6)', opacity: 0, transformOrigin: '90% 0' },
-          { transform: 'none', opacity: 1, transformOrigin: '90% 0' },
-        ], { duration: 420, easing: 'cubic-bezier(.2,1.25,.3,1)' });
-        kick({ spin: (Math.random() - 0.5) * 12 });
-      }
     } else {
       cancelCount();
       placeOrb();
       toggleLog(false);
-      const finish = () => { shell.hidden = true; orb.hidden = false; layer.dataset.open = 'false'; applyFocus(); };
-      if (initial || reducedMotion()) { finish(); return; }
-      $('.panel').animate([
-        { transform: 'none', opacity: 1, transformOrigin: '90% 0' },
-        { transform: 'translate(24px, -12px) scale(0.6)', opacity: 0, transformOrigin: '90% 0' },
-      ], { duration: 220, easing: 'cubic-bezier(.4,0,1,1)' }).finished.then(finish, finish);
     }
+    if (initial) { settle(); return; }
+    shell.hidden = false;
+    orb.hidden = false;
+    // The first animation is the one that ends last, either way round.
+    fold = { open, anims: foldAnimations(open, $('.panel'), orb) };
+    fold.anims[0].onfinish = settle;
   }
 
   function renderMute() {
