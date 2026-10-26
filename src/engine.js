@@ -732,8 +732,11 @@
       run.paused = false;
       run.stopping = false;
       tick();
+      // The panel words a fatal error from its status and code, never by parsing Discord's message;
+      // the time is the run's own, pauses left out.
       emit('end', {
-        stopped, error: fatal ? fatal.message : null, ...progressSnapshot(),
+        stopped, error: fatal ? fatal.message : null, errorStatus: fatal ? fatal.status : null, errorCode: fatal ? fatal.code : null,
+        elapsedMs: Math.max(0, Date.now() - run.startedAt - run.pausedMs), ...progressSnapshot(),
         failures: run.failures.slice(), problems: run.problems.slice(), shielded: run.shielded.map((t) => t.name),
       });
       if (run.accountSwitched) syncAccount(); // now idle: adopt the new account and reset

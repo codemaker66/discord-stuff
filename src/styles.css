@@ -152,7 +152,7 @@
 .tab-pill { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 8px;
   background: linear-gradient(180deg, rgba(255, 236, 244, .13), rgba(255, 236, 244, .075));
   box-shadow: inset 0 1px 0 rgba(255, 240, 246, .11), 0 0 0 1px rgba(255, 208, 226, .07), 0 2px 6px -1px rgba(0, 0, 0, .55);
-  transition: transform .52s var(--spring); }
+  transition: transform .24s var(--ease-out); }
 .layer[data-tab="batch"] .tab-pill { transform: translateX(100%); }
 .tab { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: none;
   padding: 0; cursor: pointer; font: 600 var(--fs-body)/1 var(--font); color: var(--t3); transition: color .2s, transform .15s var(--ease-out); border-radius: 8px; }
@@ -329,6 +329,9 @@
 .target[data-state="immune"] .target-ico { background: linear-gradient(180deg, #4a3413, #2e1f09); box-shadow: inset 0 0 0 1px rgba(247, 203, 110, .45); font-size: 15px; }
 .target[data-state="immune"] .eyebrow { color: var(--ember-300); }
 .target[data-state="immune"] .target-name { color: var(--ember-200); }
+.target[data-state="blocked"] .eyebrow { color: var(--crim-300); }
+/* The group glyph is ink like '#' and '@'; only an immune chat's shield is gold. */
+.target:not([data-state="immune"]) .target-ico .ico { color: inherit; }
 
 /* ── batch lists ───────────────────────────────────────── */
 
@@ -431,6 +434,8 @@
 .foot { flex: none; }
 .actions { display: grid; grid-template-columns: 1fr 1.45fr; gap: 8px; padding: 12px 16px 14px; box-shadow: inset 0 1px 0 var(--hair); }
 .layer[data-tab="current"] .actions { box-shadow: none; padding-top: 4px; }
+/* No chat open: one full-width way on, the same height as the pair it stands in for. */
+.actions[data-mode="none"] { grid-template-columns: 1fr; }
 .btn { position: relative; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: var(--r-ctl);
   padding: 0 14px; cursor: pointer; overflow: hidden; font: 700 var(--fs-em)/1 var(--font); letter-spacing: -.003em; white-space: nowrap;
   transition: transform .18s var(--ease-out), box-shadow .2s, background-color .2s, filter .2s, color .2s; }
@@ -453,16 +458,22 @@
 .btn-count { min-width: 22px; height: 20px; padding: 0 7px; border-radius: 999px; font: 700 var(--fs-meta)/20px var(--font); font-variant-numeric: tabular-nums;
   background: rgba(42, 7, 22, .14); box-shadow: inset 0 0 0 1px rgba(42, 7, 22, .08); text-align: center; }
 .btn-purge:disabled .btn-count { background: rgba(255, 236, 244, .06); box-shadow: none; }
+/* Nothing of yours left here: Purify rests in rose instead of looking broken. */
+.btn-purge.is-clean:disabled { outline: 0; color: var(--rose-200); background: rgba(255, 122, 169, .07); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .2); }
+/* Stopping: Stop keeps keyboard focus until the run ends, and looks as busy as it is. */
+.btn-stop[aria-disabled="true"] { opacity: .55; cursor: default; }
 .btn-stop { color: var(--crim-300); background: rgba(227, 32, 63, .09); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .3), inset 0 1px 0 rgba(255, 200, 210, .06); }
 .btn-stop:hover:not(:disabled) { background: rgba(227, 32, 63, .14); }
 .btn-stop:disabled { opacity: .55; }
 /* Pause and Resume share the left slot and Stop keeps Purify's box, so nothing moves under the pointer. */
 .actions[data-role="run-actions"] { grid-template-columns: 1fr 1.45fr; }
 
-.status-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 16px;
+.status-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 16px;
   background: rgba(0, 0, 0, .16); box-shadow: inset 0 1px 0 var(--hair); }
-.status { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font: 500 var(--fs-body)/16px var(--font); color: var(--t2); }
-.status [data-role="status-text"] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font: 500 var(--fs-meta)/16px var(--font); color: var(--t2); }
+/* Up to two lines when idle or finished, so a whole sentence reads; one steady line mid-run. */
+.status [data-role="status-text"] { overflow: hidden; overflow-wrap: anywhere; text-wrap: balance; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.layer[data-run="running"] .status [data-role="status-text"] { display: block; white-space: nowrap; text-overflow: ellipsis; }
 .status-dot { width: 16px; height: 16px; flex: none; display: grid; place-items: center; border-radius: 50%; font: 800 10px/1 var(--font); color: var(--t3); }
 .status-dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .status[data-tone="info"] .status-dot { color: var(--rose-400); }
@@ -489,9 +500,18 @@
 
 /* ── terminal ──────────────────────────────────────────── */
 
-.term { position: fixed; z-index: 4; width: 380px; height: 440px; display: flex; flex-direction: column; border-radius: 16px; overflow: hidden;
+/* Under the panel (3), so it never covers Pause or Stop; placeTerminal narrows it to the room beside. */
+.term { position: fixed; z-index: 2; width: 380px; height: 440px; max-height: calc(100vh - 16px); display: flex; flex-direction: column; border-radius: 16px; overflow: hidden;
   background: #0c0609; box-shadow: var(--edge), var(--lift); }
-.term[data-boot] { animation: dp-boot .5s var(--ease-out); }
+.term[data-boot] { animation: dp-boot .36s var(--ease-out); }
+.term[data-leaving] { pointer-events: none; }
+/* Narrowed to fit beside the panel, the log keeps its footer whole and its title tidy. */
+.term { container-type: inline-size; }
+@container (max-width: 340px) {
+  .term-title-mid { display: none; }
+  .term-foot { gap: 10px; }
+  .term-foot [data-role="tf-rate"] { display: none; }
+}
 .term-head { height: 40px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 6px 0 14px; }
 .term-title { flex: 1; font: 700 var(--fs-cap)/1 var(--mono); letter-spacing: .16em; color: var(--rose-200); text-shadow: 0 0 10px rgba(255, 122, 169, .4); white-space: nowrap; overflow: hidden; }
 .term-screen { position: relative; flex: 1; min-height: 0; margin: 0 8px; border-radius: 10px; overflow: hidden;
@@ -509,6 +529,8 @@
 .line { display: grid; grid-template-columns: 62px 18px minmax(0, 1fr); align-items: baseline; white-space: nowrap; color: #b89dab; }
 .line-msg { overflow: hidden; text-overflow: ellipsis; }
 .line-msg q { quotes: '\201C' '\201D'; color: #f6dfe8; }
+/* What went wrong, and a link to copy, are read whole. */
+.line.error .line-msg, .line.wrap .line-msg { white-space: normal; overflow-wrap: anywhere; }
 .line-time { color: #937687; font-variant-numeric: tabular-nums; }
 .line-pfx { text-align: center; }
 .line.info { color: #b89dab; }
@@ -695,7 +717,6 @@
 .prompt-sep { color: var(--rose-500); }
 .prompt-cmd { color: #f6dfe8; }
 
-.target-note { margin-top: 3px; font: 500 var(--fs-body)/16px var(--font); color: var(--rose-200); }
 .target[data-state="purified"] .target-ico { color: var(--rose-200); background: rgba(255, 122, 169, .08); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .22); }
 .target[data-state="purified"] .eyebrow { color: var(--rose-300); }
 .target[data-state="paused"] .target-ico { opacity: .7; }
