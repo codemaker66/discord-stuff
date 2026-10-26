@@ -527,7 +527,7 @@
             h('span', { class: 'hold-fill', 'aria-hidden': 'true' }),
             h('span', { class: 'hold-label', 'data-role': 'confirm-label' }))),
         h('div', { class: 'modal-hint', id: 'dp-modal-hint' },
-          h('div', {}, 'Hold with your mouse or ', h('kbd', { text: 'Space' }), ' · ', h('kbd', { text: 'Esc' }), ' keeps you safe'),
+          h('div', {}, h('span', {}, 'Hold with mouse or ', h('kbd', { text: 'Space' })), ' · ', h('span', {}, h('kbd', { text: 'Esc' }), ' keeps you safe')),
           h('div', {}, 'Screen reader, voice or switch? Just press twice')),
         h('div', { class: 'sr', 'data-role': 'modal-live', 'aria-live': 'assertive', 'aria-atomic': 'true' })));
   }

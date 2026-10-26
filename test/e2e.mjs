@@ -3351,7 +3351,7 @@ await test('T127 the confirm dialog shows a long chat and server name in full, a
   const warn = await page.locator('.modal-warn').evaluate((el) => ({ text: el.textContent, flair: el.querySelector('.flair')?.getAttribute('aria-hidden') }));
   assert(warn.text === "This can't be undone 🩸" && warn.flair === 'true', `warn ${JSON.stringify(warn)}`);
   const hint = await page.locator('#dp-modal-hint').evaluate((el) => [...el.children].map((d) => d.textContent));
-  assert(JSON.stringify(hint) === JSON.stringify(['Hold with your mouse or Space · Esc keeps you safe', 'Screen reader, voice or switch? Just press twice']), `hint ${JSON.stringify(hint)}`);
+  assert(JSON.stringify(hint) === JSON.stringify(['Hold with mouse or Space · Esc keeps you safe', 'Screen reader, voice or switch? Just press twice']), `hint ${JSON.stringify(hint)}`);
   await page.click('[data-act="cancel"]');
   // A short name is still a single capsule.
   await page.evaluate(() => { history.pushState({}, '', '/channels/@me/3002'); dispatchEvent(new PopStateEvent('popstate')); });
