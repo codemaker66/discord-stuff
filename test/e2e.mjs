@@ -306,7 +306,8 @@ await test('T13 minimise keeps the run going and restores', async () => {
   await holdConfirm(page);
   await page.click('[data-act="minimize"]');
   await page.locator('.orb').waitFor({ state: 'visible', timeout: 3000 });
-  assert(!(await page.locator('.panel').isVisible()), 'panel hidden');
+  // The orb appears while the panel is still folding into it, then the panel goes.
+  await page.locator('.panel').waitFor({ state: 'hidden', timeout: 1000 });
   await waitEnd(page);
   assert(mine(world, '5002').length === 0, 'run completed while minimised');
   assert(await page.locator('.orb[data-live="done"]').count() === 1, 'orb shows the finished run');
@@ -1382,15 +1383,15 @@ await test('T56 a friend with no DM yet is counted at purge, not "needs a scan" 
       past: Math.round(el.getBoundingClientRect().right - root.querySelector('[data-role="shell"]').getBoundingClientRect().right),
       sideways: body.scrollWidth - body.clientWidth, ellipsis: getComputedStyle(el).textOverflow === 'ellipsis' };
   });
-  // Every line stays inside the panel; a line that can't fit ends in an ellipsis and hovers in full.
-  const check = async (when, expected, { fits = true } = {}) => {
+  // Every line stays inside the panel and fits whole; a longer one would end in an ellipsis and hover in full.
+  const check = async (when, expected) => {
     const s = await strip();
     assert(s.shown && s.past <= 0 && s.sideways <= 0, `${when}: "${s.text}" runs ${s.past}px past the panel (body ${s.sideways}px sideways)`);
-    assert(fits ? s.whole : s.ellipsis, `${when}: "${s.text}" ${fits ? 'is cut short' : 'has no ellipsis'}`);
+    assert(s.whole && s.ellipsis, `${when}: "${s.text}" ${s.whole ? 'has no ellipsis to fall back on' : 'is cut short'}`);
     assert(s.text === expected && s.title === expected, `${when}: "${s.text}" (title "${s.title}")`);
   };
   await pickBatch(page, ['u:2004']);
-  await check('Bob alone', '1 chat selected · 1 friend at purge');
+  await check('Bob alone', '1 chat · 1 closed DM');
   await page.click('[data-act="scan"]');
   await untilStatus(page, /counted at purge/);
   const said = await page.evaluate(() => {
@@ -1399,15 +1400,15 @@ await test('T56 a friend with no DM yet is counted at purge, not "needs a scan" 
   });
   assert(said.text === '1 friend counted at purge~ ♡' && said.whole, `status "${said.text}"${said.whole ? '' : ' is cut short'}`);
   await page.click('[data-key="c:3002"]');
-  await check('before scan', '2 chats selected · 1 need a scan · 1 friend at purge', { fits: false });
+  await check('before scan', '2 chats · 1 to scan · 1 closed DM');
   for (let i = 0; i < 2; i++) {
     await page.click('[data-act="scan"]');
     await untilStatus(page, /Scan done/);
-    await check(`after scan ${i + 1}`, '2 chats selected · 31 found · 1 friend at purge');
+    await check(`after scan ${i + 1}`, '2 chats · 1 closed DM');
   }
   await page.click('[data-key="c:3003"]');
   await page.click('[data-key="u:2005"]');
-  await check('four chats', '4 chats selected · 31 found · 1 need a scan · 2 friends at purge', { fits: false });
+  await check('four chats', '4 chats · 1 to scan · 2 closed DMs');
   assert(stats.opened.length === 0, 'scanning opened no DM');
   await context.close();
 });
@@ -2307,6 +2308,713 @@ await test('T93 the running chat scrolls into view, unless you just moved around
     assert(!after.visible && after.scrollTop === 0, `the list stayed where the person left it ${JSON.stringify(after)}`);
     await context.close();
   }
+});
+
+// ── The hero, the ring, the height tiers and motion (WP-A) ──
+
+// What the ring shows right now: its state and face, what's visible in the middle, and the line under it.
+const ringNow = (page) => page.evaluate(() => {
+  const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+  const shown = (el) => el.getClientRects().length > 0;
+  const hero = r.querySelector('.hero');
+  const label = r.querySelector('.count-label');
+  const count = r.querySelector('[data-role="count"]');
+  const face = r.querySelector('[data-role="hero-face"]');
+  const line = r.querySelector('[data-role="readout-line"]');
+  const heard = (el) => [...el.childNodes].filter((n) => !(n.nodeType === 1 && n.getAttribute('aria-hidden') === 'true')).map((n) => n.textContent).join('');
+  return {
+    is: `${hero.dataset.state}/${hero.dataset.face}`,
+    count: shown(count) ? count.textContent : null,
+    countColor: getComputedStyle(count).color,
+    icon: shown(face) ? face.dataset.icon : null,
+    label: label.textContent,
+    labelColor: getComputedStyle(label).color,
+    daggers: [...label.querySelectorAll('.ico-dagger')].filter(shown).length,
+    labelLines: Math.round(label.getBoundingClientRect().height / parseFloat(getComputedStyle(label).fontSize)),
+    line: line.textContent,
+    heard: heard(line),
+    sub: r.querySelector('[data-role="hero-sub"]').textContent,
+    pct: r.querySelector('[data-role="pct"]').textContent,
+  };
+});
+const heroAt = (page, want, timeout = 4000) => page.waitForFunction((w) => {
+  const hero = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.hero');
+  return `${hero.dataset.state}/${hero.dataset.face}` === w;
+}, want, { timeout });
+// Waits for a held request to arrive, and says so if it never does.
+async function heldBy(hold, ms = 10000) {
+  const t0 = Date.now();
+  while (!hold.held) {
+    if (Date.now() - t0 > ms) throw new Error('the request to hold never came');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+const goTo = (page, path) => page.evaluate((p) => history.pushState({}, '', p), path);
+const luminance = ([r, g, b]) => {
+  const ch = (v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
+};
+const rgb = (css) => css.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number);
+const contrast = (a, b) => { const [x, y] = [luminance(rgb(a)), luminance(rgb(b))].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+
+// How far the ring's label, count and sticker stay from the arc: positive means clear, in px. Measured
+// once the panel's wobble has come to rest, so a finish's squash doesn't skew it.
+const ringClearance = async (page) => {
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="wobble"]').style.transform === '', null, { timeout: 4000 });
+  return ringGeometry(page);
+};
+const ringGeometry = (page) => page.evaluate(() => {
+  const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+  const g = r.querySelector('.gauge').getBoundingClientRect();
+  const k = g.width / 200;
+  const cx = g.left + g.width / 2, cy = g.top + g.height / 2;
+  const inner = (84 - 5) * k; // the arc's centre line less half a bead
+  const corners = (b) => [[b.left, b.top], [b.right, b.top], [b.left, b.bottom], [b.right, b.bottom]];
+  const inside = (el) => {
+    const b = el.getBoundingClientRect();
+    return b.width ? Math.round(inner - Math.max(...corners(b).map(([x, y]) => Math.hypot(x - cx, y - cy)))) : null;
+  };
+  const count = r.querySelector('[data-role="count"]');
+  const cb = count.getBoundingClientRect();
+  const fs = parseFloat(getComputedStyle(count).fontSize);
+  // The digits' ink sits inside the line box by about 0.14em top and bottom.
+  const ink = { getBoundingClientRect: () => ({ left: cb.left, right: cb.right, top: cb.top + fs * 0.14, bottom: cb.bottom - fs * 0.13, width: cb.width }) };
+  const sticker = r.querySelector('[data-role="sticker"]');
+  let stickerClear = null;
+  if (!sticker.hidden) {
+    const s = sticker.getBoundingClientRect();
+    // The card as drawn: its own box turned by its rotation about its centre.
+    const [ma, mb] = getComputedStyle(sticker).transform.slice(7).split(',').map(Number);
+    const turn = Math.atan2(mb, ma);
+    const w = sticker.offsetWidth / 2, h = sticker.offsetHeight / 2;
+    const sx = s.left + s.width / 2, sy = s.top + s.height / 2;
+    const card = [[-w, -h], [w, -h], [w, h], [-w, h]].map(([x, y]) => [sx + x * Math.cos(turn) - y * Math.sin(turn), sy + x * Math.sin(turn) + y * Math.cos(turn)]);
+    const toEdge = (px, py, [ax, ay], [bx, by]) => {
+      const t = Math.max(0, Math.min(1, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / ((bx - ax) ** 2 + (by - ay) ** 2)));
+      return Math.hypot(px - ax - t * (bx - ax), py - ay - t * (by - ay));
+    };
+    const within = (px, py) => card.every(([ax, ay], i) => { const [bx, by] = card[(i + 1) % 4]; return (bx - ax) * (py - ay) - (by - ay) * (px - ax) >= 0; });
+    const half = 7 * k; // a failure notch stands 14 units proud of the arc's centre line
+    let min = Infinity;
+    for (let a = 135; a <= 405; a += 1) {
+      const t = (a * Math.PI) / 180;
+      const x = cx + 84 * k * Math.cos(t), y = cy + 84 * k * Math.sin(t);
+      const d = within(x, y) ? 0 : Math.min(...card.map((c, i) => toEdge(x, y, c, card[(i + 1) % 4])));
+      min = Math.min(min, d - half);
+    }
+    const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
+    stickerClear = { arc: Math.round(min), right: Math.round(body.right - s.right), top: Math.round(s.top - body.top) };
+  }
+  return { label: inside(r.querySelector('.count-label')), count: count.getClientRects().length ? inside(ink) : null, countWidth: Math.round(cb.width), ring: Math.round(g.width), stickerClear };
+});
+
+await test('T100 before a run the ring says how many of yours it found, never "0 messages purged"', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001');
+  const seen = [];
+  const look = async () => { const r = await ringNow(page); seen.push(r); return r; };
+  let r = await look();
+  assert(r.is === 'unscanned/icon' && r.icon === 'scan' && r.count === null && r.label === 'not counted yet', `uncounted ${JSON.stringify(r)}`);
+  assert(r.line === 'Purify counts them first ♡' && r.heard === 'Purify counts them first' && r.pct === '', `uncounted line ${JSON.stringify(r)}`);
+  const search = await holdRequests(page, /\/messages\/search/);
+  await page.click('[data-act="scan"]');
+  await heldBy(search);
+  r = await look();
+  assert(r.is === 'counting/icon' && r.label === 'counting…' && r.line === '', `counting ${JSON.stringify(r)}`);
+  search.release();
+  await untilStatus(page, /found/);
+  r = await look();
+  assert(r.is === 'ready/count' && r.count === '40' && r.label === 'ready for purge' && r.daggers === 0, `counted ${JSON.stringify(r)}`);
+  assert(/^about \d+s to purge~$/.test(r.line) && r.pct === '', `counted line ${JSON.stringify(r)}`);
+  // The found count is plain --t1 with no glow; the label is rose, far above AA on the panel.
+  const glass = await page.evaluate(() => getComputedStyle(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]')).getPropertyValue('--glass').trim());
+  const glassRgb = `rgb(${parseInt(glass.slice(1, 3), 16)}, ${parseInt(glass.slice(3, 5), 16)}, ${parseInt(glass.slice(5, 7), 16)})`;
+  assert(r.countColor === 'rgb(248, 235, 241)' && r.labelColor === 'rgb(255, 160, 194)', `colours ${r.countColor} ${r.labelColor}`);
+  assert(contrast(r.labelColor, glassRgb) >= 9.5, `READY FOR PURGE contrast ${contrast(r.labelColor, glassRgb).toFixed(2)}`);
+  for (const [path, want] of [['/channels/4001/5004', 'clear/count'], ['/channels/4001/5007', 'blocked/label']]) {
+    await goTo(page, path);
+    await heroAt(page, 'unscanned/icon');
+    await page.click('[data-act="scan"]');
+    await heroAt(page, want);
+    r = await look();
+    if (want === 'clear/count') assert(r.count === '0' && r.label === 'messages found' && r.line === 'All clear~ nothing of yours here ✨' && r.heard === 'All clear~ nothing of yours here', `clear ${JSON.stringify(r)}`);
+    else assert(r.count === null && r.label === 'no access' && r.labelColor === 'rgb(255, 128, 144)' && r.line === "You can't read this channel, so there's nothing here to purge", `blocked ${JSON.stringify(r)}`);
+  }
+  await goTo(page, '/channels/@me/3001');
+  await heroAt(page, 'immune/icon');
+  r = await look();
+  assert(r.icon === 'shield' && r.label === 'immune' && r.labelColor === 'rgb(247, 203, 110)', `immune ${JSON.stringify(r)}`);
+  assert(r.line === 'Immune from the start ♡ nothing here gets purged' && r.heard === 'Immune from the start nothing here gets purged', `immune line ${JSON.stringify(r)}`);
+  assert(await text(page, '[data-role="mood"]') === "this one's immune~", `mood ${await text(page, '[data-role="mood"]')}`);
+  // A shield you set yourself says how to undo it.
+  await goTo(page, '/channels/@me/3002');
+  await heroAt(page, 'unscanned/icon');
+  await page.click('[data-role="target-tools"] .shield-btn');
+  await heroAt(page, 'immune/icon');
+  r = await look();
+  assert(r.line === 'Immune ♡ tap the shield to undo', `your shield ${JSON.stringify(r)}`);
+  await goTo(page, '/channels/@me');
+  await heroAt(page, 'none/icon');
+  r = await look();
+  assert(r.icon === 'sparkle' && r.label === 'open a chat' && r.line === 'Any DM, group or server channel works~', `no chat ${JSON.stringify(r)}`);
+  for (const s of seen) assert(s.label !== 'messages purged', `a preview said "messages purged": ${JSON.stringify(s)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T101 the Many chats strip counts what it found, says what is left to know, and stays one height in a run', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001', { latencyMs: 15 });
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3003"]');
+  let r = await ringNow(page);
+  assert(r.is === 'none/label' && r.label === 'nothing picked yet' && r.sub === 'tick any DMs or channels below~', `nothing picked ${JSON.stringify(r)}`);
+  assert(r.labelLines === 1, `the strip's label wraps ${JSON.stringify(r)}`);
+  for (const k of ['c:3003', 'c:3002', 'u:2004']) await page.click(`[data-key="${k}"]`);
+  r = await ringNow(page);
+  assert(r.is === 'unscanned/label' && r.label === 'not counted yet' && r.sub === '3 chats · 2 to scan · 1 closed DM', `picked ${JSON.stringify(r)}`);
+  assert(r.labelLines === 1, `the strip's label wraps ${JSON.stringify(r)}`);
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /Scan done/, 8000);
+  r = await ringNow(page);
+  assert(r.is === 'ready/count' && r.count === '38' && r.label === 'ready for purge' && r.daggers === 2, `counted ${JSON.stringify(r)}`);
+  assert(r.sub === '3 chats · 1 closed DM', `counted, with a closed DM ${JSON.stringify(r)}`);
+  await page.click('[data-key="u:2004"]');
+  r = await ringNow(page);
+  assert(/^2 chats · about \d+s to purge~$/.test(r.sub), `ready ${JSON.stringify(r)}`);
+  await page.locator('.guild-head').first().click();
+  await page.waitForSelector('[data-key="c:5002"]');
+  await page.click('[data-key="c:5002"]');
+  r = await ringNow(page);
+  assert(r.is === 'partial/count' && r.count === '38' && r.label === 'found so far' && r.daggers === 0 && r.sub === '3 chats · 1 to scan', `partly counted ${JSON.stringify(r)}`);
+  const strip = () => page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.hero').offsetHeight);
+  const before = await strip();
+  // Every fifth DELETE in #art-share is refused, so the strip has failures to show.
+  let k = 0;
+  await page.route(/\/api\/v9\/channels\/5002\/messages\/\d+$/, (route) => {
+    if (route.request().method() !== 'DELETE' || ++k % 5) return route.fallback();
+    return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'Missing Permissions', code: 50013 }) });
+  });
+  let n = 0;
+  const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 44 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await heldBy(held);
+  await page.waitForTimeout(100);
+  const run = await page.evaluate(() => {
+    const root = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const fail = root.querySelector('.sub-fail');
+    return { height: root.querySelector('.hero').offsetHeight, readout: getComputedStyle(root.querySelector('[data-role="readout"]')).display, sub: root.querySelector('[data-role="hero-sub"]').textContent, fail: fail && getComputedStyle(fail).color };
+  });
+  assert(run.height === before, `the strip changed height in the run: ${before} → ${run.height}`);
+  assert(run.readout === 'none' && /^\d+ of \d+\+?( · ~\d+s left)? · 1 failed$/.test(run.sub) && run.fail === 'rgb(255, 128, 144)', `run strip ${JSON.stringify(run)}`);
+  held.release();
+  await waitEnd(page);
+  assert(await strip() === before, 'the strip keeps its height at the finish');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T102 the panel keeps one height from preview to run; time left leads the stats', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  const height = () => page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.panel').offsetHeight);
+  const preview = await height();
+  let n = 0;
+  const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 10 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await heldBy(held);
+  assert(await height() === preview, `panel ${preview} → ${await height()} when the run started`);
+  const stats = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const cells = [...r.querySelector('[data-role="stats"]').children];
+    const fail = r.querySelector('[data-role="stat-fail"]');
+    return { cells: cells.map((c) => c.dataset.role), eta: cells[0].textContent, etaWeight: getComputedStyle(cells[0].querySelector('b')).fontWeight, failWords: getComputedStyle(fail.querySelector('b')).color };
+  });
+  assert(stats.cells.join() === 'stat-eta,stat-fail', `stat cells ${stats.cells}`);
+  assert(/^~\d+s left$/.test(stats.eta) && stats.etaWeight === '700', `time left ${JSON.stringify(stats)}`);
+  assert(stats.failWords === 'rgb(160, 131, 147)', `no failures reads quietly ${stats.failWords}`);
+  await page.click('[data-act="pause"]');
+  await page.waitForTimeout(250);
+  const paused = await page.evaluate(() => getComputedStyle(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="stats"]')).opacity);
+  assert(paused === '0.78', `paused stats opacity ${paused}`);
+  await page.click('[data-act="resume"]');
+  held.release();
+  await waitEnd(page);
+  await context.close();
+});
+
+await test('T103 short screens keep the chat, the count and the buttons in view; the welcome fits', async () => {
+  for (const [width, height, tier] of [[1280, 600, 'snug'], [1093, 500, 'strip'], [720, 450, 'strip']]) {
+    const { page, context } = await boot('/channels/4001/5001', { viewport: { width, height }, firstRun: true });
+    const fits = (sel) => page.evaluate((s) => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      const el = r.querySelector(s).getBoundingClientRect();
+      const box = (s.startsWith('[data-act="welcome') ? r.querySelector('[data-role="welcome"]') : s === '[data-role="target"]' ? r.querySelector('[data-role="body"]') : r.querySelector('.panel')).getBoundingClientRect();
+      return el.top >= box.top - 0.5 && el.bottom <= box.bottom + 0.5 && el.bottom <= innerHeight && el.width > 0;
+    }, sel);
+    const where = `${width}×${height}`;
+    assert(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.fit) === tier, `${where} tier`);
+    const welcome = await page.evaluate(() => getComputedStyle(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="welcome"]')).backgroundColor);
+    assert(welcome === 'rgb(23, 12, 19)', `${where}: the welcome lets the panel show through (${welcome})`);
+    assert(await fits('[data-act="welcome-ok"]'), `${where}: "Got it" is off screen`);
+    await page.click('[data-act="welcome-ok"]');
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    assert(await fits('[data-role="target"]') && await fits('[data-act="purify"]'), `${where}: the chat or Purify needs a scroll`);
+    assert(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="body"]').scrollTop) === 0, `${where}: scrolled`);
+    if (tier === 'snug') {
+      // The smaller ring still keeps every word clear of the arc.
+      let c = await ringClearance(page);
+      assert(c.ring === 168 && c.label >= 4 && c.count >= 4, `${where} counted ${JSON.stringify(c)}`);
+      await goTo(page, '/channels/4001/5002');
+      await heroAt(page, 'unscanned/icon');
+      c = await ringClearance(page);
+      assert(c.label >= 4, `${where} uncounted ${JSON.stringify(c)}`);
+    } else {
+      const r = await ringNow(page);
+      assert(r.count === '40' && r.label === 'ready for purge' && r.daggers === 2 && /^about \d+s to purge~$/.test(r.sub), `${where} strip ${JSON.stringify(r)}`);
+    }
+    await context.close();
+  }
+  const { page, context } = await boot('/channels/4001/5001', { viewport: { width: 1440, height: 900 } });
+  for (const [width, height, tier] of [[1440, 900, 'full'], [1280, 720, 'full'], [340, 700, 'full']]) {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(50);
+    const m = await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      const b = r.querySelector('.panel').getBoundingClientRect();
+      return { fit: r.querySelector('[data-role="layer"]').dataset.fit, width: Math.round(b.width), inside: b.left >= 8 && b.right <= innerWidth - 8 };
+    });
+    assert(m.fit === tier && m.width === Math.min(360, width - 16) && m.inside, `${width}×${height} ${JSON.stringify(m)}`);
+  }
+  await context.close();
+});
+
+await test('T104 the ring moves only with real work: a sweep on the arc, nothing on a loop', async () => {
+  const looping = (page) => page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.getAnimations()
+    .filter((a) => a.effect && a.effect.getTiming().iterations === Infinity && a.playState === 'running')
+    .map((a) => `${a.animationName || 'waapi'}@${a.effect.target.getAttribute('class') || a.effect.target.tagName}`).sort());
+  {
+    const { page, context } = await boot('/channels/4001/5001', { latencyMs: 30 });
+    // Counting: a faint sweep on the arc.
+    const search = await holdRequests(page, /\/messages\/search/);
+    await page.click('[data-act="scan"]');
+    await heldBy(search);
+    assert((await looping(page)).join() === 'dp-breathe@hero-face,dp-sweep@g-sweep', `counting: ${await looping(page)}`);
+    search.release();
+    await untilStatus(page, /found/);
+    assert((await looping(page)).length === 0, `after the count: ${await looping(page)}`);
+    // A steady run with a known end keeps no time of its own: kills are the clock.
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 8);
+    assert((await looping(page)).length === 0, `steady run: ${await looping(page)}`);
+    await waitEnd(page);
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/@me/3002');
+    // No count yet: the run's own count is in flight, so the sweep says "working, end unknown".
+    let confirming = false;
+    const search = await holdRequests(page, /\/messages\/search/, { match: () => confirming });
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    confirming = true;
+    await holdConfirm(page);
+    await heldBy(search);
+    assert((await looping(page)).join() === 'dp-sweep@g-sweep', `unknown total: ${await looping(page)}`);
+    // The sweep's path is the arc itself, so it never crosses the open bottom where "3 of 31+" sits.
+    const offArc = await page.evaluate(() => {
+      const p = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.g-sweep');
+      const len = p.getTotalLength();
+      const out = [];
+      for (let i = 0; i <= 100; i++) {
+        const pt = p.getPointAtLength((len * i) / 100);
+        const deg = (Math.atan2(pt.y - 100, pt.x - 100) * 180) / Math.PI;
+        if (Math.abs(Math.hypot(pt.x - 100, pt.y - 100) - 84) > 0.5 || (deg > 45.5 && deg < 134.5)) out.push([pt.x.toFixed(1), pt.y.toFixed(1)]);
+      }
+      return out;
+    });
+    assert(offArc.length === 0, `sweep leaves the arc at ${JSON.stringify(offArc)}`);
+    search.release();
+    await waitEnd(page);
+    await context.close();
+  }
+  {
+    // The last look: every message handled, the ring full, and a pale sweep while it re-checks.
+    const { page, stats, context } = await boot('/channels/4001/5002');
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    const look = await holdRequests(page, /\/messages\/search/, { match: () => stats.deletes.length >= 10 });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await heldBy(look);
+    const last = await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      return { dial: r.querySelector('.dial').getAttribute('class'), head: getComputedStyle(r.querySelector('.g-head')).visibility, eta: r.querySelector('[data-role="stat-eta"] b').textContent };
+    });
+    assert(/is-verifying/.test(last.dial) && last.head === 'hidden' && last.eta === 'double-checking…', `last look ${JSON.stringify(last)}`);
+    assert((await looping(page)).join() === 'dp-sweep@g-sweep', `last look: ${await looping(page)}`);
+    look.release();
+    await waitEnd(page);
+    await context.close();
+  }
+  {
+    // Reduced motion: no sweep at all, only the track breathing (opacity), never a frozen fake arc.
+    const { page, context } = await boot('/channels/@me/3002', { reducedMotion: 'reduce' });
+    let confirming = false;
+    const search = await holdRequests(page, /\/messages\/search/, { match: () => confirming });
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    confirming = true;
+    await holdConfirm(page);
+    await heldBy(search);
+    const rm = await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      return { sweep: getComputedStyle(r.querySelector('.g-sweep')).display, track: getComputedStyle(r.querySelector('.g-track')).animationName };
+    });
+    assert(rm.sweep === 'none' && rm.track === 'dp-breathe', `reduced motion ${JSON.stringify(rm)}`);
+    search.release();
+    await waitEnd(page);
+    await context.close();
+  }
+});
+
+// A build at a steadier pace, with the named closure bindings on window.__dp.
+async function bootPaced(path, { deleteMs, probe = [], ...opts }) {
+  const hook = 'return { start: () => whenAppReady(boot), destroy };';
+  const src = source.replace(/deleteDelayMs:\s*\d+/, `deleteDelayMs: ${deleteMs}`).replace(/searchDelayMs:\s*\d+/, 'searchDelayMs: 10')
+    .replace(hook, `window.__dp = { ${probe.join(', ')} };\n  ${hook}`);
+  return bootWith(src, path, opts);
+}
+
+await test('T105 pace and time left are honest from the first kill; big counts fit; the orb says how it is going', async () => {
+  {
+    const { page, context } = await bootPaced('/channels/4001/5002', { deleteMs: 150 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    const preview = (await ringNow(page)).line;
+    assert(preview === 'about 4s to purge~', `preview ${preview}`);
+    await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      window.__seen = [];
+      const note = () => window.__seen.push({ purged: Number(r.querySelector('[data-role="tf-purged"]').textContent), eta: r.querySelector('[data-role="stat-eta"] b').textContent, rate: r.querySelector('[data-role="tf-rate"]').textContent });
+      new MutationObserver(note).observe(r.querySelector('.term-foot'), { subtree: true, childList: true, characterData: true });
+      new MutationObserver(note).observe(r.querySelector('[data-role="stats"]'), { subtree: true, childList: true, characterData: true });
+    });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    const seen = await page.evaluate(() => window.__seen);
+    const etas = seen.map((s) => s.eta).filter((e) => /left$/.test(e));
+    assert(etas[0] === '~4s left', `the first time left (${etas[0]}) disagrees with the preview's "about 4s"`);
+    assert(seen.every((s) => s.purged >= 3 || s.rate === ''), `a rate before the third kill: ${JSON.stringify(seen.find((s) => s.purged < 3 && s.rate))}`);
+    const rates = seen.filter((s) => s.rate).map((s) => parseFloat(s.rate));
+    assert(rates.length && Math.max(...rates) <= (1000 / 150) * 1.15, `rates ${rates.join(', ')}`);
+    await context.close();
+  }
+  {
+    // The shown ETA falls freely and rises only for a real slow-down, never for a jitter under 15 %.
+    const { page, context } = await bootProbe('/channels/4001/5001', ['renderProgress', 'progressSnapshot', 'counts', 'renderCurrent']);
+    let n = 0;
+    const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 2 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await heldBy(held);
+    const shownFor = (eta) => page.evaluate((s) => {
+      window.__dp.renderProgress({ ...window.__dp.progressSnapshot(), etaSeconds: s });
+      return document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="stat-eta"] b').textContent;
+    }, eta);
+    const steps = [[40, '~40s left'], [44, '~40s left'], [38, '~38s left'], [45, '~45s left'], [50, '~45s left'], [30, '~30s left']];
+    for (const [eta, want] of steps) assert(await shownFor(eta) === want, `eta ${eta} shows ${await shownFor(eta)}, not ${want}`);
+    held.release();
+    await waitEnd(page);
+    // Five digits step the number down so it stays inside the ring.
+    await goTo(page, '/channels/4001/5002');
+    await heroAt(page, 'unscanned/icon');
+    await page.evaluate(() => { window.__dp.counts.set('5002', 12345); window.__dp.renderCurrent(); });
+    await heroAt(page, 'ready/count');
+    const big = await ringClearance(page);
+    assert(big.countWidth <= 137 && big.count >= 4, `12,345 ${JSON.stringify(big)}`);
+    // A million still fits, if anyone ever gets there.
+    await page.evaluate(() => { window.__dp.counts.set('5002', 1234567); window.__dp.renderCurrent(); });
+    const huge = await ringClearance(page);
+    assert(huge.count >= 4, `1,234,567 ${JSON.stringify(huge)}`);
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001');
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    let n = 0;
+    const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 10 });
+    const orb = () => page.evaluate(() => { const o = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.orb'); return { title: o.title, label: o.getAttribute('aria-label') }; });
+    assert((await orb()).title === "Open Dopa's Purifier", `idle orb ${JSON.stringify(await orb())}`);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await heldBy(held);
+    await page.click('[data-act="pause"]');
+    await page.click('[data-act="minimize"]');
+    await page.waitForSelector('.orb:not([hidden])');
+    assert((await orb()).title === 'Paused~ click to open', `paused orb ${JSON.stringify(await orb())}`);
+    await page.click('.orb');
+    await page.waitForSelector('[data-role="shell"]:not([hidden])');
+    await page.click('[data-act="resume"]');
+    await page.click('[data-act="minimize"]');
+    await page.waitForSelector('[data-role="shell"][hidden]', { state: 'attached' });
+    const live = await orb();
+    assert(/^Purging~ \d+ of 40$/.test(live.title) && /^Open Dopa's Purifier — purging, \d+ of 40$/.test(live.label), `running orb ${JSON.stringify(live)}`);
+    held.release();
+    await waitEnd(page);
+    assert((await orb()).title === 'All clean~ 40 purged', `finished orb ${JSON.stringify(await orb())}`);
+    await context.close();
+  }
+});
+
+// Samples, every frame for `ms`, the opacity and transform of the named elements (and whether they render).
+const sampleFrames = (page, sels, ms, start = '') => page.evaluate(({ sels, ms, start }) => new Promise((done) => {
+  const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+  if (start) r.querySelector(start).click();
+  const frames = [];
+  const t0 = performance.now();
+  const tick = () => {
+    frames.push(sels.map((s) => {
+      const el = r.querySelector(s);
+      const cs = getComputedStyle(el);
+      return { o: el.getClientRects().length ? Number(cs.opacity) : 0, t: cs.transform };
+    }));
+    if (performance.now() - t0 < ms) requestAnimationFrame(tick); else done(frames);
+  };
+  requestAnimationFrame(tick);
+}), { sels, ms, start });
+
+await test('T106 reduced motion keeps gentle fades: the dialog and the orb fade, nothing moves', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { reducedMotion: 'reduce' });
+  // What is animating on an element: its name, length and the properties it changes.
+  const motion = (sel) => page.evaluate((s) => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector(s).getAnimations().map((a) => ({
+    name: a.animationName || a.transitionProperty || 'script', ms: a.effect.getTiming().duration,
+    props: [...new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k).filter((p) => !['offset', 'computedOffset', 'easing', 'composite'].includes(p))))].join(),
+  })), sel);
+  const opening = page.evaluate(() => new Promise((done) => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const layer = r.querySelector('.modal-layer');
+    const seen = [];
+    new MutationObserver((_, obs) => {
+      if (layer.dataset.open !== 'true') return;
+      obs.disconnect();
+      const t0 = performance.now();
+      const tick = () => {
+        seen.push(Number(getComputedStyle(layer).opacity));
+        if (performance.now() - t0 < 260) requestAnimationFrame(tick); else done(seen);
+      };
+      tick();
+    }).observe(layer, { attributes: true });
+  }));
+  opening.catch(() => {}); // a failure below closes the page under it
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const open = [...await motion('.modal-layer'), ...await motion('.modal')];
+  assert(open.length === 2 && open.every((m) => m.name === 'dp-fade' && m.ms === 160 && m.props === 'opacity'), `dialog opening ${JSON.stringify(open)}`);
+  const seen = await opening;
+  assert(seen.some((o) => o > 0.02 && o < 0.98) && seen[seen.length - 1] === 1, `dialog opacity ${seen.map((o) => o.toFixed(2))}`);
+  await page.click('[data-act="cancel"]');
+  const closing = await motion('.modal-layer');
+  assert(closing.length === 1 && closing[0].name === 'opacity' && closing[0].ms === 160, `dialog closing ${JSON.stringify(closing)}`);
+  assert((await motion('.modal')).every((m) => !/transform/.test(m.props)), `the dialog moves on its way out ${JSON.stringify(await motion('.modal'))}`);
+  assert(await page.evaluate(() => getComputedStyle(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.modal')).transform) === 'none', 'the dialog shrinks on its way out');
+  await page.waitForSelector('.modal-layer', { state: 'hidden', timeout: 1000 });
+  const moving = await page.evaluate(() => [...document.querySelector('#dopa-purifier-host').shadowRoot.querySelectorAll('.btn, .tab-pill, .icon-btn, .orb, .logs-btn, .tab')]
+    .map((el) => getComputedStyle(el).transitionProperty).filter((p) => /transform|all/.test(p)));
+  assert(moving.length === 0, `transform transitions left: ${moving}`);
+  // Minimising cross-fades the panel and the orb in place.
+  await page.click('[data-act="minimize"]');
+  const fold = [...await motion('.panel'), ...await motion('.orb')];
+  assert(fold.length >= 2 && fold.every((m) => m.props === 'opacity' && m.ms <= 160), `minimise ${JSON.stringify(fold)}`);
+  await page.waitForSelector('.orb:not([hidden])');
+  await page.waitForSelector('[data-role="shell"][hidden]', { state: 'attached', timeout: 1000 });
+  await context.close();
+});
+
+const wobbleTurn = (page, ms) => page.evaluate((ms) => new Promise((done) => {
+  const w = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="wobble"]');
+  const out = [];
+  const t0 = performance.now();
+  const tick = () => {
+    const m = /rotate\((-?[\d.]+)deg\)/.exec(w.style.transform);
+    out.push(m ? Number(m[1]) : 0);
+    if (performance.now() - t0 < ms) requestAnimationFrame(tick); else done(out);
+  };
+  tick();
+}), ms);
+
+await test('T107 motion polish: minimise lands in the orb, tabs fade, the header ignores clicks, a calm drag, a stamped finish', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { latencyMs: 20 });
+  // The orb appears while the panel shrinks into it: no frame shows neither.
+  const fold = await sampleFrames(page, ['.panel', '.orb'], 420, '[data-act="minimize"]');
+  const blank = fold.findIndex(([p, o]) => Math.max(p.o, o.o) < 0.1);
+  assert(blank === -1, `blank frame ${blank} of ${fold.length}: ${JSON.stringify(fold.map(([p, o]) => [p.o.toFixed(2), o.o.toFixed(2)]))}`);
+  const scales = fold.map(([p]) => (p.t === 'none' ? 1 : Number(p.t.slice(7).split(',')[0]))).filter((s, i) => fold[i][0].o > 0);
+  assert(Math.min(...scales) < 0.4, `the panel never shrank toward the orb: ${Math.min(...scales)}`);
+  // A click mid-way plays the same path back, either way round.
+  const press = (sel) => page.evaluate((s) => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector(s).click(), sel);
+  const settled = () => page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    return { open: !r.querySelector('[data-role="shell"]').hidden && r.querySelector('.orb').hidden, closed: r.querySelector('[data-role="shell"]').hidden && !r.querySelector('.orb').hidden, moving: r.getAnimations().filter((a) => a.effect && ['panel', 'orb'].includes(a.effect.target.className)).length };
+  });
+  for (const [first, second, want] of [['.orb', '[data-act="minimize"]', 'closed'], [null, '.orb', 'open'], ['[data-act="minimize"]', '.orb', 'open']]) {
+    if (first) {
+      await press(first);
+      await page.waitForTimeout(90);
+    }
+    await press(second);
+    await page.waitForTimeout(450);
+    const s = await settled();
+    assert(s[want] && s.moving === 0, `${first} then ${second} ends ${JSON.stringify(s)}, not ${want}`);
+  }
+  // Tabs switch without a wobble; the new view fades in.
+  await page.click('.tab[data-tab="batch"]');
+  const tabFade = await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="body"]').getAnimations().length);
+  assert(tabFade === 1 && Math.max(...(await wobbleTurn(page, 150)).map(Math.abs)) === 0, `tab switch fade ${tabFade}`);
+  await page.click('.tab[data-tab="current"]');
+  await page.waitForTimeout(250);
+  // A click on the header, or a 2px slip, is not a drag.
+  const head = await page.locator('.titles').boundingBox();
+  const before = await storedPrefs(page);
+  await page.mouse.move(head.x + 40, head.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(head.x + 42, head.y + 8);
+  const slip = await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.dragging ?? '');
+  await page.mouse.up();
+  const still = await wobbleTurn(page, 120);
+  await page.waitForTimeout(300);
+  const after = await storedPrefs(page);
+  assert(slip === '' && still.every((v) => v === 0) && await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="wobble"]').style.transform) === '', 'a header click jiggled the panel');
+  assert(JSON.stringify([after.x, after.y]) === JSON.stringify([before.x, before.y]), `a header click moved the remembered spot ${JSON.stringify([before.x, before.y])} → ${JSON.stringify([after.x, after.y])}`);
+  // A fast drag tilts at most 3.5°, and the release swings back through rest without a shove.
+  await page.mouse.move(head.x + 40, head.y + 8);
+  await page.mouse.down();
+  const turns = wobbleTurn(page, 900);
+  for (let i = 1; i <= 6; i++) { await page.mouse.move(head.x + 40 - i * 60, head.y + 8 + i * 8); await page.waitForTimeout(16); }
+  await page.mouse.up();
+  const tilt = Math.max(...(await turns).map(Math.abs));
+  assert(tilt > 0.3 && tilt <= 3.6, `drag tilt ${tilt.toFixed(2)}°`);
+  // Every control answers a press.
+  const mute = await page.locator('[data-act="mute"]').boundingBox();
+  await page.mouse.move(mute.x + mute.width / 2, mute.y + mute.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(150);
+  const pressed = await page.evaluate(() => getComputedStyle(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-act="mute"]')).transform);
+  await page.mouse.up();
+  assert(pressed.startsWith('matrix(0.9,'), `mute press ${pressed}`);
+  // The finish in beats: the verdict settles in at 60ms, the sticker is stamped at 380ms, no spin.
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.hero === 'done', null, { timeout: 15000 });
+  const beats = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const one = (el) => el.getAnimations().map((a) => ({ delay: a.effect.getTiming().delay, duration: a.effect.getTiming().duration, first: a.effect.getKeyframes()[0].transform }))[0] || null;
+    return { line: one(r.querySelector('[data-role="readout-line"]')), sticker: one(r.querySelector('[data-role="sticker"]')) };
+  });
+  assert(beats.line && beats.line.delay === 60 && beats.line.duration === 220, `readout beat ${JSON.stringify(beats.line)}`);
+  assert(beats.sticker && beats.sticker.delay === 380 && beats.sticker.duration === 340 && beats.sticker.first === 'rotate(4deg) scale(1.6)', `sticker beat ${JSON.stringify(beats.sticker)}`);
+  assert(Math.max(...(await wobbleTurn(page, 500)).map(Math.abs)) < 0.05, 'the finish spun the panel');
+  await context.close();
+});
+
+await test('T108 endings: only a clean finish turns the count rose, the sticker sits clear of every notch', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5001');
+    let k = 0;
+    await page.route(/\/api\/v9\/channels\/5001\/messages\/\d+$/, (route) => {
+      if (route.request().method() !== 'DELETE' || ++k % 8) return route.fallback();
+      return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'Missing Permissions', code: 50013 }) });
+    });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    await page.waitForTimeout(800);
+    const end = await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      const pct = r.querySelector('[data-role="pct"]');
+      return { pct: pct.textContent, colour: getComputedStyle(pct).color, mood: r.querySelector('[data-role="mood"]').textContent, sticker: r.querySelector('[data-role="sticker"]').textContent };
+    });
+    assert(end.pct === '35 of 40' && end.colour === 'rgb(207, 179, 193)', `with failures ${JSON.stringify(end)}`);
+    assert(end.mood === 'mostly clean, princess ♡' && end.sticker === 'mostly clean~', `with failures ${JSON.stringify(end)}`);
+    const c = await ringClearance(page);
+    assert(c.stickerClear && c.stickerClear.arc >= 2 && c.stickerClear.right >= 0 && c.stickerClear.top >= 0, `the sticker covers the ring or leaves the body ${JSON.stringify(c.stickerClear)}`);
+    await context.close();
+  }
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 600 }]) {
+    const { page, context } = await boot('/channels/4001/5002', { viewport });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    await page.waitForTimeout(800);
+    const end = await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      const pct = r.querySelector('[data-role="pct"]');
+      return { pct: pct.textContent, colour: getComputedStyle(pct).color, mood: r.querySelector('[data-role="mood"]').textContent };
+    });
+    assert(end.pct === '10 of 10' && end.colour === 'rgb(255, 196, 216)' && end.mood === 'all clean, princess ♡', `clean ${JSON.stringify(end)}`);
+    const c = await ringClearance(page);
+    assert(c.stickerClear && c.stickerClear.arc >= 2 && c.stickerClear.right >= 0 && c.stickerClear.top >= 0, `${viewport.height}px: the sticker ${JSON.stringify(c.stickerClear)}`);
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001', { latencyMs: 20 });
+    let n = 0;
+    const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 5 });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await heldBy(held);
+    await page.click('[data-act="stop"]');
+    held.release();
+    await waitEnd(page);
+    assert(await text(page, '[data-role="mood"]') === 'stopped~ no rush ♡', `stopped mood ${await text(page, '[data-role="mood"]')}`);
+    await context.close();
+  }
+});
+
+await test('T109 seven type sizes and one caps tracking', async () => {
+  const css = JSON.parse(/const CSS = ("(?:[^"\\]|\\.)*");/.exec(source)[1]).replace(/\/\*[\s\S]*?\*\//g, '');
+  const tokens = [...css.matchAll(/--fs-[a-z]+:\s*([\d.]+px)/g)].map((m) => m[1]);
+  assert(tokens.join() === '10.5px,11.5px,13px,14px,20px,24px,56px', `type tokens ${tokens}`);
+  // Decorative glyphs keep their own sizes, and the ring's count and label step down to fit the arc.
+  const exempt = /\.status-dot|\.target-ico|\.guild-badge|\.confetti-glyph|\[data-len=|\[data-fit="snug"\]\[data-tab="current"\] \.count/;
+  const raw = [];
+  for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sizes = [...body.matchAll(/font-size:\s*([^;]+)/g)].map((m) => m[1].trim())
+      .concat([...body.matchAll(/(?:^|;)\s*font:\s*([^;]+)/g)].map((m) => (/(?:^|\s)(\d+(?:\.\d+)?px)(?=\/|\s)/.exec(m[1]) || [])[1]).filter(Boolean));
+    for (const size of sizes) if (!/^var\(--fs-[a-z]+\)$/.test(size) && !exempt.test(selector)) raw.push(`${selector.trim()} → ${size}`);
+    // Every sans caps label shares one tracking; the terminal's mono keeps its own.
+    const track = /letter-spacing:\s*([^;]+)/.exec(body);
+    if (/text-transform:\s*uppercase/.test(body) || (track && /^\.1\d*em$/.test(track[1].trim()) && !/--mono/.test(body))) {
+      if (!track || track[1].trim() !== 'var(--track-cap)') raw.push(`${selector.trim()} → tracking ${track ? track[1] : 'none'}`);
+    }
+  }
+  assert(raw.length === 0, `sizes and caps outside the scale:\n      ${raw.join('\n      ')}`);
+  // On screen: every word in the panel uses one of the seven sizes.
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  const used = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const out = new Set();
+    for (const el of r.querySelectorAll('.panel *')) {
+      if (!el.getClientRects().length || el.closest('.target-ico, .status-dot')) continue;
+      if ([...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) out.add(getComputedStyle(el).fontSize);
+    }
+    return [...out].sort((a, b) => parseFloat(a) - parseFloat(b));
+  });
+  assert(used.every((s) => ['10.5px', '11.5px', '13px', '14px', '20px', '24px', '56px'].includes(s)), `sizes on screen ${used}`);
+  await context.close();
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
