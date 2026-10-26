@@ -398,12 +398,18 @@ await test('T17 account switch in place: next scan uses the new account, lists r
   await context.close();
 });
 
-await test('T18 current channel without access ends with a problem, not "all clean"', async () => {
-  const { page, world, context } = await boot('/channels/4001/5007');
+// Purify counts first, so a chat you can't read is turned down before any dialog: a purge there could only fail.
+await test('T18 current channel without access says so, never "all clean", and asks nothing', async () => {
+  const { page, world, stats, context } = await boot('/channels/4001/5007');
   await page.click('[data-act="purify"]');
-  await holdConfirm(page);
-  await waitEnd(page);
-  assert(mine(world, '5007').length === 5, 'nothing deleted');
+  await page.waitForFunction(() => /No access here/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  assert(await page.locator('[data-role="status"]').getAttribute('data-tone') === 'error', 'said as an error');
+  assert(await page.locator('.modal-layer[data-open="true"]').count() === 0, 'no dialog for a chat that can only fail');
+  const sent = stats.log.length;
+  await page.locator('[data-act="purify"]').evaluate((b) => b.click()); // again (if it is still offered at all)
+  await page.waitForTimeout(300);
+  assert(stats.log.length === sent && await page.locator('.modal-layer[data-open="true"]').count() === 0, `a second press asked Discord again: ${stats.log.slice(sent)}`);
+  assert(mine(world, '5007').length === 5 && stats.deletes.length === 0, 'nothing deleted');
   const st = await status(page);
   assert(!/All clean|All clear/.test(st), `status ${st}`);
   assert(!/All clean|All clear/.test(await text(page, '[data-role="readout-line"]')), 'readout not all clean');
@@ -529,8 +535,9 @@ await test('T27 account switch + navigation mid-run stops the run; nothing is se
   await context.close();
 });
 
+// A chat Discord is still indexing ends with a problem (#mod-only no longer gets as far as a run: T18).
 await test('T28 a run that ends badly while minimised does not show a happy orb', async () => {
-  const { page, context } = await boot('/channels/4001/5007', { latencyMs: 400 });
+  const { page, context } = await boot('/channels/4001/5002', { latencyMs: 400, deepIndex: ['5002'] });
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await page.click('[data-act="minimize"]');
@@ -989,7 +996,8 @@ await test('T45 shielding the open DM mid-scan ends on "immune", not an offer to
   await context.close();
 });
 
-// Purify asks Discord who you are before its dialog; a Scan pressed meanwhile must not run under it.
+// Purify asks Discord before its dialog (it counts the chat, then asks who you are); a Scan pressed
+// meanwhile must never end up under the dialog. Scan is either unavailable while Purify counts, or it wins.
 await test('T46 Scan pressed while Purify is still asking never opens the dialog over the scan', async () => {
   const env = await openDiscord(browser, '/channels/4001/5002');
   const { page, stats } = env;
@@ -1002,12 +1010,31 @@ await test('T46 Scan pressed while Purify is still asking never opens the dialog
   slow = true;
   await page.click('[data-act="purify"]');
   await page.waitForTimeout(300);
-  await page.click('[data-act="scan"]');
-  await page.waitForTimeout(1900); // Purify's question has been answered; the scan hasn't
-  assert((await text(page, '[data-role="scan-label"]')) === 'Cancel scan', 'scan still running');
-  assert(!(await dialogOpen(page)), 'no dialog over a running scan');
-  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 15000 });
+  await page.locator('[data-act="scan"]').evaluate((b) => b.click()); // a press; a disabled Scan ignores it
+  const overlap = await page.evaluate(() => new Promise((resolve) => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const t0 = performance.now();
+    const look = () => {
+      const open = r.querySelector('.modal-layer').dataset.open === 'true';
+      const scanning = r.querySelector('[data-role="scan-label"]').textContent === 'Cancel scan';
+      if (open && scanning) resolve('the dialog opened over a running scan');
+      else if (performance.now() - t0 > 4500) resolve('');
+      else requestAnimationFrame(look);
+    };
+    look();
+  }));
+  assert(!overlap, overlap);
   slow = false;
+  // Whichever came first settles: the scan's count, or a dialog that couldn't wait for one.
+  await page.waitForFunction(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    return r.querySelector('.modal-layer').dataset.open === 'true' || /found/.test(r.querySelector('[data-role="status-text"]').textContent);
+  }, null, { timeout: 15000 });
+  if (await dialogOpen(page)) {
+    await page.click('[data-act="cancel"]');
+    await page.click('[data-act="scan"]');
+    await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 15000 });
+  }
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
   assert(/all 10 of your messages/.test(await text(page, '.modal-lead')), `dialog after the scan: ${await text(page, '.modal-lead')}`);
@@ -1023,8 +1050,8 @@ await test('T47 batch confirm never leads with "0+" before a scan', async () => 
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
   let lead = await text(page, '.modal-lead');
-  assert(!/\b0\+/.test(lead) && /^Purging all your messages in 3\schats \(not\scounted\syet\):$/.test(lead), `nothing counted: ${lead}`);
-  assert((await text(page, '.modal-lead b')) === 'all', 'the bold word is "all"');
+  assert(!/\b0\+/.test(lead) && lead === 'This deletes every message of yours in these 3 chats — none counted yet:', `nothing counted: ${lead}`);
+  assert((await text(page, '.modal-lead b')) === '3', 'the bold word is the number of chats');
   await page.click('[data-act="cancel"]');
   // One chat counted, two not: the known number, plus all of yours in the rest.
   await page.click('[data-act="dm-none"]');
@@ -1035,7 +1062,7 @@ await test('T47 batch confirm never leads with "0+" before a scan', async () => 
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
   lead = await text(page, '.modal-lead');
-  assert(/^Purging 7 found \+ all of yours in 2\suncounted\schats:$/.test(lead), `partly counted: ${lead}`);
+  assert(lead === 'This deletes 7 counted messages, plus every message of yours in the 2 chats not counted yet:', `partly counted: ${lead}`);
   await context.close();
 });
 
@@ -2305,6 +2332,520 @@ await test('T93 the running chat scrolls into view, unless you just moved around
     await page.waitForTimeout(600);
     const after = await geometry(page);
     assert(!after.visible && after.scrollTop === 0, `the list stayed where the person left it ${JSON.stringify(after)}`);
+    await context.close();
+  }
+});
+
+// ── Confirm, hold and count-first (T120–T133) ──
+
+const isOpen = (page) => page.locator('.modal-layer[data-open="true"]').count().then((n) => n > 0);
+const statusText = (page) => text(page, '[data-role="status-text"]');
+
+// A world with n more DMs, as someone with a long DM list has.
+function manyDMs(world, n) {
+  for (let i = 0; i < n; i++) {
+    const id = String(3200 + i);
+    const user = { id: String(2100 + i), username: `pal${i}`, global_name: `Pal number ${i}` };
+    world.users[`pal${i}`] = user;
+    world.channels[id] = { id, type: 1, recipients: [user], last_message_id: String(1000 + i) };
+  }
+  return world;
+}
+
+// Open a chat, press Purify, hold: the dialog already knows how many. The count is the one search the
+// purge starts with anyway, so a whole purge sends exactly what a scanned one does.
+await test('T120 Purify counts an uncounted chat first, with one search, and the dialog says how many', async () => {
+  const traffic = {};
+  for (const flow of ['purify-first', 'scan-first']) {
+    const { page, stats, world, pageErrors, context } = await bootProbe('/channels/4001/5002', ['state'], { latencyMs: 20 });
+    const s0 = stats.searches;
+    const l0 = stats.log.length;
+    if (flow === 'scan-first') {
+      await page.click('[data-act="scan"]');
+      await untilStatus(page, /found/);
+    }
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 3000 });
+    assert(await text(page, '.modal-lead') === 'This will delete all 10 of your messages in', `${flow}: lead ${await text(page, '.modal-lead')}`);
+    assert(stats.searches - s0 === 1, `${flow}: ${stats.searches - s0} searches before the hold`);
+    assert(await text(page, '.modal-who') === 'deleting as @princess.dopa', `${flow}: ${await text(page, '.modal-who')}`);
+    await holdConfirm(page);
+    await waitEnd(page);
+    assert(stats.deletes.length === 10 && mine(world, '5002').length === 0, `${flow}: deleted ${stats.deletes.length}`);
+    assert(await page.evaluate(() => window.__dp.state.runAs) === 'princess.dopa', 'the run remembers who confirmed it');
+    traffic[flow] = { searches: stats.searches - s0, requests: stats.log.length - l0 };
+    assert(pageErrors.length === 0, `${flow}: page errors ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  assert(JSON.stringify(traffic['purify-first']) === JSON.stringify(traffic['scan-first']), `counting first costs nothing extra: ${JSON.stringify(traffic)}`);
+});
+
+await test('T121 Purify on a chat with none of mine, or one I can\'t read, opens no dialog', async () => {
+  {
+    const { page, stats, context } = await boot('/channels/4001/5004'); // #Voice Lounge: nothing of mine
+    const s0 = stats.searches;
+    await page.click('[data-act="purify"]');
+    await untilStatus(page, /All clear/);
+    await page.waitForTimeout(1000);
+    assert(!(await isOpen(page)), 'no dialog when there is nothing to purge');
+    assert(await statusText(page) === 'All clear~ nothing of yours here ✨', `status ${await statusText(page)}`);
+    assert(await page.locator('[data-role="status"]').getAttribute('data-tone') === 'success', 'a calm success');
+    assert(stats.searches - s0 === 1, `${stats.searches - s0} searches`);
+    assert(await page.locator('[data-act="purify"]').isDisabled(), 'Purify rests once it knows');
+    await context.close();
+  }
+  {
+    const { page, stats, context } = await boot('/channels/4001/5007'); // #mod-only: Missing Access
+    await page.click('[data-act="purify"]');
+    await untilStatus(page, /No access here/);
+    await page.waitForTimeout(500);
+    assert(!(await isOpen(page)), 'no dialog for a purge that could only fail');
+    assert(await heroIs(page) === 'blocked/label', `the ring says why ${await heroIs(page)}`);
+    assert(/count failed · Missing Access/.test(await text(page, '[data-role="term-body"]')), 'Discord\'s own words stay in the log');
+    assert(stats.deletes.length === 0, 'nothing deleted');
+    await context.close();
+  }
+});
+
+// The count never makes anyone wait on Discord: any wait it asks for, or 1.2 s without an answer,
+// and Purify asks anyway, without a number. That search is not tried again on the next press.
+await test('T122 a count Discord holds up is given up: the dialog says "all your messages", and asks once', async () => {
+  for (const kind of ['rate', 'index', 'network', 'slow']) {
+    const env = await openDiscord(browser, '/channels/4001/5002');
+    const { page, stats } = env;
+    let searches = 0;
+    await page.route('https://discord.com/api/v9/guilds/*/messages/search*', async (route) => {
+      if (++searches > 1) return route.fallback();
+      const reply = (status, body) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      if (kind === 'rate') return reply(429, { message: 'You are being rate limited.', retry_after: 2, global: false });
+      if (kind === 'index') return reply(202, { message: 'Index not yet available. Try again later', code: 110000, retry_after: 2 });
+      if (kind === 'network') return route.abort('failed');
+      await new Promise((r) => setTimeout(r, 2500));
+      try { await route.fallback(); } catch { /* the page gave up on it */ }
+    });
+    await injectUserscript(page, source);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'art-share');
+    const t0 = Date.now();
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 4000 });
+    const took = Date.now() - t0;
+    assert(await text(page, '.modal-lead') === 'This will delete all your messages in', `${kind}: lead ${await text(page, '.modal-lead')}`);
+    assert(searches === 1, `${kind}: ${searches} searches`);
+    assert(kind === 'slow' ? took >= 1100 && took < 2200 : took < 1000, `${kind}: the dialog took ${took}ms`);
+    assert(/count skipped/.test(await text(page, '[data-role="term-body"]')), `${kind}: the log says why there's no number`);
+    await page.click('[data-act="cancel"]');
+    assert(await statusText(page) === 'Ready to purify~ ✨', `${kind}: footer after Nevermind ${await statusText(page)}`);
+    const quick = Date.now();
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 1000 });
+    assert(searches === 1 && Date.now() - quick < 800, `${kind}: the second press asked again (${searches}) or waited ${Date.now() - quick}ms`);
+    assert(stats.deletes.length === 0, `${kind}: nothing deleted`);
+    await env.context.close();
+  }
+  // Only the search is on the clock: a slow "who are you" (which the dialog always waited for) doesn't cost the number.
+  const env = await openDiscord(browser, '/channels/4001/5002');
+  const later = (ms) => async (route) => { await new Promise((r) => setTimeout(r, ms)); try { await route.fallback(); } catch { /* gave up */ } };
+  await injectUserscript(env.page, source);
+  await env.page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === 'art-share');
+  await env.page.route('https://discord.com/api/v9/users/@me', later(900));
+  await env.page.route('https://discord.com/api/v9/guilds/*/messages/search*', later(500));
+  await env.page.click('[data-act="purify"]');
+  await env.page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 4000 });
+  assert(await text(env.page, '.modal-lead') === 'This will delete all 10 of your messages in', `slow who-are-you: ${await text(env.page, '.modal-lead')}`);
+  await env.context.close();
+});
+
+// Counting happens only when the person presses Purify or Scan: browsing chats with the panel open costs nothing.
+await test('T123 moving between chats with the panel open sends no searches', async () => {
+  const { page, stats, context } = await boot('/channels/4001/5001');
+  const s0 = stats.searches;
+  for (const p of ['/channels/4001/5002', '/channels/@me/3003', '/channels/@me/3002', '/channels/4001/5001']) {
+    await page.evaluate((x) => history.pushState({}, '', x), p);
+    await page.waitForTimeout(1000);
+  }
+  await page.waitForTimeout(6000);
+  assert(stats.searches === s0, `${stats.searches - s0} searches while browsing`);
+  await context.close();
+});
+
+await test('T124 leaving the chat, the tab or the panel while Purify counts opens no dialog', async () => {
+  for (const leave of ['chat', 'tab', 'panel']) {
+    const { page, stats, context } = await boot('/channels/4001/5002');
+    const hold = await holdRequests(page, /\/messages\/search/);
+    await page.click('[data-act="purify"]');
+    for (let i = 0; !hold.held && i < 200; i++) await page.waitForTimeout(10);
+    assert(hold.held, `${leave}: Purify counted first`);
+    if (leave === 'chat') await page.evaluate(() => { history.pushState({}, '', '/channels/4001/5001'); dispatchEvent(new PopStateEvent('popstate')); });
+    if (leave === 'tab') await page.click('.tab[data-tab="batch"]');
+    if (leave === 'panel') await page.click('[data-act="minimize"]');
+    hold.release();
+    await page.waitForTimeout(1600);
+    assert(!(await isOpen(page)), `${leave}: a dialog opened after leaving`);
+    if (leave === 'tab') {
+      // Left by the person, not given up on Discord's account: the next press counts again.
+      await page.click('.tab[data-tab="current"]');
+      const s0 = stats.searches;
+      await page.click('[data-act="purify"]');
+      await page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 3000 });
+      assert(stats.searches - s0 === 1 && /all 10 of your messages/.test(await text(page, '.modal-lead')), `back on the tab: ${await text(page, '.modal-lead')}`);
+    }
+    assert(stats.deletes.length === 0, `${leave}: nothing deleted`);
+    await context.close();
+  }
+});
+
+// Letting go is the safe outcome, so it's said plainly; only a quick tap is taught the gesture.
+await test('T125 letting go early says nothing went; a tap still teaches; a finger may wander 12px', async () => {
+  const { page, stats, context } = await boot('/channels/4001/5002');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  await page.waitForTimeout(400);
+  const label = () => text(page, '[data-role="confirm-label"]');
+  const nudged = () => page.locator('[data-role="confirm-label"]').evaluate((el) => el.dataset.nudge === 'true');
+  const c = await page.locator('[data-act="confirm"]').boundingBox();
+  const mid = [c.x + c.width / 2, c.y + c.height / 2];
+  await page.mouse.move(...mid);
+  await page.mouse.down();
+  await page.waitForTimeout(450);
+  await page.mouse.up();
+  assert(/^Let go~\snothing\spurged ♡$/.test(await label()) && !(await nudged()), `a let-go at half way: ${await label()}`);
+  const name = await page.locator('[data-act="confirm"]').evaluate((el) => el.querySelector('.flair').getAttribute('aria-hidden'));
+  assert(name === 'true', 'the heart is flair, not words');
+  const lines = await page.locator('[data-role="confirm-label"]').evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
+  const fits = await page.locator('[data-act="confirm"]').evaluate((b) => b.querySelector('.hold-label').getBoundingClientRect().width <= b.clientWidth);
+  assert(lines === 2 && fits, `the long line sits on two lines inside the button (${lines} lines, fits ${fits})`);
+  assert(stats.deletes.length === 0 && await dialogOpen(page), 'nothing deleted');
+  await page.waitForTimeout(1500);
+  assert(await label() === 'Hold to purify ✨', `settles back: ${await label()}`);
+  await page.click('[data-act="confirm"]');
+  assert(/^Hold it down~ ♡$/.test(await label()) && await nudged(), `a quick tap: ${await label()}`);
+  await page.waitForTimeout(1500);
+  // A mouse is exact: 2px past the edge lets go, and says so.
+  await page.mouse.move(...mid);
+  await page.mouse.down();
+  await page.waitForTimeout(300);
+  await page.mouse.move(c.x + c.width + 2, mid[1]);
+  assert(/^Let go~/.test(await label()), `mouse slide-off: ${await label()}`);
+  await page.mouse.up();
+  await page.waitForTimeout(1500);
+  // A finger 20px off lets go; 10px off still holds, to the end.
+  const cdp = await context.newCDPSession(page);
+  const at = ([x, y]) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(mid) });
+  await page.waitForTimeout(200);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at([c.x + c.width + 20, mid[1]]) });
+  await page.waitForTimeout(100);
+  assert(/^Let go~/.test(await label()), `touch 20px off: ${await label()}`);
+  await page.waitForTimeout(900);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  assert(stats.deletes.length === 0 && await dialogOpen(page), 'a finger that slid away purged nothing');
+  await page.waitForTimeout(1500);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(mid) });
+  await page.waitForTimeout(150);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at([c.x + c.width + 10, mid[1]]) });
+  await page.waitForTimeout(900);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await waitEnd(page);
+  assert(stats.deletes.length === 10, `a finger 10px off kept holding: ${stats.deletes.length} deleted`);
+  await context.close();
+});
+
+// The fill is a compositor animation, timed exactly; at the commit it seals full and stays full while
+// the dialog fades (it used to drain back, which read as a cancel).
+await test('T126 a finished hold seals: the bar stays full until the dialog is gone', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { latencyMs: 30 });
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  await page.waitForTimeout(400);
+  const sampler = page.evaluate(() => new Promise((resolve) => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const btn = r.querySelector('[data-act="confirm"]');
+    const fill = r.querySelector('.hold-fill');
+    const layer = r.querySelector('.modal-layer');
+    const out = { frames: [], anim: null, pressedAt: 0, sealedAt: 0, hiddenAt: 0 };
+    btn.addEventListener('pointerdown', () => {
+      out.pressedAt = performance.now();
+      requestAnimationFrame(() => {
+        const a = fill.getAnimations()[0];
+        out.anim = a ? { duration: a.effect.getTiming().duration, easing: a.effect.getTiming().easing, props: a.effect.getKeyframes().map((k) => k.transform) } : null;
+      });
+    }, { once: true });
+    // The commit is stamped the moment the label is written "Purifying", before the run starts up.
+    const label = r.querySelector('[data-role="confirm-label"]');
+    const stamp = (words) => { if (!out.sealedAt && /Purifying/.test(words)) out.sealedAt = performance.now(); };
+    const own = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+    Object.defineProperty(label, 'textContent', { configurable: true, get() { return own.get.call(this); }, set(v) { stamp(String(v)); own.set.call(this, v); } });
+    const replace = label.replaceChildren.bind(label);
+    label.replaceChildren = (...kids) => { stamp(kids.map((k) => (typeof k === 'string' ? k : k.textContent)).join('')); replace(...kids); };
+    const look = () => {
+      if (out.sealedAt) {
+        if (layer.hidden) { out.hiddenAt = performance.now(); resolve(out); return; }
+        const b = btn.getBoundingClientRect();
+        const f = fill.getBoundingClientRect();
+        out.frames.push({ fill: Math.min(b.right, f.right) - Math.max(b.left, f.left), button: b.width });
+      }
+      requestAnimationFrame(look);
+    };
+    requestAnimationFrame(look);
+    setTimeout(() => resolve(out), 6000);
+  }));
+  await holdConfirm(page);
+  const s = await sampler;
+  assert(s.anim && s.anim.duration === 850 && s.anim.easing === 'linear' && /translateX/.test(s.anim.props.join()), `the fill is a timed transform animation: ${JSON.stringify(s.anim)}`);
+  const commit = s.sealedAt - s.pressedAt;
+  // Never early, and within about a frame (it used to wait for a frame, and land 20-50ms late).
+  assert(commit >= 850 && commit < 850 + 20, `commit at ${Math.round(commit)}ms`);
+  assert(s.frames.length >= 4, `${s.frames.length} frames between the commit and the dialog going`);
+  const low = s.frames.filter((f) => f.fill < f.button - 1);
+  assert(!low.length, `the bar drained while the dialog faded: ${JSON.stringify(low.slice(0, 3))}`);
+  assert(s.hiddenAt - s.sealedAt >= 200 && s.hiddenAt - s.sealedAt < 450, `the dialog left after ${Math.round(s.hiddenAt - s.sealedAt)}ms`);
+  await waitEnd(page);
+  await context.close();
+});
+
+await test('T127 the confirm dialog shows a long chat and server name in full, and says it plainly', async () => {
+  const world = buildWorld();
+  world.channels['5002'].name = 'art-share-and-commissions-for-the-spring-zine-collab-please-read-the-pinned-rules-first-ok';
+  world.guilds[0].name = '✿ The Extremely Cozy Corner of the Internet for Night Owls ♡';
+  const { page, context } = await boot('/channels/4001/5002', { world });
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const pill = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const box = r.querySelector('.pill').getBoundingClientRect();
+    const modal = r.querySelector('.modal').getBoundingClientRect();
+    const whole = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()].every((q) => q.left >= box.left - 0.5 && q.right <= box.right + 0.5 && q.top >= box.top - 0.5 && q.bottom <= box.bottom + 0.5);
+    };
+    const el = r.querySelector('.pill');
+    return { name: r.querySelector('.pill-name').textContent, name90: whole(r.querySelector('.pill-name')), server: whole(r.querySelector('.pill-context')),
+      clipped: el.scrollWidth > el.clientWidth, inModal: box.left >= modal.left && box.right <= modal.right, ellipsis: getComputedStyle(r.querySelector('.pill-name')).textOverflow };
+  });
+  assert(pill.name.length === 90 && pill.name90 && pill.server && !pill.clipped && pill.inModal && pill.ellipsis !== 'ellipsis', `pill ${JSON.stringify(pill)}`);
+  // The words: who is deleting, the one plain warning (its blood drop unspoken), and a two-line hint.
+  assert(await text(page, '.modal-who') === 'deleting as @princess.dopa', `who ${await text(page, '.modal-who')}`);
+  const warn = await page.locator('.modal-warn').evaluate((el) => ({ text: el.textContent, flair: el.querySelector('.flair')?.getAttribute('aria-hidden') }));
+  assert(warn.text === "This can't be undone 🩸" && warn.flair === 'true', `warn ${JSON.stringify(warn)}`);
+  const hint = await page.locator('#dp-modal-hint').evaluate((el) => [...el.children].map((d) => d.textContent));
+  assert(JSON.stringify(hint) === JSON.stringify(['Hold with your mouse or Space · Esc keeps you safe', 'Screen reader, voice or switch? Just press twice']), `hint ${JSON.stringify(hint)}`);
+  await page.click('[data-act="cancel"]');
+  // A short name is still a single capsule.
+  await page.evaluate(() => { history.pushState({}, '', '/channels/@me/3002'); dispatchEvent(new PopStateEvent('popstate')); });
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="target-name"]').textContent === 'Alice ✿');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const short = await page.locator('.pill').boundingBox();
+  assert(short.height <= 31, `one line for "general": ${short.height}px`);
+  await context.close();
+});
+
+// 200% zoom on a 1366×768 laptop: every part of the dialog on screen, even for a long list.
+await test('T128 at 200% zoom the confirm dialog fits, even for 129 chats', async () => {
+  for (const viewport of [{ width: 683, height: 384 }, { width: 640, height: 360 }]) {
+    const { page, context } = await boot('/channels/4001/5001', { world: manyDMs(buildWorld(), 126), viewport });
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForSelector('[data-key="c:3250"]');
+    await page.click('[data-act="dm-all"]');
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    await page.waitForTimeout(500);
+    for (const sel of ['.modal-title', '[data-act="cancel"]', '[data-act="confirm"]', '#dp-modal-hint']) {
+      const b = await page.locator(sel).boundingBox();
+      assert(b.y >= 0 && b.y + b.height <= viewport.height && b.x >= 0 && b.x + b.width <= viewport.width, `${viewport.width}×${viewport.height}: ${sel} at ${JSON.stringify(b)}`);
+    }
+    assert(await text(page, '.modal-title') === 'Purify 129 chats?', `title ${await text(page, '.modal-title')}`);
+    await context.close();
+  }
+});
+
+await test('T129 Many chats: one sentence says what goes, and chats without access are listed as skipped', async () => {
+  const meta = (page) => page.evaluate(() => [...document.querySelector('#dopa-purifier-host').shadowRoot.querySelectorAll('.modal-item')].map((el) => {
+    const name = el.querySelector('.modal-item-name');
+    const m = el.querySelector('.modal-item-meta');
+    return `${name.title === name.textContent ? '' : '!title '}${m.textContent}${m.classList.contains('is-skipped') ? ' (skipped)' : m.classList.contains('is-unknown') ? ' (unknown)' : ''}`;
+  }));
+  const openConfirm = async (page) => {
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    return { title: await text(page, '.modal-title'), lead: await text(page, '.modal-lead') };
+  };
+  {
+    const { page, stats, context } = await boot('/channels/4001/5001');
+    await pickBatch(page, ['c:3003', 'c:3002', 'u:2004', 'c:5002', 'c:5007']);
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /Scan done/, 15000);
+    let d = await openConfirm(page);
+    assert(d.title === 'Purify 4 chats?', `title ${d.title}`);
+    assert(d.lead === 'This deletes 48 counted messages, plus every message of yours in the 1 chat not counted yet:', `some counted: ${d.lead}`);
+    assert(JSON.stringify(await meta(page)) === JSON.stringify(['7 messages', '31 messages', 'not counted (unknown)', '10 messages', 'skipped · no access (skipped)']), `list ${JSON.stringify(await meta(page))}`);
+    assert(await page.locator('.modal-list').getAttribute('role') === 'list' && await page.locator('.modal-list').getAttribute('aria-label') === '5 chats', 'a named list');
+    await page.click('[data-act="cancel"]');
+    await page.click('[data-key="u:2004"]');
+    await page.click('[data-key="c:5007"]');
+    d = await openConfirm(page);
+    assert(d.title === 'Purify 3 chats?' && d.lead === 'This deletes all 48 of your messages in these chats:', `all counted: ${JSON.stringify(d)}`);
+    await page.click('[data-act="cancel"]');
+    for (const k of ['c:3002', 'c:5002']) await page.click(`[data-key="${k}"]`);
+    d = await openConfirm(page);
+    assert(d.title === 'Purify 1 chat?' && d.lead === 'This deletes all 7 of your messages in this chat:', `one chat: ${JSON.stringify(d)}`);
+    await page.click('[data-act="cancel"]');
+    // Only a chat without access and one with nothing of mine left: nothing to ask about.
+    await page.click('[data-key="c:3003"]');
+    await page.click('[data-key="c:5007"]');
+    await page.click('[data-key="c:5004"]');
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /Scan done/, 15000);
+    const sent = stats.log.length;
+    await page.locator('[data-act="purify"]').evaluate((b) => b.click());
+    await page.waitForTimeout(400);
+    assert(!(await isOpen(page)) && stats.log.length === sent, `nothing to purge, yet ${stats.log.slice(sent)} / dialog ${await isOpen(page)}`);
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001', { deepIndex: ['5002'] });
+    await pickBatch(page, ['c:3003', 'c:5002']);
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /Scan done/, 15000);
+    const d = await openConfirm(page);
+    assert(d.lead === 'This deletes all 17 of your messages in these chats (Discord may find older ones later):', `still indexing: ${d.lead}`);
+    await context.close();
+  }
+});
+
+await test('T130 screen readers: nothing behind the dialog, the armed press is spoken, the description is the sentence', async () => {
+  const ax = async (context, page) => {
+    const cdp = await context.newCDPSession(page);
+    const { nodes } = await cdp.send('Accessibility.getFullAXTree');
+    await cdp.detach();
+    return nodes.filter((n) => !n.ignored);
+  };
+  {
+    const { page, context } = await boot('/channels/4001/5002');
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    const nodes = await ax(context, page);
+    const buttons = nodes.filter((n) => n.role && n.role.value === 'button').map((n) => n.name && n.name.value);
+    assert(JSON.stringify(buttons) === JSON.stringify(['Nevermind~', 'Hold to purify']), `reachable buttons ${JSON.stringify(buttons)}`);
+    const dialog = nodes.find((n) => n.role && n.role.value === 'alertdialog');
+    const said = dialog.description ? dialog.description.value : '';
+    assert(/^This will delete all 10 of your messages in art-share · ✿ Cozy Corner deleting as @princess\.dopa This can't be undone$/.test(said.replace(/\s+/g, ' ').trim()), `described as ${JSON.stringify(said)}`);
+    const live = page.locator('[data-role="modal-live"]');
+    assert(await live.getAttribute('aria-live') === 'assertive', 'an assertive region');
+    const press = () => page.locator('[data-act="confirm"]').evaluate((el) => el.click());
+    await page.waitForTimeout(400);
+    await press();
+    assert(await live.textContent() === 'Armed — press again within 5 seconds to purify, or Esc to cancel.', `armed: ${await live.textContent()}`);
+    await page.waitForTimeout(5300);
+    assert(await live.textContent() === 'Disarmed. Nothing was purged.', `lapsed: ${await live.textContent()}`);
+    await page.keyboard.press('Escape');
+    assert(await live.textContent() === '' && !(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="shell"]').inert)), 'closing clears the region and frees the panel');
+    assert(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.activeElement?.dataset.act) === 'purify', 'focus back on Purify');
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001', { world: manyDMs(buildWorld(), 126) });
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForSelector('[data-key="c:3250"]');
+    await page.click('[data-act="dm-all"]');
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    const dialog = (await ax(context, page)).find((n) => n.role && n.role.value === 'alertdialog');
+    const said = dialog.description ? dialog.description.value : '';
+    assert(said.length < 300 && /129 chats/.test(said) && !/Pal number/.test(said), `a ${said.length}-character description: ${said.slice(0, 120)}`);
+    // Tab: Nevermind → Hold → the list → Nevermind.
+    const focused = () => page.evaluate(() => { const el = document.querySelector('#dopa-purifier-host').shadowRoot.activeElement; return el && (el.dataset.act || el.className); });
+    const stops = [await focused()];
+    for (let i = 0; i < 3; i++) { await page.keyboard.press('Tab'); stops.push(await focused()); }
+    assert(stops.join() === 'cancel,confirm,modal-list,cancel', `Tab order ${stops}`);
+    await context.close();
+  }
+});
+
+await test('T131 Purify\'s glow switches with its fill, both ways', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { latencyMs: 300 });
+  // Every frame the bloom is either all there (with the gradient) or not at all (without it).
+  const watch = page.evaluate(() => new Promise((resolve) => {
+    const p = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-act="purify"]');
+    const bloom = getComputedStyle(p).boxShadow;
+    const odd = [];
+    let flips = 0;
+    let was = null;
+    const t0 = performance.now();
+    const look = () => {
+      const cs = getComputedStyle(p);
+      const fill = cs.backgroundImage !== 'none';
+      if (cs.boxShadow !== (fill ? bloom : 'none')) odd.push({ t: Math.round(performance.now() - t0), fill, glow: cs.boxShadow.slice(0, 40) });
+      if (was !== null && was !== fill) flips++;
+      was = fill;
+      if (performance.now() - t0 < 2500) requestAnimationFrame(look); else resolve({ odd, flips });
+    };
+    look();
+  }));
+  await page.click('[data-act="scan"]'); // Purify rests while the scan runs, then comes back
+  const { odd, flips } = await watch;
+  assert(flips >= 2, `Purify went off and on (${flips} flips)`);
+  assert(!odd.length, `the glow lagged the fill in ${odd.length} frames: ${JSON.stringify(odd.slice(0, 3))}`);
+  await context.close();
+});
+
+await test('T132 Stop keeps its place and its size when the run is paused', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { latencyMs: 30 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 3);
+  const running = await page.locator('[data-act="stop"]').boundingBox();
+  await page.click('[data-act="pause"]');
+  await page.waitForTimeout(300);
+  const paused = await page.locator('[data-act="stop"]').boundingBox();
+  const resume = await page.locator('[data-act="resume"]').boundingBox();
+  assert(paused.x === running.x && paused.width === running.width, `Stop moved: ${JSON.stringify({ running, paused })}`);
+  assert(resume.x < paused.x, 'Resume takes Pause\'s place');
+  await page.click('[data-act="stop"]');
+  await waitEnd(page, 5000);
+  await context.close();
+});
+
+// After a keyboard hold, focus moves to Pause. The key still down belongs to the hold: its repeats and
+// its release press nothing. The same after Esc mid-hold: they don't press Purify into a new dialog.
+await test('T133 after a keyboard hold focus is on Pause, and the held key presses nothing more', async () => {
+  const focused = (page) => page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.activeElement?.dataset.act);
+  for (const key of ['Space', 'Enter']) {
+    const { page, stats, context } = await boot('/channels/4001/5001', { latencyMs: 30 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    await page.locator('[data-act="purify"]').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Tab'); // Nevermind → Hold
+    await page.keyboard.down(key);
+    await page.waitForTimeout(1000);
+    assert(await focused(page) === 'pause', `${key}: focus after the hold ${await focused(page)}`);
+    for (let i = 0; i < 4; i++) await page.keyboard.down(key); // the keyboard's own repeats
+    await page.keyboard.up(key);
+    await page.waitForTimeout(300);
+    const run = await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.run);
+    assert(run === 'running', `${key}: the held key pressed Pause (${run})`);
+    await page.keyboard.press(key); // a fresh press is the person's
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.run === 'paused', null, { timeout: 2000 });
+    await page.click('[data-act="stop"]');
+    await waitEnd(page, 5000);
+    // Esc while still holding: the release lands on Purify and must not open the dialog again.
+    await page.locator('[data-act="purify"]').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Tab');
+    await page.keyboard.down(key);
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Escape');
+    for (let i = 0; i < 4; i++) await page.keyboard.down(key);
+    await page.keyboard.up(key);
+    await page.waitForTimeout(400);
+    assert(!(await isOpen(page)) && await focused(page) === 'purify', `${key}: after Esc mid-hold the dialog is ${await isOpen(page) ? 'open again' : 'closed'}, focus on ${await focused(page)}`);
+    assert(stats.deletes.length >= 1, `${key}: the hold purged`);
     await context.close();
   }
 });
