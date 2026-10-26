@@ -3,10 +3,12 @@
   // Discord says them. "Shield" is the verb and "immune" the state. Purify is the button and the
   // action, "purged" the result; "delete" appears plainly only in the confirm lead.
   // Lines stay short, kind and plain, above all when something goes wrong: errors reach the panel
-  // through plainError(), and Discord's own wording stays in the log. The yandere wit lives in the
-  // ring, the sticker, the dagger flourish, the mascot and the terminal. Each line has one job: the
-  // mood is personality, the readout the verdict, the footer confirms or names the next step, and
-  // nothing is said more than twice.
+  // through plainError(), and Discord's own wording stays in the log. A name from Discord set in a
+  // line of ours sits in bidi isolates (U+2068 … U+2069), so a right-to-left name can't reorder the
+  // words and numbers around it. The yandere wit lives in the ring, the sticker, the dagger
+  // flourish, the mascot and the terminal. Each line has one job: the mood is personality, the
+  // readout the verdict, the footer confirms or names the next step, and nothing is said more
+  // than twice.
   // Emoji. ♡ care and success, ✨ ready and done, 🦇 the rate-limit breather, 🩸 the confirm dialog
   // only. At most one per line, always as flair (aria-hidden), never on a warn or error line.
   // Status tones. info (rose dot), calm (what the person chose and Discord's normal pacing: paused,
@@ -409,16 +411,15 @@
   }
 
   function buildCurrentView() {
-    return h('div', { class: 'view', 'data-view': 'current', role: 'tabpanel', 'aria-label': 'Current channel' },
+    return h('div', { class: 'view', 'data-view': 'current', role: 'tabpanel', 'aria-label': 'This chat' },
       h('div', { class: 'target', 'data-role': 'target' },
         h('div', { class: 'target-ico', 'data-role': 'target-ico', 'aria-hidden': 'true', text: '#' }),
         h('div', { class: 'target-text' },
-          h('div', { class: 'eyebrow', 'data-role': 'eyebrow' }, h('i', { class: 'live-dot', 'aria-hidden': 'true' }), h('span', { 'data-role': 'eyebrow-text', text: 'Current channel' })),
+          h('div', { class: 'eyebrow', 'data-role': 'eyebrow' }, h('i', { class: 'live-dot', 'aria-hidden': 'true' }), h('span', { 'data-role': 'eyebrow-text', text: 'This chat' })),
           h('div', { class: 'target-line' },
-            h('span', { class: 'target-name', 'data-role': 'target-name', text: 'detecting…' }),
+            h('span', { class: 'target-name', 'data-role': 'target-name', text: 'finding this chat…' }),
             h('span', { class: 'target-context', 'data-role': 'target-context' })),
-          h('div', { class: 'target-viewing', 'data-role': 'target-viewing', hidden: true }),
-          h('div', { class: 'target-note', 'data-role': 'target-note', hidden: true })),
+          h('div', { class: 'target-viewing', 'data-role': 'target-viewing', hidden: true })),
         h('span', { class: 'target-tools', 'data-role': 'target-tools' })));
   }
 
@@ -433,14 +434,14 @@
       h('div', { class: 'section-title', text: 'Servers' }),
       h('div', { class: 'section-tools' },
         h('button', { class: 'chip icon-only', 'data-act': 'server-refresh', 'aria-label': 'Refresh servers', title: 'Refresh' }, icon('refresh'))));
-    return h('div', { class: 'view', 'data-view': 'batch', role: 'tabpanel', 'aria-label': 'Batch' },
+    return h('div', { class: 'view', 'data-view': 'batch', role: 'tabpanel', 'aria-label': 'Many chats' },
       h('div', { class: 'hint' }, h('span', { class: 'hint-ico', text: '💡' }),
         h('span', { text: 'Tip: Scan people first to see message counts and get accurate progress tracking!' })),
       h('input', { class: 'filter', type: 'search', 'data-role': 'filter', placeholder: 'Filter people & channels…', 'aria-label': 'Filter', spellcheck: 'false', autocomplete: 'off' }),
       dmHead,
-      h('div', { class: 'list', 'data-role': 'dm-list' }, h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' })),
+      h('div', { class: 'list', 'data-role': 'dm-list' }, h('div', { class: 'list-empty', text: 'Finding your DMs…' })),
       serverHead,
-      h('div', { class: 'list', 'data-role': 'server-list' }, h('div', { class: 'list-empty', text: 'Loading servers… 🏰' })));
+      h('div', { class: 'list', 'data-role': 'server-list' }, h('div', { class: 'list-empty', text: 'Finding your servers…' })));
   }
 
   function buildPanel() {
@@ -455,25 +456,24 @@
           h('button', { class: 'icon-btn', 'data-act': 'share', 'aria-label': 'Share with a friend', title: 'Share with a friend ♡' }, icon('share')),
           h('button', { class: 'icon-btn', 'data-act': 'mute', 'aria-label': 'Mute sound', title: 'Sound' }, icon('sound')),
           h('button', { class: 'icon-btn', 'data-act': 'minimize', 'aria-label': 'Minimise', title: 'Minimise' }, icon('minimize')))),
-      h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Mode' },
+      h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'What to purify' },
         h('span', { class: 'tab-pill', 'aria-hidden': 'true' }),
-        h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'Current channel' }),
-        h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Batch' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }))),
+        h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'This chat' }),
+        h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Many chats' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }))),
       h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-labelledby': 'dp-welcome-title' },
         h('div', { class: 'welcome-card' },
           h('div', { class: 'welcome-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
           h('div', { class: 'welcome-title', id: 'dp-welcome-title', text: 'Hi princess~ ♡' }),
-          h('div', { class: 'welcome-lead', text: 'Three steps and your messages are gone:' }),
+          h('div', { class: 'welcome-lead', text: 'Two steps and your messages are gone:' }),
           h('ol', { class: 'welcome-steps' },
             h('li', {}, h('span', {}, h('b', { text: 'Open a chat' }), ' — any DM, group or server channel')),
-            h('li', {}, h('span', {}, h('b', { text: 'Scan' }), ' to count your messages there')),
             h('li', {}, h('span', {}, h('b', { text: 'Purify' }), ', then hold the red button till it fills'))),
           h('div', { class: 'welcome-note' },
             icon('shield'),
             h('span', { text: 'Only your own messages, nothing leaves Discord, and anyone you shield is immune.' })),
           h('div', { class: 'welcome-actions' },
             h('button', { class: 'btn btn-purge', 'data-act': 'welcome-ok', text: 'Got it ♡' }),
-            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Purge many chats' })))),
+            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Purify many chats' })))),
       h('div', { class: 'body', 'data-role': 'body' },
         buildHero(),
         buildCurrentView(),
@@ -481,7 +481,8 @@
       h('footer', { class: 'foot' },
         h('div', { class: 'actions', 'data-role': 'idle-actions' },
           h('button', { class: 'btn btn-quiet', 'data-act': 'scan' }, icon('scan'), h('span', { 'data-role': 'scan-label', text: 'Scan' })),
-          h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true }))),
+          h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true })),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'go-batch', hidden: true }, icon('sparkle'), h('span', { text: 'Purify many chats' }))),
         h('div', { class: 'actions', 'data-role': 'run-actions', hidden: true },
           h('button', { class: 'btn btn-quiet', 'data-act': 'pause' }, icon('pause'), h('span', { text: 'Pause' })),
           h('button', { class: 'btn btn-purge', 'data-act': 'resume', hidden: true }, icon('play'), h('span', { text: 'Resume' })),
@@ -496,7 +497,7 @@
   function buildTerminal() {
     return h('section', { class: 'term', 'aria-label': 'Purifier log', hidden: true },
       h('header', { class: 'term-head', 'data-role': 'term-drag' },
-        h('span', { class: 'term-title', text: 'DOPA-OS ♡ PURIFIER MAINFRAME' }),
+        h('span', { class: 'term-title' }, 'DOPA-OS ♡ ', h('span', { class: 'term-title-mid', text: 'PURIFIER ' }), 'MAINFRAME'),
         h('button', { class: 'icon-btn', 'data-act': 'copy-log', 'aria-label': 'Copy log', title: 'Copy log' }, icon('copy')),
         h('button', { class: 'icon-btn', 'data-act': 'close-log', 'aria-label': 'Close log', title: 'Close' }, icon('close'))),
       h('div', { class: 'term-screen' }, h('div', { class: 'term-body', 'data-role': 'term-body', role: 'log', 'aria-live': 'off' })),
@@ -552,12 +553,19 @@
   // ── Status, meter, gauge ────────────────────────────────
 
   // Per-kill updates are quiet (aria-live off) so screen readers aren't read every deletion. The
-  // flair is the line's one emoji from the palette above.
+  // flair is the line's one emoji from the palette above. A new line ends any wait's countdown.
+  let waitTick = 0;
   function setStatus(text, tone = 'info', { quiet = false, flair = '' } = {}) {
+    clearInterval(waitTick);
+    waitTick = 0;
+    paintStatus(text, tone, { quiet, flair });
+  }
+
+  function paintStatus(text, tone, { quiet, flair }) {
     const el = $('[data-role="status"]');
     el.setAttribute('aria-live', quiet ? 'off' : 'polite');
     $('[data-role="status-text"]').replaceChildren(...flaired(text, flair));
-    el.title = text; // the line truncates; hover shows all of it
+    el.title = text; // past two lines the line is clamped; hover shows all of it
     el.dataset.tone = tone;
   }
 
@@ -746,10 +754,17 @@
     return t >= 3600 ? `${Math.floor(t / 3600)}:${two(Math.floor((t % 3600) / 60))}:${two(t % 60)}` : `${two(Math.floor(t / 60))}:${two(t % 60)}`;
   }
 
-  // ── Current channel ─────────────────────────────────────
+  // ── This chat ───────────────────────────────────────────
 
-  // A real lookup failure (not just "no chat open"): Scan becomes Retry.
+  // A real lookup failure (not just "no chat open"): Scan becomes Try again.
   const describeFailed = () => !!state.targetError && state.targetError !== 'none';
+
+  // The last count of this chat failed: Scan becomes Try again, one request the person asks for.
+  const scanFailed = (t) => !!t && !!state.scanError && state.scanError.channelId === t.channelId;
+
+  // Discord won't let you read or delete in this chat: a purge could only fail, so Purify waits
+  // until a Try again reads it.
+  const blockedHere = (t) => (scanFailed(t) && state.scanError.blocking) || (!!t && describeFailed() && !!state.targetPlain && state.targetPlain.blocking);
 
   let describeSeq = 0;
   async function refreshRoute({ keepScan = false, keepStatus = false } = {}) {
@@ -769,7 +784,7 @@
     state.scanError = null;
     const seq = ++describeSeq;
     renderCurrent();
-    if (!route) { if (!run.active) setStatus('Open a chat to purify~', 'info'); return; }
+    if (!route) { if (!run.active) setStatus('Ready when you are~', 'info', { flair: '✨' }); return; }
     try {
       const target = await describeRoute(route);
       if (seq !== describeSeq) return; // user moved on while we were asking
@@ -778,10 +793,12 @@
       else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~', 'info', { flair: '✨' });
     } catch (err) {
       if (seq !== describeSeq) return;
-      state.target = { channelId: route.channelId, guildId: route.guildId, kind: route.guildId ? 'guild' : 'dm', name: route.channelId, context: '', protected: false };
+      // Unread, it has no name we can trust; the id would only confuse.
+      state.target = { channelId: route.channelId, guildId: route.guildId, kind: route.guildId ? 'guild' : 'dm', name: 'this chat', context: '', protected: false };
       state.targetError = err.message;
       state.targetPlain = plainError(err);
-      setStatus(`Couldn't read this channel: ${err.message} 😿`, 'error');
+      addLog(`couldn't read this chat · ${err.message}`, 'error');
+      setStatus(state.targetPlain.short, 'error');
     }
     renderCurrent();
   }
@@ -790,33 +807,32 @@
     const runningHere = run.active && state.runMode === 'current';
     const shown = runningHere ? state.runTargets[0] : state.target;
     const card = $('[data-role="target"]');
-    card.dataset.state = runningHere ? (run.paused ? 'paused' : 'live') : (shown && shown.protected ? 'immune' : 'idle');
+    const blocked = !runningHere && blockedHere(shown);
+    const checking = lastLook();
+    card.dataset.state = runningHere ? (run.paused ? 'paused' : 'live') : shown && shown.protected ? 'immune' : blocked ? 'blocked' : 'idle';
+    card.toggleAttribute('data-checking', checking);
     const purified = !runningHere && lastEnd && lastEnd.key === contextKey() && !lastEnd.stopped && !lastEnd.error && !lastEnd.problems && !lastEnd.shielded
       && !(shown && shown.protected) && state.tab === 'current';
     if (purified) card.dataset.state = 'purified';
     const eyebrow = $('[data-role="eyebrow-text"]');
-    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purging']));
+    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purging']));
     else if (shown && shown.protected) eyebrow.replaceChildren(icon('crown', 'ico-crown'), 'Immune');
     else if (purified) eyebrow.replaceChildren(icon('check'), lastEnd.failed ? 'Mostly purified' : 'Purified');
-    else eyebrow.replaceChildren(shown && !shown.guildId ? (shown.kind === 'group' ? 'Group DM' : 'Direct message') : 'Current channel');
+    else if (blocked) eyebrow.replaceChildren('No access');
+    else eyebrow.replaceChildren(!shown ? 'This chat' : shown.guildId ? 'Server channel' : shown.kind === 'group' ? 'Group DM' : 'Direct message');
     if (purified && lastEnd.failed) card.dataset.state = 'partial';
-    const ico = $('[data-role="target-ico"]');
-    if (shown && shown.protected) ico.replaceChildren(icon('shield'));
-    else ico.textContent = !shown ? '✦' : shown.guildId ? '#' : (shown.kind === 'group' ? '👥' : '@');
+    $('[data-role="target-ico"]').replaceChildren(shown && shown.protected ? icon('shield') : !shown ? '✦' : shown.guildId ? '#' : shown.kind === 'group' ? icon('group') : '@');
     // DMs can be shielded right from the card.
     const tools = $('[data-role="target-tools"]');
     const partner = !runningHere && shown && shown.partner;
     tools.replaceChildren(...(partner ? [shieldButton(partner, { protectedNow: !!shown.protected, label: shown.name })] : []));
-    const note = $('[data-role="target-note"]');
-    note.hidden = !purified;
-    note.textContent = purified ? (lastEnd.failed ? `${lastEnd.failed.toLocaleString()} wouldn't budge — see logs` : 'Nothing left of you here~') : '';
     const name = $('[data-role="target-name"]');
     const context = $('[data-role="target-context"]');
     if (shown) {
       name.textContent = shown.guildId ? shown.name.replace(/^#/, '') : shown.name;
       context.textContent = shown.guildId ? shown.context : '';
     } else {
-      name.textContent = state.targetError === 'none' ? 'No channel open' : 'detecting…';
+      name.textContent = state.targetError === 'none' ? 'No chat open' : 'finding this chat…';
       context.textContent = '';
     }
     context.hidden = !context.textContent;
@@ -843,7 +859,9 @@
     $('[data-act="resume"]').hidden = !run.paused;
     $('[data-act="pause"]').disabled = run.stopping;
     $('[data-act="resume"]').disabled = run.stopping;
-    $('[data-act="stop"]').disabled = run.stopping;
+    // Stopping, Stop keeps focus (and says it's busy) until the run ends and hands it on.
+    const stop = $('[data-act="stop"]');
+    if (run.stopping) stop.setAttribute('aria-disabled', 'true'); else stop.removeAttribute('aria-disabled');
     const scan = $('[data-act="scan"]');
     const purify = $('[data-act="purify"]');
     const scanLabel = $('[data-role="scan-label"]');
@@ -853,27 +871,41 @@
     const badge = $('[data-role="tab-badge"]');
     badge.textContent = String(rows.length);
     badge.hidden = !rows.length;
+    // No chat open: the one useful thing left is the other tab.
+    const noChat = state.tab === 'current' && state.targetError === 'none';
+    if (noChat) idle.dataset.mode = 'none'; else delete idle.dataset.mode;
+    scan.hidden = noChat;
+    purify.hidden = noChat;
+    $('[data-act="go-batch"]').hidden = !noChat;
+    // Purify counting before it asks: busy, still focused, and deaf to more presses until it lands.
+    const counting = !!state.counting;
+    if (counting) purify.setAttribute('aria-busy', 'true'); else purify.removeAttribute('aria-busy');
+    let clean = false;
     if (state.tab === 'current') {
       const t = state.target;
       const usable = !!t && !t.protected && !state.targetError;
       const n = usable ? counts.get(t.channelId) : undefined;
-      const retry = describeFailed();
-      scan.disabled = !usable && !state.scanning && !retry;
-      purify.disabled = !usable || state.scanning || (n === 0 && !isPartialCount(t.channelId));
-      scanLabel.textContent = state.scanning ? 'Cancel scan' : retry ? 'Retry' : (n !== undefined ? 'Scan again' : 'Scan');
-      purifyLabel.textContent = 'Purify';
+      const retry = describeFailed() || scanFailed(t);
+      clean = usable && n === 0 && !isPartialCount(t.channelId);
+      scan.disabled = (!usable && !state.scanning && !describeFailed()) || counting;
+      purify.disabled = !usable || state.scanning || clean || blockedHere(t);
+      scanLabel.textContent = state.scanning ? 'Cancel scan' : retry ? 'Try again' : (n !== undefined ? 'Scan again' : 'Scan');
+      purifyLabel.textContent = counting ? 'Counting…' : 'Purify';
       purifyCount.textContent = n ? n.toLocaleString() : '';
-      purifyCount.hidden = !n;
+      purifyCount.hidden = !n || counting;
     } else {
       scan.disabled = !rows.length && !state.scanning;
-      // Nothing left to purge in any selected chat (all scanned at 0): nothing to offer.
-      const allClear = rows.length && rows.every((r) => r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId));
-      purify.disabled = !rows.length || state.scanning || allClear;
+      // Nothing left to do in any selected chat (all counted at 0, or closed to us): nothing to offer.
+      const empty = (r) => !!r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId);
+      clean = rows.length > 0 && rows.every(empty);
+      purify.disabled = !rows.length || state.scanning || rows.every((r) => empty(r) || accessError(r));
       scanLabel.textContent = state.scanning ? 'Cancel scan' : 'Scan selected';
       purifyLabel.textContent = 'Purify selected';
       purifyCount.textContent = String(rows.length);
       purifyCount.hidden = !rows.length;
     }
+    // Resting, not broken: there is simply nothing of yours left to purge.
+    purify.classList.toggle('is-clean', clean);
     const busy = run.active || state.scanning;
     for (const row of state.batchRows.values()) if (row.box) row.box.disabled = busy;
     for (const act of ['dm-all', 'dm-none', 'dm-refresh', 'server-refresh']) $(`[data-act="${act}"]`).disabled = busy;
@@ -942,29 +974,31 @@
     const t = state.target;
     if (!t || t.protected || run.active || state.scanning) return;
     const signal = beginScan('current');
-    setStatus('Counting your messages… 🔍', 'info');
+    setStatus('Counting your messages…', 'info');
     try {
       const n = await countMine(t, {
         signal,
-        onWait: (w) => setStatus(waitText(w), 'warn'),
-        onProgress: ({ count, scanned }) => setStatus(`Scanning… found ${count.toLocaleString()} so far (${scanned.toLocaleString()} checked) 🔍`, 'info', { quiet: true }),
+        onWait: showWait,
+        onProgress: ({ count, scanned }) => setStatus(`Checked ${scanned.toLocaleString()} · ${count.toLocaleString()} of yours so far`, 'info', { quiet: true }),
       });
       counts.set(t.channelId, n);
       if (lastEnd && lastEnd.key === `c:${t.channelId}`) lastEnd = null;
-      const here = state.target && state.target.channelId === t.channelId;
-      const where = here ? '' : ` in ${t.name}`;
+      // Measured against the address, so a chat being re-read (an account switch) still counts as here.
+      const here = !state.route || state.route.channelId === t.channelId;
+      const where = here ? '' : ` in \u2068${t.name}\u2069`;
       // Shielded while we were counting: there's nothing to offer here any more.
-      if (here && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
+      if (here && state.target && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
       else if (isPartialCount(t.channelId)) {
-        setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones 📚` : `Discord is still indexing${where}~ older messages may be hiding 📚`, 'warn');
-      } else {
-        setStatus(n ? `${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge ✨` : `All clear${where}! No messages to purge~ ✨`, 'success');
-      }
+        setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones` : `Discord is still indexing${where}~ older messages may be hiding`, 'warn');
+      } else if (n) {
+        setStatus(`${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge`, 'success', { flair: '✨' });
+      } else setStatus(`All clear~ nothing of yours ${here ? 'here' : `in \u2068${t.name}\u2069`}`, 'success', { flair: '✨' });
     } catch (err) {
       if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
       else {
         state.scanError = { channelId: t.channelId, ...plainError(err) };
-        setStatus(`Scan error: ${err.message} 😿`, 'error');
+        addLog(`scan failed · ${err.message}`, 'error');
+        setStatus(state.scanError.short, 'error');
       }
     } finally {
       endScan();
@@ -981,6 +1015,8 @@
     let grand = 0;
     let deferred = 0;
     let indexing = 0;
+    let missed = 0;
+    let missedWhy = '';
     let searched = false;
     try {
       for (let i = 0; i < rows.length; i++) {
@@ -989,27 +1025,36 @@
         // Search is Discord's tightest limit: pace it like a purge does instead of leaning on 429s.
         if (searched) await sleep(TIMING.searchDelayMs, signal);
         searched = true;
-        setStatus(`Scanning ${i + 1}/${rows.length}: ${row.label}… 🔍`, 'info', { quiet: true });
+        setStatus(`Counting ${i + 1} of ${rows.length} · \u2068${row.display}\u2069`, 'info', { quiet: true });
         setRowState(row, 'scanning');
         try {
-          const n = await countMine(row, { signal, onWait: (w) => setStatus(waitText(w), 'warn') });
+          const n = await countMine(row, { signal, onWait: showWait });
           counts.set(row.channelId, n);
           grand += n;
           if (isPartialCount(row.channelId)) indexing++;
           setRowState(row, isPartialCount(row.channelId) ? 'indexing' : n ? 'ready' : 'clean');
         } catch (err) {
           if (err instanceof Stopped || err.status === 401 || err.code === 'captcha') throw err;
+          addLog(`scan failed · ${row.label} · ${err.message}`, 'error');
           setRowState(row, 'error', err.message);
+          if (!missed++) missedWhy = err.message;
         }
+        renderHero(); // the strip keeps up as each chat lands
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
-      if (!searched) setStatus(`${plural(deferred, 'friend')} counted at purge~ ♡`, 'info');
-      else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')} 📚`, 'warn');
-      else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(rows.length - deferred, 'chat')} ✨`, 'success');
+      const counted = rows.length - deferred - missed;
+      if (!searched) setStatus("Closed DMs are counted as they're purged~", 'info', { flair: '♡' });
+      else if (missed) setStatus(`Scan done~ ${plural(grand, 'message')} · ${plural(missed, 'chat')} skipped · ${shortReason(missedWhy)}${missed > 1 ? ' and more' : ''}`, 'warn');
+      else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')}`, 'warn');
+      else if (!grand) setStatus(`All clear~ nothing of yours in ${counted === 1 ? 'that chat' : `those ${counted} chats`}`, 'success', { flair: '✨' });
+      else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(counted, 'chat')}`, 'success', { flair: '✨' });
     } catch (err) {
       for (const row of rows) if (row.status === 'scanning') setRowState(row, 'idle');
       if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
-      else setStatus(`Scan error: ${err.message} 😿`, 'error');
+      else {
+        addLog(`scan failed · ${err.message}`, 'error');
+        setStatus(plainError(err).short, 'error');
+      }
     } finally {
       endScan();
       renderHero();
@@ -1017,11 +1062,27 @@
     }
   }
 
-  function waitText(w) {
-    if (w.kind === 'rate') return `Rate limited~ waiting ${Math.ceil(w.seconds)}s… 🦇 zzz…`;
-    if (w.kind === 'index') return 'Discord is still indexing this chat~ hang on… 📚';
-    if (w.kind === 'network') return `Connection hiccup~ retrying in ${Math.ceil(w.seconds)}s… 📡`;
-    return `Discord is having a moment~ retrying in ${Math.ceil(w.seconds)}s…`;
+  // Short enough for the one line a running footer has, seconds included.
+  function waitText(w, s = Math.max(1, Math.ceil(w.seconds))) {
+    if (w.kind === 'rate') return `Taking a breather~ back in ${s}s`;
+    if (w.kind === 'index') return 'Discord is still indexing~ hang on…';
+    if (w.kind === 'network') return `Connection hiccup~ retrying in ${s}s`;
+    return `Discord is busy~ retrying in ${s}s`;
+  }
+
+  // Discord's own pacing, said calmly. The seconds count down here, once a second and with no
+  // requests; the next line the panel says ends the countdown. Screen readers hear the first line.
+  function showWait(w) {
+    const end = Date.now() + w.seconds * 1000;
+    const left = () => Math.max(1, Math.ceil((end - Date.now()) / 1000));
+    const flair = w.kind === 'rate' ? '🦇' : '';
+    setStatus(waitText(w, left()), 'calm', { flair });
+    if (w.kind === 'index' || left() <= 1) return;
+    waitTick = setInterval(() => {
+      const s = left();
+      paintStatus(waitText(w, s), 'calm', { quiet: true, flair });
+      if (s <= 1) { clearInterval(waitTick); waitTick = 0; }
+    }, 1000);
   }
 
   // Discord's errors in the panel's own words: `line` for the readout, `short` for the footer, and
@@ -1052,6 +1113,15 @@
     if (known) return { line: known.line, short: known.short, code: known.code, blocking: !!known.blocking };
     const said = message.replace(/\s*\(code \d+\)$/, '').replace(/^HTTP (\d+)$/, 'error $1') || 'something went wrong';
     return { line: `Discord said: ${said}`, short: said.length > 28 ? `${said.slice(0, 27)}…` : said, code: 'other', blocking: false };
+  }
+
+  // A list that couldn't load, in a list's words: its retry is its own ↻ (not This chat's Try
+  // again), and logging in fills the lists by itself. Discord's wording goes to the log.
+  function listError(what, err) {
+    addLog(`couldn't load ${what} · ${err.message}`, 'error');
+    const p = plainError(err);
+    if (p.code === 'logged-out') return "You're logged out of Discord~ log in and your chats show up here";
+    return `${p.code === 'other' ? p.line : p.short} · press ↻ to try again`;
   }
 
   // The dialog names the account doing the deleting, so a switched account can't surprise anyone.
@@ -1166,11 +1236,17 @@
     el.title = detail || '';
   }
 
+  // Why one message or chat didn't go, in two or three words. Anything else is Discord's own
+  // words, without its code.
   function shortReason(reason) {
     if (/Missing Access/i.test(reason)) return 'no access';
     if (/Missing Permissions/i.test(reason)) return 'no permission';
     if (/indexing/i.test(reason)) return 'still indexing';
-    return reason.length > 28 ? `${reason.slice(0, 27)}…` : reason;
+    if (/system message/i.test(reason)) return 'system message';
+    if (/archived/i.test(reason)) return 'archived thread';
+    if (/Unknown Message/i.test(reason)) return 'already gone';
+    if (/captcha/i.test(reason)) return 'captcha';
+    return plainError(reason).short;
   }
 
   function initials(name) {
@@ -1255,17 +1331,15 @@
     }
     const seq = ++dmSeq;
     state.dmsLoading = true;
-    list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' }));
+    list.replaceChildren(h('div', { class: 'list-empty', text: 'Finding your DMs…' }));
     try {
       const [channels, relationships] = await Promise.all([listDMs(), listRelationships()]);
       if (seq !== dmSeq) return;
       state.dmData = { channels, relationships };
-      const counted = renderDMs();
-      // A routine "loaded" never buries an error the user hasn't read yet.
-      if (state.tab === 'batch' && !run.active && $('[data-role="status"]').dataset.tone !== 'error') setStatus(`Loaded ${plural(counted.dms, 'DM')} + ${plural(counted.friends, 'friend')} ✨`, 'success');
+      renderDMs();
     } catch (err) {
       if (seq !== dmSeq) return;
-      list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load DMs 😿 ${err.message}` }));
+      list.replaceChildren(h('div', { class: 'list-empty', text: listError('your DMs', err) }));
     } finally {
       if (seq === dmSeq) state.dmsLoading = false;
     }
@@ -1310,16 +1384,17 @@
     list.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r)) : [h('div', { class: 'list-empty', text: 'No DMs or friends found~' })]));
     state.dmsLoaded = true;
     applyFilter();
-    const dmRows = rows.filter((r) => r.kind !== 'friend').length;
-    return { dms: dmRows, friends: rows.length - dmRows };
   }
 
   // ── Protection ──────────────────────────────────────────
 
+  // Who is immune, by person rather than by account name: 'Bardo & Dopa ♡ + 1 you shielded'.
+  const IMMUNE_PEOPLE = { bardo: 'Bardo', bardosama: 'Bardo', dopameanie: 'Dopa', dopa_meanie: 'Dopa' };
+
   function immuneSummary() {
-    const names = [...PROTECTED_USERNAMES].filter((n) => !protection.released.has(n));
-    const extra = protection.ids.size ? ` + ${protection.ids.size} shielded` : '';
-    return (names.join(', ') || 'nobody yet') + extra;
+    const people = [...new Set([...PROTECTED_USERNAMES].filter((n) => !protection.released.has(n)).map((n) => IMMUNE_PEOPLE[n] || n))];
+    const named = people.length ? `${people.join(' & ')} ♡` : 'nobody yet';
+    return protection.ids.size ? `${named} + ${protection.ids.size} you shielded` : named;
   }
 
   function toggleProtection(user) {
@@ -1336,7 +1411,7 @@
       protection.released = before.released;
       if (synced) protectionChanged();
       addLog(`couldn't save the shield for ${name} — Discord's storage is full or blocked`, 'error');
-      setStatus(`Couldn't save~ ${name} is ${shield ? 'not immune' : 'still immune'} (Discord's storage is full or blocked) 😿`, 'error');
+      setStatus(`Couldn't save~ ${name} is ${shield ? 'not immune' : 'still immune'} (Discord's storage is full or blocked)`, 'error');
       return;
     }
     addLog(shield ? `shielded ${name} — they're immune now ♡` : `${name} is no longer immune`, 'info');
@@ -1389,7 +1464,7 @@
     }
     const seq = ++guildSeq;
     state.guildsLoading = true;
-    list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading servers… 🏰' }));
+    list.replaceChildren(h('div', { class: 'list-empty', text: 'Finding your servers…' }));
     try {
       const guilds = await myGuilds({ refresh });
       if (seq !== guildSeq) return;
@@ -1399,7 +1474,7 @@
       applyFilter();
     } catch (err) {
       if (seq !== guildSeq) return;
-      list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load servers 😿 ${err.message}` }));
+      list.replaceChildren(h('div', { class: 'list-empty', text: listError('your servers', err) }));
     } finally {
       if (seq === guildSeq) state.guildsLoading = false;
     }
@@ -1434,7 +1509,7 @@
           syncGuildChecks();
         }, (err) => {
           loading = null;
-          channelsEl.replaceChildren(h('div', { class: 'list-empty', text: `Couldn't load channels 😿 ${err.message}` }));
+          channelsEl.replaceChildren(h('div', { class: 'list-empty', text: listError(`${guild.name}'s channels`, err) }));
           throw err;
         });
       }
@@ -1692,7 +1767,7 @@
     return [
       bannerLine('wake up, princess~'),
       bannerLine('loading heart.sys · dagger.dll'),
-      bannerLine(`immune list · ${immuneSummary()} ♡`),
+      bannerLine(`immune · ${immuneSummary()}`),
       bannerLine('♡ SYSTEM ONLINE ♡'),
       bannerLine('AWAITING ORDERS, PRINCESS~'),
       h('div', { class: 'line banner rule' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text: '♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡' })),
@@ -1721,11 +1796,12 @@
     $('[data-role="term-body"]').replaceChildren(...logBanner());
   }
 
-  function addLog(text, tone = 'info', { scrub } = {}) {
+  // wrap: a line worth reading whole (a link to copy) wraps instead of ending in an ellipsis.
+  function addLog(text, tone = 'info', { scrub, wrap = false } = {}) {
     const body = $('[data-role="term-body"]');
     const pinned = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
     const time = new Date().toTimeString().slice(0, 8);
-    const line = h('div', { class: `line ${tone}` },
+    const line = h('div', { class: `line ${tone}${wrap ? ' wrap' : ''}` },
       h('span', { class: 'line-time', text: time }),
       h('span', { class: 'line-pfx', text: LOG_PREFIX[tone] || '›' }),
       h('span', { class: 'line-msg', text }));
@@ -1738,38 +1814,70 @@
 
   function preview(msg, max = 56) {
     const text = (msg.content || '').replace(/\s+/g, ' ').trim();
-    if (!text) return msg.attachments && msg.attachments.length ? '[attachment]' : '[embed/sticker]';
+    if (!text) return msg.attachments && msg.attachments.length ? '[attachment]' : '[sticker or embed]';
     const chars = [...text];
     return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : text;
   }
 
+  // The log boots in and fades out the way it came; opening it again mid-fade keeps it.
+  let logExit = null;
+
   function toggleLog(force) {
     const term = $('.term');
-    const open = force != null ? force : term.hidden;
-    term.hidden = !open;
+    const isOpen = !term.hidden && !logExit;
+    const open = force != null ? force : !isOpen;
     $('[data-act="logs"]').setAttribute('aria-pressed', String(open));
-    $('[data-role="logs-label"]').textContent = 'Logs';
     if (open) {
-      placeTerminal();
-      term.dataset.boot = 'true';
-      setTimeout(() => { delete term.dataset.boot; }, 700);
+      if (logExit) {
+        logExit.cancel();
+        logExit = null;
+        delete term.dataset.leaving;
+      } else if (term.hidden) {
+        term.hidden = false;
+        placeTerminal();
+        term.dataset.boot = 'true';
+        setTimeout(() => { delete term.dataset.boot; }, 400);
+      }
       const body = $('[data-role="term-body"]');
       body.scrollTop = body.scrollHeight;
+    } else if (isOpen) {
+      term.dataset.leaving = 'true'; // clicks go through it to whatever is underneath
+      const exit = term.animate(reducedMotion() ? [{ opacity: 1 }, { opacity: 0 }]
+        : [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(4px) scale(.985)' }], { duration: 140, easing: 'cubic-bezier(.4,0,1,1)' });
+      logExit = exit;
+      exit.finished.then(() => {
+        if (logExit !== exit) return;
+        logExit = null;
+        delete term.dataset.leaving;
+        term.hidden = true;
+        applyFocus();
+      }, () => {});
     }
     applyFocus();
   }
 
+  // The log sits beside the panel, on whichever side has room for it, and narrows to fit. With
+  // no room on either side it tucks behind the panel, so Pause and Stop always stay in reach.
   function placeTerminal() {
     const term = $('.term');
     if (term.hidden) return;
     const panel = $('.panel').getBoundingClientRect();
-    const w = term.offsetWidth || 380;
-    const hgt = term.offsetHeight || 420;
+    const hgt = term.offsetHeight || 440;
     const gap = 14;
-    let left = panel.left - w - gap;
-    if (left < 8) left = panel.right + gap;
-    if (left + w > innerWidth - 8) left = clamp(innerWidth - w - 8, 8, innerWidth);
+    const MIN = 280;
+    const roomL = panel.left - gap - 8;
+    const roomR = innerWidth - panel.right - gap - 8;
+    let w = Math.min(380, innerWidth - 16);
+    let left = 8;
+    if (roomL >= MIN) {
+      w = Math.min(380, roomL);
+      left = panel.left - gap - w;
+    } else if (roomR >= MIN) {
+      w = Math.min(380, roomR);
+      left = panel.right + gap;
+    }
     const top = clamp(panel.top, 8, Math.max(8, innerHeight - hgt - 8));
+    term.style.width = `${Math.round(w)}px`;
     term.style.left = `${Math.round(left)}px`;
     term.style.top = `${Math.round(top)}px`;
   }
@@ -2031,8 +2139,9 @@
   function renderMute() {
     const btn = $('[data-act="mute"]');
     btn.replaceChildren(icon(prefs.muted ? 'muted' : 'sound'));
-    btn.setAttribute('aria-label', prefs.muted ? 'Unmute sound' : 'Mute sound');
+    // A toggle keeps one name; aria-pressed says which way it is.
     btn.setAttribute('aria-pressed', String(prefs.muted));
+    btn.title = prefs.muted ? 'Unmute sound' : 'Mute sound';
   }
 
   // ── Welcome & share ─────────────────────────────────────
@@ -2047,12 +2156,17 @@
     if (document.activeElement === document.body) $('[data-act="welcome-ok"]').focus({ preventScroll: true });
   }
 
+  // The card is gone for focus and clicks at once; it only fades for the eye, as it came in.
   function hideWelcome() {
     const w = $('[data-role="welcome"]');
+    if (w.hidden || w.dataset.leaving) return;
     if (w.contains(root.activeElement)) handFocus('.tab[aria-selected="true"]');
-    w.hidden = true;
     for (const el of underWelcome()) el.inert = false;
+    w.dataset.leaving = 'true';
+    w.inert = true;
     applyFocus();
+    const gone = () => { w.hidden = true; w.inert = false; delete w.dataset.leaving; };
+    w.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-out' }).finished.then(gone, gone);
     prefs.welcomed = true;
     savePrefs('welcomed');
   }
@@ -2061,19 +2175,25 @@
     const text = `Dopa's Discord Purifier — wipe your own Discord messages in a few clicks~ ✨ ${SHARE_URL}`;
     try {
       await navigator.clipboard.writeText(text);
-      setStatus('Install link copied~ send it to a friend ♡', 'success');
+      addLog(`share link: ${SHARE_URL}`, 'info');
+      setStatus('Install link copied~ send it to a friend', 'success', { flair: '♡' });
     } catch {
-      setStatus(`Share this link~ ${SHARE_URL}`, 'info');
+      // Discord can lock the clipboard: the link waits in the log, whole, to select and copy.
+      addLog(`share link: ${SHARE_URL}`, 'info', { wrap: true });
+      setStatus("Couldn't copy~ the link is waiting in Logs", 'info', { flair: '♡' });
+      toggleLog(true);
     }
-    addLog(`share link: ${SHARE_URL}`, 'info');
   }
 
   // ── Run events → UI ─────────────────────────────────────
 
+  // The last look over a counted chat, after its last message went: the card says so.
+  const lastLook = () => run.active && !run.paused && state.runMode === 'current' && verifying();
+
   function wireRunEvents() {
     on('start', ({ targets }) => {
       $('[data-role="count"]').textContent = '0';
-      setStatus(targets.length > 1 ? `Batch purge starting~ ${plural(targets.length, 'chat')} ✨` : `Purging ${targets[0].name}~ ✨`, 'info');
+      setStatus(targets.length > 1 ? `Starting on ${plural(targets.length, 'chat')}~` : `Purging \u2068${targets[0].name}\u2069~`, 'info', { flair: '✨' });
       for (const t of targets) addLog(`queued: ${t.label || t.name}`, 'info');
       renderCurrent();
       renderActions();
@@ -2081,17 +2201,17 @@
     on('target-start', ({ target, index, count }) => {
       setPrompt(`purge ${target.name}`);
       addLog(`── Starting: ${target.label || target.name} ──`, 'info');
-      if (count > 1) setStatus(`Batch ${index + 1}/${count}: ${target.label || target.name}`, 'info');
+      if (count > 1) setStatus(`Chat ${index + 1} of ${count} · \u2068${target.name}\u2069`, 'info');
       if (target.row) setRowState(target, 'running');
       revealRow(target);
     });
     on('dm-opened', ({ target, previousKey }) => {
       if (target.row) rekeyRow(target, previousKey);
-      addLog(`opened a DM with ${target.name} 💬`, 'info');
+      addLog(`opened a DM with ${target.name}`, 'info');
     });
     on('progress', (p) => {
       renderProgress(p);
-
+      if (lastLook() !== $('[data-role="target"]').hasAttribute('data-checking')) renderCurrent();
     });
     on('kill', ({ target, msg }) => {
       ring.done++;
@@ -2099,15 +2219,20 @@
       popCount();
       bleed();
       addLog(`Deleted: "${preview(msg)}"`, 'success', { scrub: `Deleted ✓ ${target.name}` });
-      if (!run.paused && !run.stopping) setStatus(`Deleted "${preview(msg, 34)}" ♡`, 'info', { quiet: true });
+      if (!run.paused && !run.stopping) {
+        if (state.runMode === 'batch') {
+          const i = state.runTargets.indexOf(target) + 1;
+          setStatus(`Chat ${i} of ${state.runTargets.length} · \u2068${target.name}\u2069 · ${target.deleted.toLocaleString()} of ${target.planned ? target.planned.toLocaleString() : '?'}`, 'info', { quiet: true });
+        } else setStatus(`Deleted "${preview(msg, 34)}"`, 'info', { quiet: true, flair: '♡' });
+      }
       if (target.row) setRowState(target, 'running');
     });
     on('fail', ({ target, msg, reason }) => {
       ring.fails.push(ring.done);
       ring.done++;
       const tags = [msg.pinned && 'pinned', msg.type && msg.type !== 0 && msg.type !== 19 && 'system'].filter(Boolean);
-      addLog(`FAILED${tags.length ? ` (${tags.join(', ')})` : ''}: "${preview(msg)}" — ${reason}`, 'error');
-      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}" — ${shortReason(reason)}`, 'warn', { quiet: true });
+      addLog(`FAILED · ${shortReason(reason)}${tags.length ? ` · ${tags.join(', ')}` : ''} · "${preview(msg, 40)}"`, 'error');
+      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}" · ${shortReason(reason)}`, 'warn', { quiet: true });
       if (target.row) setRowState(target, 'running');
     });
     on('gone', ({ msg }) => {
@@ -2117,8 +2242,9 @@
     on('account-changed', () => {
       if (modal) closeDialog(false);
       cancelCount();
+      // A run the switch stopped keeps its verdict on screen; anything else was the old account's.
       const keepVerdict = lastEnd && lastEnd.error;
-      lastEnd = null;
+      if (!keepVerdict) lastEnd = null;
       state.selected.clear();
       state.batchRows.clear();
       state.dmsLoaded = false;
@@ -2128,48 +2254,54 @@
       state.dmsLoading = false;
       state.guildsLoading = false;
       state.route = null;
-      $('[data-role="dm-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' }));
-      $('[data-role="server-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Loading servers… 🏰' }));
+      $('[data-role="dm-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your DMs…' }));
+      $('[data-role="server-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your servers…' }));
       addLog('switched Discord accounts — counts and lists reset', 'warn');
-      if (!keepVerdict) setStatus('New account~ counts cleared 🔄', 'warn');
+      if (!keepVerdict) setStatus('Switched Discord accounts~ scan again to count', 'warn');
       if (state.tab === 'batch' && !run.active) { loadDMs(); loadServers({ refresh: true }); }
       // Re-read the chat without a fresh "Ready~": the switch notice (or the stopped run's error) stays.
       setTimeout(() => refreshRoute({ keepScan: true, keepStatus: true }), 0);
     });
     on('skip', ({ msg }) => addLog(`skipped a system message (type ${msg.type}) — Discord won't delete those`, 'skip'));
     on('wait', (w) => {
-      setStatus(waitText(w), 'warn');
+      showWait(w);
       addLog(waitText(w), 'warn');
     });
     on('log', ({ text, tone }) => addLog(text, tone));
     on('target-end', ({ target, ok, error, immune, midway, stopped, warn }) => {
-      if (immune) addLog(midway ? `${target.name} was shielded in another tab 👑 — stopped purging there` : `${target.name} is immune 👑 — skipped`, 'warn');
+      if (immune) addLog(midway ? `${target.name} was shielded in another tab — stopped purging there` : `${target.name} is immune — skipped`, 'warn');
       else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${(target.deleted || 0).toLocaleString()} purged) ──`, 'info');
       if (target.row) setRowState(target, immune ? 'immune' : ok ? 'done' : warn ? 'partial' : stopped ? 'stopped' : 'error', error || warn);
     });
+    // What the person chose, and the run's own pace, are calm: no alarm badge.
     on('pause', (p) => {
-      setStatus(`Paused~ ${p.deleted.toLocaleString()} purged so far`, 'warn');
+      setStatus(`Paused~ ${p.deleted.toLocaleString()} purged so far`, 'calm');
       renderCurrent();
       renderActions();
     });
     on('resume', () => {
-      setStatus('Resumed! Purging~ ✨', 'info');
+      setStatus('Purging again~', 'info', { flair: '✨' });
       renderCurrent();
       renderActions();
     });
     on('stopping', () => {
-      setStatus('Stopping after this one~ 🛑', 'warn');
+      setStatus('Stopping after this one~', 'calm');
       renderActions();
     });
+    // Each ending is said once: the readout gives the verdict, the footer confirms it or names the
+    // next step, and the mood (renderHero) is the personality.
     on('end', (p) => {
+      const fromRun = $('[data-role="run-actions"]').contains(root.activeElement);
       setPrompt('');
       for (const t of state.runTargets) if (t.row && (t.status === 'queued' || t.status === 'running')) setRowState(t, 'stopped');
       addLog('────────────────────', 'info');
+      if (p.error) addLog(`STOPPED · ${plainError(p).short}`, 'error');
+      else if (p.stopped) addLog('STOPPED by you · nothing after this point was touched', 'warn');
       addLog(`SUMMARY: ${p.deleted.toLocaleString()} purged, ${p.failed.toLocaleString()} failed${p.skipped ? `, ${p.skipped} system skipped` : ''}`, 'info');
       if (p.failures.length) {
         addLog('FAILED MESSAGES:', 'error');
         const shown = p.failures.slice(0, 50);
-        shown.forEach((f, i) => addLog(`${i + 1}. "${preview(f.msg)}"${f.msg.pinned ? ' [PINNED]' : ''} — ${f.reason}`, 'error'));
+        shown.forEach((f, i) => addLog(`${i + 1}. ${shortReason(f.reason)}${f.msg.pinned ? ' · pinned' : ''} · "${preview(f.msg, 40)}"`, 'error'));
         if (p.failures.length > shown.length) addLog(`…and ${(p.failures.length - shown.length).toLocaleString()} more`, 'error');
       }
       scrubLog();
@@ -2177,39 +2309,57 @@
       const purged = plural(p.deleted, 'message');
       const problems = p.problems || [];
       const shielded = p.shielded || [];
+      const key = state.runKey;
       if (problems.length) {
         addLog(`NEEDS ANOTHER LOOK: ${problems.map((x) => `${x.target.name} (${shortReason(x.reason)})`).join(', ')}`, 'warn');
       }
       if (p.error) {
-        setStatus(`Error: ${p.error} 😿`, 'error');
-        lastEnd = { key: state.runKey, text: `Stopped by an error~ ${purged} purged`, tone: 'error', error: true };
+        const plain = plainError(p);
+        if (plain.code === 'switched') {
+          setStatus('Stopped to be safe~ you switched Discord accounts', 'warn');
+          lastEnd = { key, text: `Stopped to be safe~ you switched accounts · ${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'error', error: plain.code };
+        } else {
+          // A purge that broke off carries on with Purify; Try again is This chat's way to count.
+          setStatus(plain.short, 'error');
+          lastEnd = { key, text: plain.line.replace(/press Try again$/, 'press Purify to finish'), tone: 'error', error: plain.code };
+        }
       } else if (p.stopped) {
-        setStatus(`Stopped! Purged: ${p.deleted.toLocaleString()} | Failed: ${p.failed.toLocaleString()} 🛑`, 'warn');
-        lastEnd = { key: state.runKey, text: `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
+        const handled = p.deleted + p.failed + (p.gone || 0);
+        setStatus('Stopped~ Purify picks up the rest', 'calm');
+        lastEnd = { key, text: p.total > 0 && !p.partial ? `Stopped at ${handled.toLocaleString()} of ${p.total.toLocaleString()}~` : `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
       } else if (problems.length) {
         const n = problems.length;
         const indexingOnly = problems.every((x) => /indexing/i.test(x.reason));
-        setStatus(`${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go~ see logs`, 'warn');
-        lastEnd = { key: state.runKey, text: indexingOnly ? `Purged ${purged} · run again later for older ones` : `Purged ${purged} · ${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
+        setStatus(indexingOnly ? `${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go later~ Discord is still indexing`
+          : `${plural(n, 'chat')} skipped · ${shortReason(problems[0].reason)}${n > 1 ? ' and more' : ''} · see Logs`, 'warn');
+        lastEnd = { key, text: indexingOnly ? `Purged ${purged} · run again later for older ones` : `Purged ${purged} · ${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
       } else if (shielded.length) {
         // Shielded from another tab mid-purge: what's left there stays on purpose, so no "all clean".
-        const who = shielded.length === 1 ? shielded[0] : plural(shielded.length, 'chat');
-        setStatus(`Done~ ${who} stays shielded 🛡`, 'immune');
-        lastEnd = { key: state.runKey, text: `Purged ${purged} · ${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
+        const who = shielded.length === 1 ? `\u2068${shielded[0]}\u2069` : plural(shielded.length, 'chat');
+        setStatus(`Done~ ${who} stays shielded`, 'immune');
+        lastEnd = { key, text: `Purged ${purged} · ${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
       } else if (p.failed) {
-        setStatus(`Done~ ${p.failed.toLocaleString()} wouldn't go · see logs`, 'warn');
-        lastEnd = { key: state.runKey, text: `Purged ${purged} · ${p.failed.toLocaleString()} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
+        setStatus(`Done~ ${p.failed.toLocaleString()} wouldn't go · reasons in Logs`, 'warn');
+        lastEnd = { key, text: `Purged ${p.deleted.toLocaleString()} · ${p.failed.toLocaleString()} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
         if (p.deleted > 0) celebrate();
+      } else if (p.deleted) {
+        setStatus(`Done in ${formatDuration(p.elapsedMs / 1000)} · 0 failed`, 'success', { flair: '♡' });
+        lastEnd = { key, text: 'All clean~ nothing left of you here', flair: '✨', tone: 'cheer', sticker: 'flawless~' };
+        celebrate();
       } else {
-        setStatus(`Done in ${formatDuration((p.deleted + p.failed + (p.gone || 0)) / Math.max(p.rate, 0.01))} · 0 failed · ${p.rate.toFixed(1)}/s`, 'success');
-        lastEnd = { key: state.runKey, text: p.deleted ? `All clean! Purged ${purged}~ ✨🎉` : 'All clear! Nothing to purge~ ✨', tone: 'cheer', sticker: p.deleted ? 'flawless~' : '' };
-        if (p.deleted > 0) celebrate();
+        setStatus('Done~ nothing of yours was here', 'success');
+        lastEnd = { key, text: 'All clear~ nothing to purge here', flair: '✨', tone: 'clear' };
       }
       // Minimised through the finish line: the orb carries the outcome until reopened.
-      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd ? lastEnd.tone : 'warn' } : null;
+      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd.tone } : null;
       if (state.runMode === 'batch') settleBatchSelection();
       renderCurrent();
       renderActions();
+      // Focus on Pause or Stop moves on to the next thing to press once they go.
+      if (fromRun) {
+        focusNext = ['[data-act="scan"]', '[data-act="go-batch"]'].find((sel) => !$(sel).hidden && !$(sel).disabled) || '.tab[aria-selected="true"]';
+        applyFocus();
+      }
       if (state.tab === 'batch') loadPendingLists();
     });
     on('end', () => {
@@ -2219,8 +2369,6 @@
     });
   }
 
-  // Lists can't be (re)built mid-run or mid-scan; build them as soon as that ends. A list
-  // still loading is left to finish, so navigating through an outage doesn't stack requests.
   function loadPendingLists() {
     if (run.active || state.scanning) return;
     if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
@@ -2234,17 +2382,19 @@
   const ACTIONS = {
     scan: () => (state.scanning ? cancelScan() : state.tab !== 'current' ? scanSelected() : describeFailed() ? refreshRoute() : scanCurrent()),
     purify: () => (state.tab === 'current' ? askPurgeCurrent() : askPurgeSelected()),
-    pause: pauseRun,
-    resume: resumeRun,
+    // Focus follows the work: the control that takes over from the one that goes gets focus.
+    pause: () => { handFocus('[data-act="resume"]'); pauseRun(); },
+    resume: () => { handFocus('[data-act="pause"]'); resumeRun(); },
     stop: stopRun,
     logs: () => toggleLog(),
-    'close-log': () => toggleLog(false),
+    'close-log': () => { handFocus('[data-act="logs"]'); toggleLog(false); },
     'copy-log': copyLog,
-    minimize: () => setOpen(false),
+    minimize: () => { handFocus('.orb'); setOpen(false); },
     share: () => shareLink(),
     'welcome-ok': () => hideWelcome(),
     'welcome-batch': () => { switchTab('batch'); hideWelcome(); },
-    restore: () => setOpen(true),
+    'go-batch': () => { handFocus('.tab[data-tab="batch"]'); switchTab('batch'); },
+    restore: () => { handFocus('[data-act="minimize"]'); setOpen(true); },
     mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); },
     poke: () => {
       kick({ spin: (Math.random() - 0.5) * 26, squash: 0.7 });
@@ -2258,13 +2408,23 @@
     'server-refresh': () => loadServers({ refresh: true }),
   };
 
+  // Esc closes what focus is in (the dialog's own Esc goes first): the log hands focus back to
+  // Logs, and the welcome card goes as if dismissed.
+  function escapeFrom(el) {
+    if (!el) return;
+    if (el.closest('.term')) {
+      handFocus('[data-act="logs"]');
+      toggleLog(false);
+    } else if (el.closest('[data-role="welcome"]')) hideWelcome();
+  }
+
   function wire() {
     const layer = $('[data-role="layer"]');
     layer.addEventListener('click', (e) => {
       const tab = e.target.closest('.tab');
       if (tab) { switchTab(tab.dataset.tab); return; }
       const btn = e.target.closest('[data-act]');
-      if (!btn || btn.disabled) return;
+      if (!btn || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
       if (btn.dataset.act === 'confirm') {
         const assistive = e.detail === 0 || !hold.pointer;
         hold.pointer = false;
@@ -2276,10 +2436,12 @@
       const fn = ACTIONS[btn.dataset.act];
       if (fn) fn();
     });
-    // Tab keyboard model: arrows move between tabs.
+    // Tab keyboard model: arrows move between the two tabs; Home and End go to the first and last.
     $('.tabs').addEventListener('keydown', (e) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      const next = state.tab === 'current' ? 'batch' : 'current';
+      const next = e.key === 'Home' ? 'current' : e.key === 'End' ? 'batch'
+        : e.key === 'ArrowLeft' || e.key === 'ArrowRight' ? (state.tab === 'current' ? 'batch' : 'current') : null;
+      if (!next) return;
+      e.preventDefault();
       switchTab(next);
       $(`.tab[data-tab="${next}"]`).focus();
     });
@@ -2312,6 +2474,7 @@
     }, true);
     root.addEventListener('keydown', (e) => {
       if (modal && e.key === 'Escape') { e.preventDefault(); closeDialog(false); }
+      else if (e.key === 'Escape') escapeFrom(root.activeElement);
       trapFocus(e);
     });
     $('.modal-layer').addEventListener('pointerdown', (e) => {
@@ -2345,7 +2508,8 @@
     wire();
     renderMute();
     clearLog();
-    switchTab(prefs.tab, { initial: true });
+    // Opened on a chat, the panel opens on that chat; elsewhere it remembers the last tab.
+    switchTab(routeTarget() ? 'current' : prefs.tab, { initial: true });
     const pos = homePosition();
     placeShell(pos.x, pos.y);
     setOpen(prefs.open, { initial: true });
@@ -2383,6 +2547,7 @@
       run.controller.abort();
     }
     if (state.scanAbort) state.scanAbort.abort();
+    clearInterval(waitTick);
     for (const undo of disposers.splice(0)) {
       try { undo(); } catch { /* already gone */ }
     }

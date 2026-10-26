@@ -27,7 +27,7 @@ async function boot(path, opts = {}) {
   await env.page.addStyleTag({ content: '.chat .txt, .chat .who { color: transparent !important; text-shadow: 0 0 7px rgba(219,222,225,.55); } .chat .ts { display: none; }' });
   await env.page.addScriptTag({ content: source });
   await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' });
-  await env.page.waitForFunction(`${sr}.querySelector('[data-role="target-name"]').textContent !== 'detecting…'`);
+  await env.page.waitForFunction(`${sr}.querySelector('[data-role="target-name"]').textContent !== 'finding this chat…'`);
   await env.page.waitForTimeout(700);
   return env;
 }
