@@ -253,10 +253,14 @@
     return { guildId: m[1] === '@me' ? null : m[1], channelId: m[2] };
   }
 
+  // A name dropped into other text keeps its own reading order: right-to-left names can't pull
+  // a '#', a bracket or the next name across them. The marks are invisible and silent.
+  const iso = (s) => `\u2068${s}\u2069`;
+
   function dmTitle(channel) {
     if (channel.name) return channel.name;
     const names = (channel.recipients || []).map((r) => r.global_name || r.username);
-    return names.length ? names.join(', ') : 'Unknown';
+    return names.length > 1 ? names.map(iso).join(', ') : names[0] || 'Unknown';
   }
 
   // Who is immune: the built-in names unless released, plus anyone shielded in the panel.

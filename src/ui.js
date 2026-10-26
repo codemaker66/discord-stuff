@@ -424,23 +424,24 @@
 
   function buildBatchView() {
     const dmHead = h('div', { class: 'section-head' },
-      h('div', { class: 'section-title', text: 'Direct messages' }),
+      h('div', { class: 'section-title', id: 'dp-dm-title', text: 'Direct messages' }),
       h('div', { class: 'section-tools' },
         h('button', { class: 'chip', 'data-act': 'dm-all', text: 'All' }),
         h('button', { class: 'chip', 'data-act': 'dm-none', text: 'None' }),
         h('button', { class: 'chip icon-only', 'data-act': 'dm-refresh', 'aria-label': 'Refresh DMs', title: 'Refresh' }, icon('refresh'))));
     const serverHead = h('div', { class: 'section-head' },
-      h('div', { class: 'section-title', text: 'Servers' }),
+      h('div', { class: 'section-title', id: 'dp-server-title', text: 'Servers' }),
       h('div', { class: 'section-tools' },
         h('button', { class: 'chip icon-only', 'data-act': 'server-refresh', 'aria-label': 'Refresh servers', title: 'Refresh' }, icon('refresh'))));
-    return h('div', { class: 'view', 'data-view': 'batch', role: 'tabpanel', 'aria-label': 'Batch' },
-      h('div', { class: 'hint' }, h('span', { class: 'hint-ico', text: '💡' }),
-        h('span', { text: 'Tip: Scan people first to see message counts and get accurate progress tracking!' })),
-      h('input', { class: 'filter', type: 'search', 'data-role': 'filter', placeholder: 'Filter people & channels…', 'aria-label': 'Filter', spellcheck: 'false', autocomplete: 'off' }),
+    // Each list is one Tab stop; the arrows walk it (see List keyboard).
+    return h('div', { class: 'view', 'data-view': 'batch', role: 'tabpanel', 'aria-label': 'Many chats' },
+      h('input', { class: 'filter', type: 'search', 'data-role': 'filter', placeholder: 'Find a chat or server…', 'aria-label': 'Find a chat or server', spellcheck: 'false', autocomplete: 'off' }),
       dmHead,
-      h('div', { class: 'list', 'data-role': 'dm-list' }, h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' })),
+      h('div', { class: 'list', 'data-role': 'dm-list', role: 'group', 'aria-labelledby': 'dp-dm-title', onkeydown: onListKey, onfocusin: onListFocus },
+        h('div', { class: 'list-empty', text: 'Finding your DMs…' })),
       serverHead,
-      h('div', { class: 'list', 'data-role': 'server-list' }, h('div', { class: 'list-empty', text: 'Loading servers… 🏰' })));
+      h('div', { class: 'list', 'data-role': 'server-list', role: 'group', 'aria-labelledby': 'dp-server-title', onkeydown: onListKey, onfocusin: onListFocus },
+        h('div', { class: 'list-empty', text: 'Finding your servers…' })));
   }
 
   function buildPanel() {
@@ -458,7 +459,8 @@
       h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Mode' },
         h('span', { class: 'tab-pill', 'aria-hidden': 'true' }),
         h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'Current channel' }),
-        h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Batch' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }))),
+        h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Batch' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }),
+          h('span', { class: 'sr', 'data-role': 'tab-badge-sr', hidden: true, text: ' selected' }))),
       h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-labelledby': 'dp-welcome-title' },
         h('div', { class: 'welcome-card' },
           h('div', { class: 'welcome-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
@@ -481,7 +483,8 @@
       h('footer', { class: 'foot' },
         h('div', { class: 'actions', 'data-role': 'idle-actions' },
           h('button', { class: 'btn btn-quiet', 'data-act': 'scan' }, icon('scan'), h('span', { 'data-role': 'scan-label', text: 'Scan' })),
-          h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true }))),
+          h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true }),
+            h('span', { class: 'sr', 'data-role': 'purify-unit' }))),
         h('div', { class: 'actions', 'data-role': 'run-actions', hidden: true },
           h('button', { class: 'btn btn-quiet', 'data-act': 'pause' }, icon('pause'), h('span', { text: 'Pause' })),
           h('button', { class: 'btn btn-purge', 'data-act': 'resume', hidden: true }, icon('play'), h('span', { text: 'Resume' })),
@@ -490,7 +493,8 @@
           h('div', { class: 'status', 'data-role': 'status', role: 'status', 'aria-live': 'polite', dataset: { tone: 'info' } },
             h('span', { class: 'status-dot', 'aria-hidden': 'true' }),
             h('span', { 'data-role': 'status-text' }, flaired('Ready to purify~', '✨'))),
-          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' })))));
+          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' }))),
+        h('div', { class: 'sr', 'data-role': 'milestone', 'aria-live': 'polite' })));
   }
 
   function buildTerminal() {
@@ -882,6 +886,7 @@
       b.title = run.active ? 'Stop the purge to change shields' : shieldTitle(b.classList.contains('is-on'));
     }
     if (root.querySelector('.guild')) syncGuildChecks();
+    speakCounts(rows);
     $('[data-role="layer"]').dataset.run = run.active ? (run.paused ? 'paused' : 'running') : 'idle';
     applyFocus();
   }
@@ -1126,44 +1131,69 @@
     await startRun(targets);
   }
 
-  // ── Batch lists ─────────────────────────────────────────
+  // ── Many chats: lists ───────────────────────────────────
 
   function rowKey(row) {
     return row.channelId ? `c:${row.channelId}` : `u:${row.userId}`;
   }
 
+  // One line per row: the count is the readiness and the pill the outcome, so only news (purging,
+  // still indexing, run again later) takes a second line. Each row's checkbox is described by its
+  // tag and meta, so a screen reader hears 'DM: Mira, checkbox, checked, 7 msgs'.
   function setRowState(row, status, detail) {
+    const was = row.status;
     row.status = status;
     row.reason = detail || '';
     const el = row.el;
     if (!el || row.protected) return;
     el.dataset.state = status;
+    el.title = detail || '';
     const n = counts.get(row.channelId);
     const deleted = (row.deleted || 0).toLocaleString();
-    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: k.toLocaleString() }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
-    const pill = (kind, ...children) => h('span', { class: `run-pill run-pill-${kind}` }, ...children);
     const tag = el.querySelector('.row-tag');
-    if (status === 'ready') tag.replaceChildren(icon('dagger', 'ico-dagger ico-dagger-l'), 'READY FOR PURGE', icon('dagger', 'ico-dagger ico-dagger-r'));
-    else if (status === 'running') tag.replaceChildren(row.failed ? `purging~ · ${row.failed} failed` : 'purging~');
-    else if (status === 'error') tag.replaceChildren(detail ? shortReason(detail) : 'error');
-    else if (status === 'partial') tag.replaceChildren(detail || 'run again later');
-    else if (status === 'indexing') tag.replaceChildren('Discord is still indexing~');
-    else tag.replaceChildren();
-    tag.hidden = !tag.textContent;
+    const tagText = status === 'running' ? (row.failed ? `purging~ · ${row.failed} failed` : 'purging~')
+      : status === 'partial' ? detail || 'run again later'
+        : status === 'indexing' ? 'Discord is still indexing~' : '';
+    if (tag.textContent !== tagText) tag.textContent = tagText;
+    tag.hidden = !tagText;
+    const progress = n ? `${deleted}/${n.toLocaleString()}` : deleted;
+    // Each kill changes only the running pill's number, so its spinner keeps turning.
+    const live = was === 'running' && status === 'running' && el.querySelector('.run-pill-live .run-pill-n');
+    if (live) { live.textContent = progress; return; }
+    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: k.toLocaleString() }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
+    const clear = () => h('span', { class: 'meta-clear' }, 'all clear', h('span', { 'aria-hidden': 'true', text: ' ✓' }));
+    const pill = (kind, ...children) => h('span', { class: `run-pill run-pill-${kind}` }, ...children);
+    const say = (text) => h('span', { class: 'sr', text });
     let meta = null;
-    if (status === 'idle') meta = row.needsDM ? h('span', { class: 'chip-need', text: 'no DM yet' }) : (n !== undefined ? (n ? msgs(n) : 'clean ✓') : null);
+    if (status === 'idle') meta = row.needsDM ? h('span', { class: 'chip-need', text: 'closed DM' }) : null;
     else if (status === 'scanning') meta = pill('scan', h('i', { class: 'spin' }), 'scanning');
     else if (status === 'ready') meta = n ? msgs(n) : null;
     else if (status === 'indexing') meta = n ? msgs(n) : 'none yet';
-    else if (status === 'clean') meta = 'no messages found';
+    else if (status === 'clean') meta = clear();
     else if (status === 'queued') meta = pill('queued', 'queued');
-    else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), n ? `${deleted}/${n.toLocaleString()}` : deleted);
-    else if (status === 'done') meta = pill('done', icon('check'), row.failed ? `${deleted} · ${row.failed} failed` : deleted);
+    else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), say('purging '), h('span', { class: 'run-pill-n', text: progress }));
+    else if (status === 'done') meta = pill('done', icon('check'), say('purged '), row.failed ? `${deleted} · ${row.failed} failed` : deleted);
     else if (status === 'partial') meta = pill('stopped', `${deleted} · again later`);
-    else if (status === 'error') meta = pill('error', '✗ skipped');
+    else if (status === 'error') meta = pill('error', h('span', { 'aria-hidden': 'true', text: '✗ ' }), h('span', { class: 'run-pill-why', text: detail ? shortReason(detail) : 'skipped' }));
     else if (status === 'stopped') meta = pill('stopped', 'stopped');
     el.querySelector('.row-meta').replaceChildren(...(meta ? [meta] : []));
-    el.title = detail || '';
+  }
+
+  // A row drawn afresh (a refreshed list, a shield redraw) shows what is already known about its chat.
+  function restingState(row) {
+    const n = row.channelId ? counts.get(row.channelId) : undefined;
+    if (n === undefined) return 'idle';
+    return isPartialCount(row.channelId) ? 'indexing' : n ? 'ready' : 'clean';
+  }
+
+  // The checkbox is described by the row's tag and meta; the ids follow the row's key.
+  function describeRow(row) {
+    if (!row.box) return; // an immune row has no checkbox
+    const tag = row.el.querySelector('.row-tag');
+    const meta = row.el.querySelector('.row-meta');
+    tag.id = `dp-tag-${row.key}`;
+    meta.id = `dp-meta-${row.key}`;
+    row.box.setAttribute('aria-describedby', `${tag.id} ${meta.id}`);
   }
 
   function shortReason(reason) {
@@ -1211,6 +1241,9 @@
     });
     box.disabled = run.active || state.scanning;
     row.box = box;
+    // A DM row with no one to shield (a group) keeps the shield's room, so every count ends on one column.
+    const end = row.partner ? shieldButton(row.partner, { protectedNow: false, label: row.display })
+      : row.kind !== 'guild' ? h('span', { class: 'shield-slot', 'aria-hidden': 'true' }) : null;
     row.el = h('label', { class: `row${indent ? ' row-indent' : ''}${box.checked ? ' is-selected' : ''}`, dataset: { key } },
       box,
       h('span', { class: 'check-ui', 'aria-hidden': 'true' }, icon('check')),
@@ -1220,8 +1253,9 @@
         row.sub ? h('span', { class: 'row-sub', text: row.sub }) : null,
         h('span', { class: 'row-tag', hidden: true })),
       h('span', { class: 'row-meta' }),
-      row.partner ? shieldButton(row.partner, { protectedNow: false, label: row.display }) : null);
-    setRowState(row, row.status || 'idle');
+      end);
+    describeRow(row);
+    setRowState(row, row.status || restingState(row));
     return row.el;
   }
 
@@ -1233,7 +1267,10 @@
     state.batchRows.set(key, row);
     if (state.selected.delete(oldKey)) state.selected.add(key);
     row.key = key;
-    if (row.el) row.el.dataset.key = key;
+    if (row.el) {
+      row.el.dataset.key = key;
+      describeRow(row);
+    }
   }
 
   function snowflakeDesc(a, b) {
@@ -1255,7 +1292,7 @@
     }
     const seq = ++dmSeq;
     state.dmsLoading = true;
-    list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' }));
+    list.replaceChildren(h('div', { class: 'list-empty', text: 'Finding your DMs…' }));
     try {
       const [channels, relationships] = await Promise.all([listDMs(), listRelationships()]);
       if (seq !== dmSeq) return;
@@ -1290,7 +1327,7 @@
       glyph: c.type === 3 ? '👥' : '',
       partner: c.type === 1 && c.recipients ? c.recipients[0] : null,
       protected: isProtectedChannel(c),
-      label: c.type === 3 ? `Group: ${dmTitle(c)}` : `DM: ${dmTitle(c)}`,
+      label: c.type === 3 ? `Group: ${iso(dmTitle(c))}` : `DM: ${iso(dmTitle(c))}`,
       context: c.type === 3 ? 'Group DM' : 'Direct message',
     }));
     for (const rel of relationships) {
@@ -1302,12 +1339,12 @@
         name, display: name, sub: user.username ? `@${user.username} · friend` : 'friend', glyph: '',
         partner: user,
         protected: isProtectedUser(user),
-        label: `Friend: ${name}`, context: 'Direct message',
+        label: `Friend: ${iso(name)}`, context: 'Direct message',
       });
     }
     rows.sort((a, b) => Number(b.protected) - Number(a.protected));
     for (const r of rows) if (r.protected) state.selected.delete(rowKey(r));
-    list.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r)) : [h('div', { class: 'list-empty', text: 'No DMs or friends found~' })]));
+    list.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r)) : [h('div', { class: 'list-empty', text: 'No DMs here yet~' })]));
     state.dmsLoaded = true;
     applyFilter();
     const dmRows = rows.filter((r) => r.kind !== 'friend').length;
@@ -1329,7 +1366,7 @@
     const before = { ids: new Set(protection.ids), released: new Set(protection.released) };
     const shield = !isProtectedUser(user);
     setProtected(user, shield);
-    const name = user.global_name || user.username;
+    const name = iso(user.global_name || user.username);
     // A shield that didn't save would be gone after a reload: put things back and say so.
     if (!storeProtection()) {
       protection.ids = before.ids;
@@ -1344,13 +1381,18 @@
     protectionChanged();
   }
 
-  // Redraw everything that shows who is immune.
+  // Redraw everything that shows who is immune. The redraw rebuilds every shield, so a shield that
+  // had focus hands it to the same person's new one: a keyboard toggle keeps its place.
   function protectionChanged({ keepVerdict = false } = {}) {
+    const focused = root.activeElement && root.activeElement.closest('.shield-btn');
+    const who = focused && focused.dataset.userId;
     if (state.dmData) renderDMs();
     const partner = state.target && state.target.partner;
     if (partner) state.target.protected = isProtectedUser(partner);
     if (!keepVerdict && lastEnd && lastEnd.key === contextKey()) lastEnd = null;
     renderCurrent();
+    const again = who && $(`.view:not([hidden]) .shield-btn[data-user-id="${window.CSS.escape(who)}"]`); // CSS here is our stylesheet
+    if (again) again.focus();
   }
 
   // Another tab shielded or released someone: take it on now, or once this tab's run ends
@@ -1363,14 +1405,17 @@
     else protectionChanged();
   }
 
-  const shieldTitle = (immune) => (immune ? 'Immune — click to allow purging again' : 'Protect — never purge this chat');
+  // 'Shield' is the verb and 'immune' the state. The button keeps one name and aria-pressed says
+  // whether the shield is up, so a screen reader never hears 'remove' and 'pressed' at once.
+  const shieldTitle = (immune) => (immune ? 'Immune ♡ click to remove the shield' : 'Shield this DM~ never purged');
 
   function shieldButton(user, { protectedNow, label }) {
     const btn = h('button', {
       class: `shield-btn${protectedNow ? ' is-on' : ''}`,
       type: 'button',
+      'data-user-id': user.id,
       'aria-pressed': String(protectedNow),
-      'aria-label': protectedNow ? `Stop protecting ${label}` : `Protect ${label}`,
+      'aria-label': `Shield ${iso(label)}`,
       title: shieldTitle(protectedNow),
     }, icon('shield'));
     btn.addEventListener('click', (e) => {
@@ -1389,12 +1434,12 @@
     }
     const seq = ++guildSeq;
     state.guildsLoading = true;
-    list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading servers… 🏰' }));
+    list.replaceChildren(h('div', { class: 'list-empty', text: 'Finding your servers…' }));
     try {
       const guilds = await myGuilds({ refresh });
       if (seq !== guildSeq) return;
       for (const [key, row] of state.batchRows) if (row.kind === 'guild') state.batchRows.delete(key);
-      list.replaceChildren(...(guilds.length ? guilds.map(buildGuild) : [h('div', { class: 'list-empty', text: 'No servers found~' })]));
+      list.replaceChildren(...(guilds.length ? guilds.map(buildGuild) : [h('div', { class: 'list-empty', text: "You're not in any servers~" })]));
       state.guildsLoaded = true;
       applyFilter();
     } catch (err) {
@@ -1413,22 +1458,27 @@
       h('span', { class: 'guild-badge', 'aria-hidden': 'true', text: initials(guild.name) }),
       h('span', { class: 'guild-name', text: guild.name }),
       h('span', { class: 'guild-meta', 'data-role': 'guild-meta' }));
-    const all = h('input', { type: 'checkbox', class: 'check', 'aria-label': `All channels in ${guild.name}` });
+    const all = h('input', { type: 'checkbox', class: 'check', 'aria-label': `All channels in ${iso(guild.name)}` });
     const allLabel = h('label', { class: 'guild-all', title: 'Select every channel' }, all, h('span', { class: 'check-ui', 'aria-hidden': 'true' }, icon('check')));
+    // The select-all box comes first, where it is drawn, so focus moves the way the eye does.
     const section = h('div', { class: 'guild', dataset: { guildId: guild.id, name: guild.name.toLowerCase() } },
-      h('div', { class: 'guild-bar' }, head, allLabel), channelsEl);
+      h('div', { class: 'guild-bar' }, allLabel, head), channelsEl);
     let loading = null;
     const load = () => {
       if (!loading) {
-        channelsEl.replaceChildren(h('div', { class: 'list-empty', text: 'Loading channels…' }));
+        channelsEl.replaceChildren(h('div', { class: 'list-empty', text: 'Finding channels…' }));
         loading = listTextChannels(guild.id).then((channels) => {
-          const rows = channels.map((ch) => ({
-            kind: 'guild', channelId: ch.id, guildId: guild.id,
-            name: `#${ch.name}`, display: ch.name, glyph: ch.type === 2 || ch.type === 13 ? 'sound' : ch.type === 5 ? 'megaphone' : ch.type === 15 || ch.type === 16 ? 'forum' : '#',
-            sub: ch.categoryName ? ch.categoryName.toLowerCase() : '',
-            protected: false, label: `#${ch.name} (${guild.name})`, context: guild.name,
-          }));
-          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'No text channels~' })]));
+          const rows = channels.map((ch) => {
+            const glyph = ch.type === 2 || ch.type === 13 ? 'sound' : ch.type === 5 ? 'megaphone' : ch.type === 15 || ch.type === 16 ? 'forum' : '#';
+            return {
+              kind: 'guild', channelId: ch.id, guildId: guild.id,
+              name: `#${ch.name}`, display: ch.name, glyph,
+              sub: ch.categoryName ? ch.categoryName.toLowerCase() : '',
+              // Only a text channel is '#name'; voice, forum and announcement channels go by their name.
+              protected: false, label: `${glyph === '#' ? '#' : ''}${iso(ch.name)} (${iso(guild.name)})`, context: guild.name,
+            };
+          });
+          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'Nothing here you can purge~' })]));
           head.querySelector('[data-role="guild-meta"]').textContent = plural(rows.length, 'channel');
           applyFilter();
           syncGuildChecks();
@@ -1443,6 +1493,7 @@
     const expand = (open) => {
       head.setAttribute('aria-expanded', String(open));
       channelsEl.hidden = !open;
+      rove(section.parentElement);
       if (open) load().catch(() => {});
     };
     head.addEventListener('click', () => expand(head.getAttribute('aria-expanded') !== 'true'));
@@ -1474,11 +1525,16 @@
     }
   }
 
+  // Every list is filtered, re-roved and, when nothing in it matches, says so.
+  const LISTS = ['[data-role="dm-list"]', '[data-role="server-list"]'];
+
   function applyFilter() {
-    const q = state.filter.trim().toLowerCase();
+    const typed = state.filter.trim();
+    const q = typed.toLowerCase();
     for (const row of state.batchRows.values()) {
       if (!row.el) continue;
-      const hay = `${row.display} ${row.name} ${row.label} ${row.sub || ''}`.toLowerCase();
+      // The marks that keep names in reading order are invisible, so they never stop a match.
+      const hay = `${row.display} ${row.name} ${row.label} ${row.sub || ''}`.replace(/[\u2066-\u2069]/g, '').toLowerCase();
       row.el.hidden = !!q && !hay.includes(q);
     }
     for (const guild of $$('.guild')) {
@@ -1486,6 +1542,15 @@
       const anyChannel = Array.from(guild.querySelectorAll('.row')).some((r) => !r.hidden);
       guild.hidden = !nameHit && !anyChannel;
       if (q && nameHit) for (const r of guild.querySelectorAll('.row')) r.hidden = false;
+    }
+    for (const list of LISTS.map($)) {
+      const none = list.querySelector('[data-role="no-match"]');
+      if (none) none.remove();
+      const items = list.querySelectorAll(':scope > .row, :scope > .guild');
+      if (q && items.length && [...items].every((el) => el.hidden)) {
+        list.append(h('div', { class: 'list-empty', 'data-role': 'no-match', text: `No chats match “${iso(typed)}”~` }));
+      }
+      rove(list);
     }
   }
 
@@ -1505,6 +1570,89 @@
     syncGuildChecks();
     renderHero();
     renderActions();
+  }
+
+  // Numbers a screen reader would otherwise hear bare: 'Many chats 4 selected', 'Purify selected 4 chats'.
+  function speakCounts(rows) {
+    $('[data-role="tab-badge-sr"]').hidden = !rows.length;
+    const one = state.tab === 'current' ? !!state.target && counts.get(state.target.channelId) === 1 : rows.length === 1;
+    const unit = state.tab === 'current' ? (one ? ' message' : ' messages') : (one ? ' chat' : ' chats');
+    $('[data-role="purify-unit"]').textContent = $('[data-role="purify-count"]').hidden ? '' : unit;
+  }
+
+  // ── List keyboard ───────────────────────────────────────
+  // Each list is one Tab stop, so 129 DMs no longer cost 265 presses to get past. Up and Down walk
+  // its lines (keeping to the row's shield, or a server's name, when the next line has one), Home
+  // and End jump to either end, Right goes along a line and into a server, Left comes back out or
+  // folds the server up. Ticking still takes its own Space or click: moving never selects.
+  const CONTROLS = '.check, .shield-btn, .guild-head';
+
+  // Shown within its list (the list's own view may be hidden: it is still that list's Tab stop).
+  function shownIn(list, el) {
+    for (let node = el; node && node !== list; node = node.parentElement) if (node.hidden) return false;
+    return true;
+  }
+
+  const linesOf = (list) => Array.from(list.querySelectorAll('.row, .guild-bar')).filter((line) => shownIn(list, line));
+  const lineOf = (control) => control.closest('.row, .guild-bar');
+  const controlsOf = (line) => Array.from(line.querySelectorAll(CONTROLS));
+  const lineKey = (line) => line.dataset.key || `g:${line.parentElement.dataset.guildId}`;
+
+  // The control a list gives Tab, remembered by line and column so it survives the list being redrawn.
+  const roving = new Map(); // list's data-role → { key, col }
+
+  // Unvisited, a list starts on its first checkbox rather than Bardo's shield, so a reflex Space
+  // ticks a chat instead of lifting a shield.
+  function rove(list) {
+    if (!list) return;
+    const lines = linesOf(list);
+    const spot = roving.get(list.dataset.role);
+    const kept = spot && lines.find((line) => lineKey(line) === spot.key);
+    const line = kept || lines.find((l) => l.querySelector('.check')) || lines[0];
+    const cols = line ? controlsOf(line) : [];
+    const keep = cols[kept ? Math.min(spot.col, cols.length - 1) : 0];
+    for (const control of list.querySelectorAll(CONTROLS)) control.tabIndex = control === keep ? 0 : -1;
+  }
+
+  function onListFocus(e) {
+    const control = e.target.closest(CONTROLS);
+    if (!control) return;
+    const list = e.currentTarget;
+    const line = lineOf(control);
+    roving.set(list.dataset.role, { key: lineKey(line), col: controlsOf(line).indexOf(control) });
+    for (const other of list.querySelectorAll(CONTROLS)) other.tabIndex = other === control ? 0 : -1;
+    line.scrollIntoView({ block: 'nearest' }); // the whole line, clear of the sticky strip (scroll-padding)
+  }
+
+  function onListKey(e) {
+    const control = e.target.closest(CONTROLS);
+    if (!control || e.altKey || e.ctrlKey || e.metaKey) return;
+    const list = e.currentTarget;
+    const lines = linesOf(list);
+    const line = lineOf(control);
+    const at = lines.indexOf(line);
+    const cols = controlsOf(line);
+    const col = cols.indexOf(control);
+    const inColumn = (target, c) => { const all = target ? controlsOf(target) : []; return all[Math.min(c, all.length - 1)]; };
+    const isHead = control.classList.contains('guild-head');
+    const open = isHead && control.getAttribute('aria-expanded') === 'true';
+    let to = null;
+    if (e.key === 'ArrowDown') to = inColumn(lines[at + 1], col);
+    else if (e.key === 'ArrowUp') to = inColumn(lines[at - 1], col);
+    else if (e.key === 'Home') to = inColumn(lines[0], 0);
+    else if (e.key === 'End') to = inColumn(lines[lines.length - 1], 0);
+    else if (e.key === 'ArrowRight') {
+      const child = lines[at + 1] && lines[at + 1].closest('.guild-channels') && lines[at + 1].closest('.guild') === line.closest('.guild') ? lines[at + 1] : null;
+      if (cols[col + 1]) to = cols[col + 1];
+      else if (isHead && !open) control.click();
+      else if (open) to = inColumn(child, 0);
+    } else if (e.key === 'ArrowLeft') {
+      if (open) control.click();
+      else if (col > 0) to = cols[col - 1];
+      else if (line.closest('.guild-channels')) to = line.closest('.guild').querySelector('.guild-head');
+    } else return;
+    e.preventDefault();
+    if (to) to.focus({ preventScroll: true }); // onListFocus brings its whole line into view
   }
 
   // A chat Discord won't let you read or delete in: another go can't change that.
@@ -1530,6 +1678,29 @@
   let lastUserScroll = -Infinity;
   function revealRow(target) {
     if (target.el && performance.now() - lastUserScroll > 4000) target.el.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' });
+  }
+
+  // A long purge says how it's going now and then, to screen readers only: past 25, 50 and 75 %,
+  // at most once a minute. A total that is still a floor (chats not counted yet) stays quiet.
+  const milestone = { next: 25, at: -Infinity };
+
+  function resetMilestones() {
+    milestone.next = 25;
+    milestone.at = -Infinity;
+    $('[data-role="milestone"]').textContent = '';
+  }
+
+  function speakProgress(p) {
+    if (!p.total || p.partial) return;
+    const done = p.deleted + p.failed + (p.gone || 0);
+    const passed = Math.floor((done / p.total) * 4) * 25;
+    const now = performance.now();
+    if (passed < milestone.next || passed >= 100 || now - milestone.at < 60000) return;
+    milestone.next = passed + 25;
+    milestone.at = now;
+    const failed = p.failed ? ` · ${p.failed.toLocaleString()} failed` : '';
+    const left = p.etaSeconds != null ? ` · about ${formatDuration(p.etaSeconds)} left` : '';
+    $('[data-role="milestone"]').textContent = `${Math.floor((done / p.total) * 100)}% · ${p.deleted.toLocaleString()} of ${p.total.toLocaleString()} purged${failed}${left}`;
   }
 
   // ── Tabs ────────────────────────────────────────────────
@@ -2217,6 +2388,8 @@
       protectionStale = false;
       protectionChanged({ keepVerdict: true });
     });
+    on('start', resetMilestones);
+    on('progress', speakProgress);
   }
 
   // Lists can't be (re)built mid-run or mid-scan; build them as soon as that ends. A list

@@ -140,7 +140,8 @@
   background: transparent; color: var(--t3); cursor: pointer; transition: background-color .15s, color .15s; }
 .icon-btn:hover { background: rgba(255, 236, 244, .06); color: var(--t1); }
 .icon-btn .ico { width: 14px; height: 14px; }
-.icon-btn[aria-pressed="true"] { color: var(--t4); }
+/* Muted reads as muted by its crossed-out glyph; the colour stays legible (5.3:1). */
+.icon-btn[aria-pressed="true"] { color: var(--t3); }
 
 /* ── segmented control ─────────────────────────────────── */
 
@@ -274,8 +275,6 @@
 
 /* ── batch lists ───────────────────────────────────────── */
 
-.hint { display: flex; gap: 8px; align-items: flex-start; margin: 14px 2px 0; font: 400 12px/17px var(--font); color: var(--t3); }
-.hint-ico { flex: none; font-size: 12px; line-height: 17px; filter: saturate(.7); }
 .filter { display: block; width: 100%; height: 34px; margin-top: 12px; padding: 0 12px 0 32px; border: 0; border-radius: var(--r-ctl);
   font: 500 12.5px/34px var(--font); color: var(--t1); background-color: rgba(0, 0, 0, .22);
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a08393' stroke-width='2' stroke-linecap='round'><path d='M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5'/></svg>");
@@ -303,38 +302,45 @@
 .row:hover { background: rgba(255, 236, 244, .035); }
 .row.is-selected { color: var(--t1); background: rgba(255, 122, 169, .075); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .17); }
 .check { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+/* The ring holds 3.3:1 against the list, so tired eyes still see every box that can be ticked. The
+   tick hides by opacity, not colour: forced colours repaint a transparent colour as text. */
 .check-ui { width: 16px; height: 16px; flex: none; display: grid; place-items: center; border-radius: 5px; color: transparent;
-  box-shadow: inset 0 0 0 1.5px rgba(255, 208, 226, .26); transition: background-color .18s, box-shadow .18s, transform .3s var(--spring); }
-.check-ui .ico { width: 11px; height: 11px; stroke-width: 3; }
+  box-shadow: inset 0 0 0 1.5px rgba(255, 208, 226, .42); transition: background-color .18s, box-shadow .18s, transform .3s var(--spring); }
+.check-ui .ico { width: 11px; height: 11px; stroke-width: 3; opacity: 0; transition: opacity .12s; }
+.check:checked + .check-ui .ico { opacity: 1; }
 .check:checked + .check-ui { background: var(--rose-400); color: var(--rose-ink); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 0 1px rgba(255, 122, 169, .4); }
 .row:active .check-ui { transform: scale(.88); }
-.check:focus-visible + .check-ui { box-shadow: inset 0 0 0 1.5px rgba(255, 208, 226, .26), 0 0 0 2px var(--wine-900), 0 0 0 4px var(--focus); }
+.check:focus-visible + .check-ui { box-shadow: inset 0 0 0 1.5px rgba(255, 208, 226, .42), 0 0 0 2px var(--wine-900), 0 0 0 4px var(--focus); }
 .check:disabled + .check-ui { opacity: .5; }
 .row-ava { width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center; font: 700 10.5px/1 var(--font);
   color: var(--rose-100); background: hsl(332 26% calc(19% + var(--tone, 0) * 1%)); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); letter-spacing: -.02em; }
-.row-glyph { width: 16px; flex: none; display: grid; place-items: center; color: var(--t4); font: 500 13px/1 var(--font); }
+.row-glyph { width: 16px; flex: none; display: grid; place-items: center; color: var(--t3); font: 500 var(--fs-body)/1 var(--font); }
 .row-glyph .ico { width: 14px; height: 14px; }
 .row-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; }
 .row-name { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-sub { font: 500 11.5px/18px var(--font); color: var(--t3); white-space: nowrap; }
-.row-tag { flex-basis: 100%; margin-top: 2px; display: flex; align-items: center; gap: 4px; font: 700 10.5px/14px var(--font); letter-spacing: .14em; color: var(--rose-300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Only news takes a second line (purging, still indexing, run again later). */
+.row-tag { flex-basis: 100%; margin-top: 2px; display: flex; align-items: center; gap: 4px; font: 700 var(--fs-cap)/14px var(--font); letter-spacing: .03em; color: var(--rose-300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-meta { flex: none; display: flex; align-items: center; font: 600 11.5px/1 var(--font); font-variant-numeric: tabular-nums; color: var(--t3); white-space: nowrap; }
 .row-meta b { color: var(--t1); font-weight: 700; font-size: 12px; }
 .row-meta small { font: 500 11px/1 var(--font); color: var(--t3); }
-.chip-need { height: 20px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 999px; font: 600 10.5px/1 var(--font);
-  color: var(--t3); border: 1px dashed rgba(255, 208, 226, .2); }
+/* Plain words: a dashed outline already means disabled or queued. */
+.chip-need { font: 500 var(--fs-meta)/18px var(--font); color: var(--t3); }
+.row[data-state="ready"] .meta-count b { color: var(--rose-200); }
+/* A row with no shield (a group DM) keeps the shield's room: the 26px button minus its -6px margin. */
+.shield-slot { width: 20px; flex: none; }
 .row[data-state="scanning"] .row-meta { color: var(--rose-300); animation: dp-breathe 1.2s var(--ease-in-out) infinite; }
 /* --t4 is too faint for words (under 3:1); an empty chat reads quieter by weight instead. */
-.row[data-state="clean"] .row-meta { font-weight: 500; }
+.meta-clear { font-weight: 500; }
 .row[data-state="running"] { color: var(--t1); background: rgba(255, 122, 169, .085); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .26); }
 .row[data-state="running"] .row-meta { color: var(--rose-200); }
-.row[data-state="running"] .row-tag { letter-spacing: .03em; color: var(--rose-300); animation: dp-breathe 1.4s var(--ease-in-out) infinite; }
+.row[data-state="running"] .row-tag { color: var(--rose-300); animation: dp-breathe 1.4s var(--ease-in-out) infinite; }
 .row[data-state="done"] .row-meta { color: var(--rose-300); }
 .row[data-state="done"] .row-name { color: var(--t3); }
 .row[data-state="error"] { background: rgba(227, 32, 63, .05); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .22); }
-.row[data-state="error"] .row-meta, .row[data-state="error"] .row-tag { color: var(--crim-300); letter-spacing: .02em; font-weight: 600; font-size: 11px; }
+.row[data-state="error"] .row-meta { color: var(--crim-300); letter-spacing: .02em; font-weight: 600; font-size: var(--fs-meta); }
 .row[data-state="stopped"] .row-meta { color: var(--coral-300); }
-.row[data-state="indexing"] .row-tag { color: var(--coral-300); letter-spacing: .03em; }
+.row[data-state="indexing"] .row-tag { color: var(--coral-300); }
 .row[data-state="indexing"] .row-meta { color: var(--t3); }
 
 .row-immune { overflow: hidden; cursor: default; color: var(--ember-200);
@@ -547,7 +553,7 @@
 .ico-dagger { width: 12px; height: 12px; stroke-width: 0; }
 .ico-dagger-l { transform: rotate(-20deg); }
 .ico-dagger-r { transform: rotate(20deg) scaleX(-1); }
-.row-tag .ico-dagger, .eyebrow .ico-dagger { width: 14px; height: 14px; }
+.eyebrow .ico-dagger { width: 14px; height: 14px; }
 [data-role="eyebrow-text"] { display: inline-flex; align-items: center; gap: 5px; }
 .eyebrow .ico { width: 11px; height: 11px; }
 .ico-crown { color: var(--ember-300); }
@@ -567,13 +573,15 @@
 .run-pill-scan { color: var(--rose-200); background: rgba(255, 122, 169, .1); }
 .run-pill-live { color: var(--rose-ink); background: var(--rose-300); box-shadow: 0 0 14px -4px rgba(255, 122, 169, .7); }
 .run-pill-done { color: var(--rose-200); background: rgba(255, 122, 169, .12); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .28); }
-.run-pill-error { color: var(--crim-300); background: rgba(227, 32, 63, .12); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .35); }
+.run-pill-error { max-width: 132px; color: var(--crim-300); background: rgba(227, 32, 63, .12); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .35); }
+/* The pill gives the reason in a few words; hovering the row shows Discord's whole answer. */
+.run-pill-why { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .run-pill-stopped { color: var(--coral-300); box-shadow: inset 0 0 0 1px rgba(255, 170, 140, .35); }
 .spin { width: 8px; height: 8px; flex: none; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: dp-orbit .8s linear infinite; }
 
 .guild-bar { display: flex; align-items: center; }
 .guild-bar .guild-head { flex: 1; min-width: 0; }
-.guild-all { order: -1; display: grid; place-items: center; width: 36px; height: 38px; margin-right: -10px; flex: none; cursor: pointer; border-radius: var(--r-row); }
+.guild-all { display: grid; place-items: center; width: 36px; height: 38px; margin-right: -10px; flex: none; cursor: pointer; border-radius: var(--r-row); }
 .guild-all:hover { background: rgba(255, 236, 244, .035); }
 .guild-all .check:indeterminate + .check-ui { background: rgba(255, 122, 169, .35); box-shadow: inset 0 0 0 1.5px var(--rose-400); }
 .guild-all .check:indeterminate + .check-ui .ico { display: none; }
@@ -606,9 +614,10 @@
 .shield-btn:disabled .ico { opacity: .45; }
 .shield-btn.is-on { color: var(--ember-300); }
 .shield-btn.is-on .ico { fill: currentColor; }
-.row-immune .shield-btn { opacity: .55; }
-.row-immune:hover .shield-btn { opacity: 1; }
-@media (hover: none) { .shield-btn { opacity: .55; } }
+/* One gold mark per meaning on an immune row (the shield and the crown); the shield that undoes it
+   shows on hover or focus. */
+.row-immune .shield-btn { opacity: 0; }
+@media (hover: none) { .shield-btn, .row-immune .shield-btn { opacity: .55; } }
 .target-tools { flex: none; display: flex; align-self: flex-start; }
 .target-tools .shield-btn { width: 30px; height: 30px; margin: -2px -2px 0 0; opacity: .7; }
 .target-tools .shield-btn:hover, .target-tools .shield-btn.is-on { opacity: 1; }
@@ -651,4 +660,31 @@
   .layer *, .layer *::before, .layer *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .cursor { animation: none !important; }
   .dial.is-spinning .g-comet { animation: none !important; }
+}
+
+/* ── forced colours (Windows High Contrast) ────────────── */
+/* The system paints every colour and drops shadows and gradients, so edges become borders and
+   whatever is chosen, selected or filling takes Highlight. */
+
+@media (forced-colors: active) {
+  .panel, .term, .modal, .orb { outline: 1px solid CanvasText; }
+  .btn, .chip, .icon-btn, .logs-btn, .shield-btn, .filter { border: 1px solid ButtonText; }
+  .btn:disabled, .chip:disabled { border-color: GrayText; color: GrayText; }
+  .tab-pill { display: none; }
+  .tab[aria-selected="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .tab-badge { forced-color-adjust: none; background: Canvas; color: CanvasText; }
+  .check-ui { border: 1.5px solid CanvasText; }
+  .check:checked + .check-ui { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .guild-all .check:indeterminate + .check-ui { forced-color-adjust: none; background: Canvas; border-color: Highlight; box-shadow: none; }
+  .guild-all .check:indeterminate + .check-ui::after { background: Highlight; }
+  .row.is-selected { outline: 2px solid Highlight; outline-offset: -2px; }
+  .row-immune, .target[data-state="immune"], .row[data-state="error"], .chip-crown { outline: 1px dashed CanvasText; outline-offset: -1px; }
+  .btn-hold { border: 2px solid ButtonText; }
+  .hold-fill { forced-color-adjust: none; background: Highlight; }
+  .hold-fill::after { display: none; }
+  .btn-hold.is-holding .hold-label { forced-color-adjust: none; color: HighlightText; text-shadow: none; }
+  .g-track { stroke: GrayText; }
+  .g-ok, .g-head, .g-sweep { stroke: Highlight; }
+  .g-fail { stroke: CanvasText; filter: none; }
+  .orb-fill { stroke: Highlight; }
 }
