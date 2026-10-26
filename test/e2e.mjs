@@ -164,9 +164,11 @@ await test('T5 batch: DM + new friend DM + channels, inaccessible channel skippe
   await page.click('[data-act="scan"]');
   await page.waitForFunction(() => /Scan done/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 15000 });
   assert(stats.opened.length === 0, 'scanning never opens a DM');
-  assert(/no DM yet/.test(await page.locator('[data-key="u:2004"]').textContent()), 'friend row says it has no DM yet');
-  const readyTag = await page.locator('[data-key="c:3003"] .row-tag').textContent();
-  assert(/READY FOR PURGE/.test(readyTag), `ready tag ${readyTag}`);
+  assert(/closed DM/.test(await page.locator('[data-key="u:2004"]').textContent()), 'friend row says its DM is closed');
+  // The count is the readiness: the row stays one line, with no banner.
+  const ready = page.locator('[data-key="c:3003"]');
+  assert(await ready.getAttribute('data-state') === 'ready' && (await ready.locator('.row-meta').textContent()) === '7 msgs'
+    && await ready.locator('.row-tag').isHidden(), `ready row ${await ready.textContent()}`);
   await page.screenshot({ path: `${OUT}/t5-scanned.png` });
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
@@ -925,7 +927,7 @@ await test('T43 shields are disabled mid-purge, say why, and work again after', 
   await waitEnd(page);
   assert(mine(world, '3002').length === 1, 'the confirmed DM was purged (only the call message stays)');
   assert(await row.isEnabled(), 'row shield usable after the run');
-  assert(/^Protect/.test(await row.getAttribute('title')), `title after: ${await row.getAttribute('title')}`);
+  assert(/^Shield this DM/.test(await row.getAttribute('title')), `title after: ${await row.getAttribute('title')}`);
   await page.hover('[data-key="c:3002"]');
   await row.click();
   await page.waitForTimeout(200);
@@ -1604,7 +1606,7 @@ await test('T64 first run: the welcome card takes focus, and Tab never lands beh
 });
 
 // Words in the panel's faintest ink must still clear WCAG AA (4.5:1) on what is really behind them.
-await test('T65 "no messages found" and the filter placeholder are readable', async () => {
+await test('T65 "all clear ✓" and the filter placeholder are readable', async () => {
   const { page, context } = await boot('/channels/4001/5001');
   const lum = ([r, g, b]) => [r, g, b].map((c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
     .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
@@ -1639,9 +1641,9 @@ await test('T65 "no messages found" and the filter placeholder are readable', as
   await page.mouse.move(5, 5);
   await page.waitForTimeout(300);
   const meta = page.locator('[data-key="c:5004"] .row-meta');
-  assert((await meta.textContent()) === 'no messages found', `meta ${await meta.textContent()}`);
+  assert((await meta.textContent()) === 'all clear ✓', `meta ${await meta.textContent()}`);
   const clean = await contrast(meta, null);
-  assert(clean.ratio >= 4.5, `"no messages found" at ${clean.ratio.toFixed(2)}:1 ${JSON.stringify(clean)}`);
+  assert(clean.ratio >= 4.5, `"all clear ✓" at ${clean.ratio.toFixed(2)}:1 ${JSON.stringify(clean)}`);
   const placeholder = await contrast(page.locator('[data-role="filter"]'), '::placeholder');
   assert(placeholder.ratio >= 4.5, `filter placeholder at ${placeholder.ratio.toFixed(2)}:1 ${JSON.stringify(placeholder)}`);
   await context.close();
@@ -3813,7 +3815,7 @@ await test('T146 one name per idea: This chat, Many chats, a chat\'s kind, and w
   const kind = () => page.evaluate(() => {
     const r = document.querySelector('#dopa-purifier-host').shadowRoot;
     const ico = r.querySelector('[data-role="target-ico"]');
-    return `${r.querySelector('[data-role="eyebrow-text"]').textContent}|${r.querySelector('[data-role="target-name"]').textContent}|${ico.querySelector('svg') ? 'svg' : ico.textContent}`;
+    return `${r.querySelector('[data-role="eyebrow-text"]').textContent}|${r.querySelector('[data-role="target-name"]').textContent.replace(/[\u2066-\u2069]/g, '')}|${ico.querySelector('svg') ? 'svg' : ico.textContent}`;
   });
   assert(await kind() === 'Server channel|general|#', `server channel: ${await kind()}`);
   for (const [path, want] of [['/channels/@me/3002', 'Direct message|Alice ✿|@'], ['/channels/@me/3004', 'Group DM|Alice ✿, Carol|svg'], ['/channels/@me', 'This chat|No chat open|✦']]) {
@@ -3821,7 +3823,7 @@ await test('T146 one name per idea: This chat, Many chats, a chat\'s kind, and w
     await page.waitForFunction((w) => {
       const r = document.querySelector('#dopa-purifier-host').shadowRoot;
       const ico = r.querySelector('[data-role="target-ico"]');
-      return `${r.querySelector('[data-role="eyebrow-text"]').textContent}|${r.querySelector('[data-role="target-name"]').textContent}|${ico.querySelector('svg') ? 'svg' : ico.textContent}` === w;
+      return `${r.querySelector('[data-role="eyebrow-text"]').textContent}|${r.querySelector('[data-role="target-name"]').textContent.replace(/[\u2066-\u2069]/g, '')}|${ico.querySelector('svg') ? 'svg' : ico.textContent}` === w;
     }, want, { timeout: 4000 }).catch(async () => { throw new Error(`${path}: ${await kind()}`); });
   }
   assert(!/Current channel|Batch|Protect|forever|👥/.test(await panelText(page)), `retired words: ${await panelText(page)}`);
@@ -3854,8 +3856,12 @@ await test('T146 one name per idea: This chat, Many chats, a chat\'s kind, and w
   const said = await page.evaluate(() => window.__said);
   assert(said.includes('Starting on 2 chats~ ✨'), `start: ${said.slice(0, 3)}`);
   // Names from Discord sit in bidi isolates, so a right-to-left name can't reorder the line.
-  assert(said.includes('Chat 1 of 2 · \u2068Alice ✿\u2069') && said.includes('Chat 2 of 2 · \u2068Alice ✿, Carol\u2069'), `chats: ${said.filter((x) => /^Chat \d of 2 · [^·]+$/.test(x))}`);
-  assert(said.includes('Chat 1 of 2 · \u2068Alice ✿\u2069 · 1 of 31') && said.includes('Chat 2 of 2 · \u2068Alice ✿, Carol\u2069 · 3 of 3'), `per kill: ${said.filter((x) => / of \d+$/.test(x)).slice(0, 3)}`);
+  // Names sit in bidi isolates (a group's members are isolated one by one inside), so compare the words read
+  // and check the isolate is there.
+  const read = said.map((x) => x.replace(/[\u2066-\u2069]/g, ''));
+  assert(read.includes('Chat 1 of 2 · Alice ✿') && read.includes('Chat 2 of 2 · Alice ✿, Carol'), `chats: ${said.filter((x) => /^Chat \d of 2 · [^·]+$/.test(x))}`);
+  assert(read.includes('Chat 1 of 2 · Alice ✿ · 1 of 31') && read.includes('Chat 2 of 2 · Alice ✿, Carol · 3 of 3'), `per kill: ${said.filter((x) => / of \d+$/.test(x)).slice(0, 3)}`);
+  assert(said.some((x) => x.startsWith('Chat 2 of 2 · \u2068')), 'the chat name is isolated');
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });
@@ -4232,6 +4238,390 @@ await test('T158 while Purify counts first it says so, stays focused, and Scan w
   const rest = await purify();
   assert(rest.busy === null && rest.label === 'Purify' && !rest.disabled && !rest.scan, `after ${JSON.stringify(rest)}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// ── WP-D: the Many chats list, its keyboard and words, and control contrast ──
+const BIDI = /[\u2066-\u2069]/g;
+const unmarked = (s) => String(s || '').replace(BIDI, '');
+const inPanel = (page, fn, arg) => page.evaluate(([src, a]) => new Function('r', 'a', `return (${src})(r, a);`)(document.querySelector('#dopa-purifier-host').shadowRoot, a), [fn.toString(), arg]);
+// A world with forty more DMs, so the list is long enough to scroll and to need a keyboard model.
+function longWorld() {
+  const world = buildWorld();
+  for (let i = 0; i < 40; i++) {
+    const id = String(7000 + i);
+    const user = { id: String(8000 + i), username: `friend${i}`, global_name: `Friend ${i}` };
+    world.channels[id] = { id, type: 1, recipients: [user], last_message_id: String(100 + i) };
+    world.messages[id] = [{ id: String(1200000000000000000n + BigInt(i)), channel_id: id, type: 0, pinned: false, author: world.me, content: `hi ${i}`, attachments: [] }];
+  }
+  return world;
+}
+
+await test('T160 a mixed batch ends with nothing left ticked: no hold for 0, no requests', async () => {
+  const { page, stats, pageErrors, context } = await boot('/channels/4001/5001');
+  // The selection the pictures use: two DMs, a closed DM, #art-share and #mod-only (no access).
+  await pickBatch(page, ['c:3003', 'c:3002', 'u:2004', 'c:5002', 'c:5007']);
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /Scan done/, 15000);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page, 40000);
+  const after = await inPanel(page, (r) => ({
+    ticked: r.querySelectorAll('.row.is-selected').length + r.querySelectorAll('.row .check:checked').length,
+    badge: r.querySelector('[data-role="tab-badge"]').hidden,
+    purify: r.querySelector('[data-act="purify"]').disabled,
+    done: r.querySelectorAll('.row[data-state="done"]').length,
+    skipped: r.querySelector('[data-key="c:5007"]').dataset.state,
+  }));
+  assert(after.ticked === 0 && after.badge && after.purify, `still offered ${JSON.stringify(after)}`);
+  assert(after.done === 4 && after.skipped === 'error', `outcomes stay readable ${JSON.stringify(after)}`);
+  const sent = stats.log.length;
+  await page.locator('[data-act="purify"]').evaluate((b) => b.click());
+  await page.waitForTimeout(400);
+  assert(await page.locator('.modal-layer[data-open="true"]').count() === 0, 'no hold offered for 0 messages');
+  assert(stats.log.length === sent, `requests after the batch: ${stats.log.slice(sent).join(', ')}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T161 Many chats rows: one line each, one count column, said once', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { latencyMs: 15 });
+  const keys = ['c:3004', 'c:3003', 'c:3002', 'u:2004', 'c:5002', 'c:5004', 'c:5007'];
+  await pickBatch(page, keys);
+  const look = () => inPanel(page, (r, ks) => Object.fromEntries([...ks, 'u:2005'].map((k) => {
+    const el = r.querySelector(`[data-key="${k}"]`);
+    const meta = el.querySelector('.row-meta');
+    return [k, { h: Math.round(el.getBoundingClientRect().height), right: meta.getBoundingClientRect().right, meta: meta.textContent,
+      tag: el.querySelector('.row-tag').hidden ? '' : el.querySelector('.row-tag').textContent, title: el.title, state: el.dataset.state }];
+  })), keys);
+  const before = await look();
+  assert(await page.locator('.hint').count() === 0, 'the permanent tip is gone');
+  const filter = page.locator('[data-role="filter"]');
+  assert(await filter.getAttribute('placeholder') === 'Find a chat or server…' && await filter.getAttribute('aria-label') === 'Find a chat or server', 'filter words');
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /Scan done/, 15000);
+  const after = await look();
+  for (const k of Object.keys(before)) assert(after[k].h === before[k].h, `${k} grew from ${before[k].h} to ${after[k].h}px: ${JSON.stringify(after[k])}`);
+  assert(before['c:3002'].h === 38 && before['c:5002'].h === 32, `row heights ${before['c:3002'].h}/${before['c:5002'].h}`);
+  // Group, DMs and closed DMs end their counts on one column.
+  const edges = ['c:3004', 'c:3003', 'c:3002', 'u:2004', 'u:2005'].map((k) => after[k].right);
+  assert(Math.max(...edges) - Math.min(...edges) <= 1, `count column ${edges.join(', ')}`);
+  assert(after['c:3003'].state === 'ready' && after['c:3003'].tag === '' && after['c:3003'].meta === '7 msgs', `ready ${JSON.stringify(after['c:3003'])}`);
+  assert(after['u:2004'].meta === 'closed DM', `closed DM ${JSON.stringify(after['u:2004'])}`);
+  assert(after['c:5004'].meta === 'all clear ✓', `clean ${JSON.stringify(after['c:5004'])}`);
+  const err = after['c:5007'];
+  assert(err.state === 'error' && err.tag === '' && err.meta === '✗ no access' && /Missing Access/.test(err.title), `said once ${JSON.stringify(err)}`);
+  // Bardo's row shows one gold mark per meaning; the shield that undoes it appears on hover.
+  const shield = page.locator('.row-immune .shield-btn');
+  await page.mouse.move(5, 5);
+  assert(await shield.evaluate((b) => getComputedStyle(b).opacity) === '0', 'immune shield rests hidden');
+  await page.hover('.row-immune');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.row-immune .shield-btn')).opacity === '1');
+  // A running pill changes only its number: the same spinner keeps turning.
+  await page.click('[data-act="dm-none"]');
+  for (const k of ['c:5002', 'c:5004', 'c:5007']) await page.click(`[data-key="${k}"]`);
+  await page.click('[data-key="c:3002"]');
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.waitForFunction(() => {
+    const spin = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-key="c:3002"] .run-pill-live .spin');
+    if (spin) window.__spin = spin;
+    return !!spin;
+  }, null, { timeout: 15000 });
+  const first = await text(page, '[data-key="c:3002"] .run-pill-n');
+  await page.waitForFunction((n) => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const el = r.querySelector('[data-key="c:3002"] .run-pill-n');
+    return el && el.textContent !== n && Number(el.textContent.split('/')[0]) >= 4;
+  }, first, { timeout: 15000 });
+  assert(await page.evaluate(() => window.__spin === document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-key="c:3002"] .spin')), 'the spinner was rebuilt mid-run');
+  await page.click('[data-act="stop"]');
+  await waitEnd(page);
+  await context.close();
+});
+
+await test('T162 the lists say what they are doing, and when nothing matches', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5001');
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForSelector('[data-key="c:3002"]');
+    await page.fill('[data-role="filter"]', 'zzz');
+    const none = await inPanel(page, (r) => ['dm-list', 'server-list'].map((l) => (r.querySelector(`[data-role="${l}"] [data-role="no-match"]`) || {}).textContent));
+    assert(none.every((t) => unmarked(t) === 'No chats match “zzz”~'), `no-match ${JSON.stringify(none)}`);
+    await page.fill('[data-role="filter"]', '<img src=x onerror="window.__xss=1">');
+    assert(/No chats match “<img/.test(unmarked(await text(page, '[data-role="dm-list"] [data-role="no-match"]'))) && !(await page.evaluate(() => window.__xss)), 'the query is shown as text');
+    // The marks that keep names in reading order never stop a match.
+    await page.fill('[data-role="filter"]', 'dm: alice');
+    assert(await page.locator('[data-key="c:3002"]').isVisible() && await page.locator('[data-role="no-match"]').count() === 1, 'label search finds Alice');
+    await page.fill('[data-role="filter"]', '');
+    assert(await page.locator('[data-role="no-match"]').count() === 0, 'clearing the filter clears the note');
+    // A server's channels are found, then a server with nothing to purge says so.
+    let release;
+    const held = new Promise((r) => { release = r; });
+    await page.route(/\/api\/v9\/guilds\/4002\/channels$/, async (route) => { await held; route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }); });
+    await page.locator('.guild-head').nth(1).click();
+    await page.waitForFunction(() => /Finding channels…/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelectorAll('.guild')[1].textContent));
+    release();
+    await page.waitForFunction(() => /Nothing here you can purge~/.test(document.querySelectorAll && document.querySelector('#dopa-purifier-host').shadowRoot.querySelectorAll('.guild')[1].textContent));
+    await context.close();
+  }
+  {
+    const world = buildWorld();
+    for (const [id, c] of Object.entries(world.channels)) if (c.type === 1 || c.type === 3) delete world.channels[id];
+    world.relationships = [];
+    world.guilds = [];
+    const { page, context } = await boot('/channels/@me', { world });
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForFunction(() => /No DMs here yet~/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="dm-list"]').textContent));
+    await page.waitForFunction(() => /You're not in any servers~/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="server-list"]').textContent));
+    await context.close();
+  }
+});
+
+await test('T163 forced colours show only real ticks, the chosen tab and the hold; controls clear 3:1', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.emulateMedia({ forcedColors: 'active' });
+  await pickBatch(page, ['c:3002', 'c:5002']);
+  await page.waitForTimeout(300); // the tick fades in
+  const look = () => inPanel(page, (r) => {
+    const probe = document.createElement('i');
+    probe.style.cssText = 'forced-color-adjust:none;background:Highlight';
+    r.append(probe);
+    const highlight = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    const ticks = [...r.querySelectorAll('.row .check, .guild-all .check')].map((c) => ({ checked: c.checked, mixed: c.indeterminate, shown: getComputedStyle(c.nextElementSibling.querySelector('.ico')).opacity }));
+    const fill = r.querySelector('.hold-fill');
+    return { highlight, ticks, tab: getComputedStyle(r.querySelector('.tab[aria-selected="true"]')).backgroundColor, fill: getComputedStyle(fill).backgroundColor, fillW: fill.getBoundingClientRect().width };
+  });
+  const s = await look();
+  assert(s.ticks.length > 8 && s.ticks.every((t) => t.mixed || (t.shown === (t.checked ? '1' : '0'))), `ticks ${JSON.stringify(s.ticks)}`);
+  assert(s.tab === s.highlight, `selected tab ${s.tab} vs Highlight ${s.highlight}`);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const box = await page.locator('[data-act="confirm"]').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(350);
+  const held = await look();
+  await page.mouse.move(5, 5); // slide off: nothing is purged
+  await page.mouse.up();
+  assert(held.fill === held.highlight && held.fillW > 20, `hold fill ${held.fill} ${held.fillW}px`);
+  await page.keyboard.press('Escape');
+  await page.emulateMedia({ forcedColors: 'none' });
+  await page.click('[data-act="mute"]');
+  await page.waitForTimeout(300);
+  const normal = await inPanel(page, (r) => ({
+    ring: getComputedStyle(r.querySelector('.row:not(.is-selected) .check-ui')).boxShadow,
+    tick: getComputedStyle(r.querySelector('.row:not(.is-selected) .check-ui .ico')).opacity,
+    muted: getComputedStyle(r.querySelector('[data-act="mute"]')).color,
+    glyph: getComputedStyle(r.querySelector('.row-glyph')).color,
+  }));
+  assert(/0\.42/.test(normal.ring) && normal.tick === '0', `checkbox ring ${JSON.stringify(normal)}`);
+  assert(normal.muted === 'rgb(160, 131, 147)' && normal.glyph === 'rgb(160, 131, 147)', `muted icon and channel glyph at --t3 ${JSON.stringify(normal)}`);
+  await context.close();
+});
+
+await test('T164 screen readers hear each row, the badge and the Purify count in words', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await pickBatch(page, ['c:3002', 'c:5002']);
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /Scan done/);
+  const cdp = await context.newCDPSession(page);
+  const tree = async () => (await cdp.send('Accessibility.getFullAXTree')).nodes.filter((n) => !n.ignored)
+    .map((n) => ({ role: n.role && n.role.value, name: unmarked(n.name && n.name.value).trim(), desc: unmarked(n.description && n.description.value).trim(),
+      checked: ((n.properties || []).find((p) => p.name === 'checked') || {}).value }));
+  let nodes = await tree();
+  const alice = nodes.find((n) => n.role === 'checkbox' && n.name === 'DM: Alice ✿');
+  assert(alice && alice.desc === '31 msgs' && alice.checked && alice.checked.value === 'true', `Alice reads ${JSON.stringify(alice)}`);
+  assert(nodes.some((n) => n.role === 'tab' && / 2 selected$/.test(n.name)), `tab ${JSON.stringify(nodes.filter((n) => n.role === 'tab'))}`);
+  assert(nodes.some((n) => n.role === 'button' && n.name === 'Purify selected 2 chats'), `purify ${JSON.stringify(nodes.filter((n) => n.role === 'button' && /Purify/.test(n.name)))}`);
+  assert(nodes.some((n) => n.role === 'group' && n.name === 'Direct messages') && nodes.some((n) => n.role === 'group' && n.name === 'Servers'), 'lists are named groups');
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  nodes = await tree();
+  const done = nodes.find((n) => n.role === 'checkbox' && n.name === 'DM: Alice ✿');
+  assert(done && done.desc === 'purged 31', `a finished row reads ${JSON.stringify(done)}`);
+  assert(!nodes.some((n) => /✗|✓/.test(n.name + n.desc)), 'no glyph names');
+  await page.click('.tab[data-tab="current"]');
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  nodes = await tree();
+  assert(nodes.some((n) => n.role === 'button' && n.name === 'Purify 40 messages'), `this chat ${JSON.stringify(nodes.filter((n) => n.role === 'button' && /Purify/.test(n.name)))}`);
+  await context.close();
+});
+
+await test('T165 a long purge speaks its progress at most once a minute, and never a floor', async () => {
+  const listen = (page) => page.evaluate(() => {
+    window.__said = [];
+    new MutationObserver(() => { const t = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="milestone"]').textContent; if (t) window.__said.push(t); })
+      .observe(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="milestone"]'), { childList: true, characterData: true, subtree: true });
+  });
+  {
+    const { page, context } = await boot('/channels/4001/5001', { latencyMs: 10 });
+    // The panel's own clock, to step past the minute without waiting for it.
+    await page.evaluate(() => { const real = performance.now.bind(performance); let skew = 0; performance.now = () => real() + skew; window.__skew = (ms) => { skew += ms; }; });
+    assert(await page.locator('[data-role="milestone"]').getAttribute('aria-live') === 'polite', 'a polite region');
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    await listen(page);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => window.__said.length === 1, null, { timeout: 15000 });
+    await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 21, null, { timeout: 15000 });
+    assert((await page.evaluate(() => window.__said)).length === 1, 'quiet for the rest of the minute');
+    await page.evaluate(() => window.__skew(61000));
+    await waitEnd(page);
+    const said = await page.evaluate(() => window.__said);
+    assert(said.length === 2, `announcements ${JSON.stringify(said)}`);
+    assert(/^(2[5-9]|[34]\d)% · \d+ of 40 purged · about .+ left$/.test(said[0]) && /^([5-9]\d)% · \d+ of 40 purged/.test(said[1]), `words ${JSON.stringify(said)}`);
+    await context.close();
+  }
+  {
+    // Not counted: while a chat is still uncounted the total is a floor ('31 of 31+'), and stays unsaid.
+    const { page, context } = await boot('/channels/4001/5001', { latencyMs: 10 });
+    await pickBatch(page, ['c:3002', 'c:3003']);
+    await page.evaluate(() => {
+      window.__floors = [];
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      new MutationObserver(() => window.__floors.push(`${r.querySelector('[data-role="milestone"]').textContent} @ ${r.querySelector('[data-role="pct"]').textContent}`))
+        .observe(r.querySelector('[data-role="milestone"]'), { childList: true, characterData: true, subtree: true });
+    });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    const said = (await page.evaluate(() => window.__floors)).filter((s) => !s.startsWith(' @'));
+    assert(said.length && said.every((s) => !s.endsWith('+')), `spoken over a floor ${JSON.stringify(said)}`);
+    await context.close();
+  }
+});
+
+await test('T166 right-to-left names keep their place in labels and titles', async () => {
+  const world = buildWorld();
+  world.channels['5008'] = { id: '5008', type: 0, guild_id: '4001', name: 'الدردشة-العامة', position: 5 };
+  world.messages['5008'] = [];
+  world.guilds[0].name = 'سيرفر الأصدقاء المسائي';
+  world.channels['3004'].recipients = [{ id: '2101', username: 'mohammed', global_name: 'محمد العتيبي' }, { id: '2102', username: 'shira', global_name: 'שירה כהן' }];
+  const { page, context } = await boot('/channels/4001/5001', { world });
+  await pickBatch(page, ['c:5008', 'c:3004']);
+  const label = await page.locator('[data-key="c:5008"] .check').getAttribute('aria-label');
+  assert(label === '#\u2068الدردشة-العامة\u2069 (\u2068سيرفر الأصدقاء المسائي\u2069)', `channel label ${JSON.stringify(label)}`);
+  // Where each part lands on screen: '#' and the channel come first, the server after.
+  const order = (sel, marks) => inPanel(page, (r, [s, ms]) => {
+    const t = r.querySelector(s).firstChild;
+    return ms.map((m) => { const i = t.data.indexOf(m); const range = document.createRange(); range.setStart(t, i); range.setEnd(t, i + 1); return Math.round(range.getBoundingClientRect().left); });
+  }, [sel, marks]);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const [hash, channel, paren, server] = await order('.modal-item-name', ['#', 'ا', '(', 'س']);
+  assert(hash < channel && channel < paren && paren < server, `dialog order # ${hash}, channel ${channel}, ( ${paren}, server ${server}`);
+  await page.keyboard.press('Escape');
+  const [arabic, hebrew] = await order('[data-key="c:3004"] .row-name', ['م', 'ש']);
+  assert(arabic < hebrew, `group members swap: Arabic at ${arabic}, Hebrew at ${hebrew}`);
+  await context.close();
+});
+
+await test('T167 each list is one Tab stop and the arrows walk it', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { world: longWorld(), viewport: { width: 1280, height: 720 } });
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:7039"]');
+  const at = async () => { const a = await look(); return a && { ...a, what: unmarked(a.what) }; };
+  const look = () => inPanel(page, (r) => {
+    const a = r.activeElement;
+    if (!a) return null;
+    const line = a.closest('.row, .guild-bar');
+    const strip = r.querySelector('.hero').getBoundingClientRect().bottom;
+    return { what: a.dataset.act || a.getAttribute('aria-label') || a.className, key: line && (line.dataset.key || 'guild'), checked: a.checked,
+      clear: !line || line.getBoundingClientRect().top >= strip - 1, expanded: a.getAttribute('aria-expanded') };
+  });
+  await page.locator('[data-role="filter"]').focus();
+  const stops = [];
+  for (let i = 0; i < 12 && !(stops.length && stops[stops.length - 1].what === 'server-refresh'); i++) {
+    await page.keyboard.press('Tab');
+    stops.push(await at());
+  }
+  // The DM list is one stop, on its first checkbox: a reflex Space ticks a chat, never lifts Bardo's shield.
+  assert(stops.map((s) => s.what).join(' | ') === 'dm-all | dm-none | dm-refresh | Group: Alice ✿, Carol | server-refresh', `Tab stops ${JSON.stringify(stops)}`);
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('ArrowDown');
+  let now = await at();
+  assert(now.key === 'c:3003' && /^DM: /.test(now.what) && !now.checked, `two down ${JSON.stringify(now)}`);
+  await page.keyboard.press('Space');
+  await page.keyboard.press('ArrowDown');
+  now = await at();
+  assert(now.key === 'c:3002' && !now.checked && await page.locator('[data-key="c:3003"] .check').isChecked(), `Space ticks, arrows only move ${JSON.stringify(now)}`);
+  await page.keyboard.press('ArrowRight');
+  assert((await at()).what === 'Shield Alice ✿', `right to the shield ${JSON.stringify(await at())}`);
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('End');
+  now = await at();
+  assert(now.key === 'u:2005' && now.clear, `End: the last friend ${JSON.stringify(now)}`);
+  await page.keyboard.press('Home');
+  now = await at();
+  assert(now.what === 'Shield Bardo' && now.clear, `Home ${JSON.stringify(now)}`);
+  // Leaving and coming back lands where you were.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  assert((await at()).key === 'c:3004', `back to the same row ${JSON.stringify(await at())}`);
+  // Servers: the select-all box comes first, Right opens the server and goes in, Left comes out.
+  assert(await page.locator('.guild-bar').first().evaluate((b) => b.firstElementChild.classList.contains('guild-all')), 'select-all first in the DOM');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  now = await at();
+  assert(now.what === 'All channels in ✿ Cozy Corner', `server stop ${JSON.stringify(now)}`);
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  now = await at();
+  assert(now.expanded === 'true', `opened ${JSON.stringify(now)}`);
+  await page.waitForSelector('[data-key="c:5001"]');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  now = await at();
+  assert(now.key === 'c:5002', `into the channels ${JSON.stringify(now)}`);
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  now = await at();
+  assert(now.expanded === 'false', `folded ${JSON.stringify(now)}`);
+  assert(await page.locator('.row .check:checked').count() === 1, 'moving never ticked anything');
+  await context.close();
+});
+
+await test('T168 a shield toggled from the keyboard keeps focus on that person', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5001');
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForSelector('[data-key="c:3003"]');
+    await page.locator('[data-key="c:3003"] .check').focus();
+    await page.keyboard.press('ArrowRight');
+    const focused = () => inPanel(page, (r) => r.activeElement && { user: r.activeElement.dataset.userId, pressed: r.activeElement.getAttribute('aria-pressed'), immune: !!r.activeElement.closest('.row-immune') });
+    await page.keyboard.press('Enter');
+    let f = await focused();
+    assert(f && f.user === '2003' && f.pressed === 'true' && f.immune, `after shielding ${JSON.stringify(f)}`);
+    await page.keyboard.press('Space');
+    f = await focused();
+    assert(f && f.user === '2003' && f.pressed === 'false' && !f.immune, `after removing the shield ${JSON.stringify(f)}`);
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/@me/3002');
+    await page.locator('[data-role="target-tools"] .shield-btn').focus();
+    await page.keyboard.press('Enter');
+    const f = await inPanel(page, (r) => r.activeElement && { tools: !!r.activeElement.closest('[data-role="target-tools"]'), pressed: r.activeElement.getAttribute('aria-pressed') });
+    assert(f && f.tools && f.pressed === 'true', `card shield ${JSON.stringify(f)}`);
+    await context.close();
+  }
+});
+
+await test('T169 one word per idea: shield and immune, and "#" only for text channels', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await pickBatch(page, ['c:5001']);
+  const words = () => inPanel(page, (r) => [...r.querySelectorAll('.shield-btn')].map((b) => `${b.getAttribute('aria-label')} | ${b.title} | ${b.getAttribute('aria-pressed')}`));
+  const before = (await words()).map(unmarked);
+  assert(before.includes('Shield Alice ✿ | Shield this DM~ never purged | false') && before.includes('Shield Bardo | Immune ♡ click to remove the shield | true'), `shields ${JSON.stringify(before)}`);
+  assert(!before.some((w) => /protect/i.test(w)), `no "protect" ${JSON.stringify(before)}`);
+  const labels = (await inPanel(page, (r) => ['5001', '5003', '5004'].map((id) => r.querySelector(`[data-key="c:${id}"] .check`).getAttribute('aria-label')))).map(unmarked);
+  assert(JSON.stringify(labels) === JSON.stringify(['#general (✿ Cozy Corner)', 'announcements (✿ Cozy Corner)', 'Voice Lounge (✿ Cozy Corner)']), `channel labels ${JSON.stringify(labels)}`);
   await context.close();
 });
 
