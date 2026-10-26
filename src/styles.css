@@ -439,18 +439,25 @@
 .btn-quiet { color: var(--t1); background: rgba(255, 236, 244, .06); box-shadow: inset 0 0 0 1px var(--hair-2), inset 0 1px 0 var(--hi); }
 .btn-quiet:hover:not(:disabled) { background: rgba(255, 236, 244, .09); }
 .btn-quiet:disabled { color: var(--t4); background: rgba(255, 236, 244, .03); }
+/* The gradient can't transition, so neither does the bloom: the two switch in the same frame. */
 .btn-purge { color: var(--rose-ink); background: linear-gradient(180deg, #ff8fb8 0%, #ff6c9f 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(130, 10, 55, .25), var(--bloom-rose); }
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(130, 10, 55, .25), var(--bloom-rose);
+  transition: transform .18s var(--ease-out), filter .2s, color .2s; }
 .btn-purge:hover:not(:disabled) { filter: brightness(1.05) saturate(1.05); }
 .btn-purge:disabled { color: var(--t4); background: transparent; box-shadow: none; outline: 1px dashed rgba(255, 208, 226, .16); outline-offset: -1px; filter: none; }
+/* Purify counting before it asks: still the focused, pressed control, just quieter while it works. A soft
+   sheen breathes behind the label, so the words themselves never dip below AA contrast. */
+.btn-purge[aria-busy="true"], .btn-purge[aria-busy="true"]:hover:not(:disabled) { filter: saturate(.8) brightness(.94); cursor: progress; }
+.btn-purge[aria-busy="true"]::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: rgba(255, 240, 246, .16); animation: dp-breathe 1.2s var(--ease-in-out) infinite; }
 .btn-count { min-width: 22px; height: 20px; padding: 0 7px; border-radius: 999px; font: 700 var(--fs-meta)/20px var(--font); font-variant-numeric: tabular-nums;
   background: rgba(42, 7, 22, .14); box-shadow: inset 0 0 0 1px rgba(42, 7, 22, .08); text-align: center; }
 .btn-purge:disabled .btn-count { background: rgba(255, 236, 244, .06); box-shadow: none; }
 .btn-stop { color: var(--crim-300); background: rgba(227, 32, 63, .09); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .3), inset 0 1px 0 rgba(255, 200, 210, .06); }
 .btn-stop:hover:not(:disabled) { background: rgba(227, 32, 63, .14); }
 .btn-stop:disabled { opacity: .55; }
+/* Pause and Resume share the left slot and Stop keeps Purify's box, so nothing moves under the pointer. */
 .actions[data-role="run-actions"] { grid-template-columns: 1fr 1.45fr; }
-.layer[data-run="paused"] .actions[data-role="run-actions"] { grid-template-columns: 1.45fr 1fr; }
 
 .status-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 16px;
   background: rgba(0, 0, 0, .16); box-shadow: inset 0 1px 0 var(--hair); }
@@ -523,15 +530,20 @@
 
 /* ── confirm dialog ────────────────────────────────────── */
 
-.modal-layer { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; padding: 16px;
+/* The layer scrolls and auto margins centre the dialog, so a tall one on a short window (200% zoom,
+   half a laptop screen) is never cut off at the top or the bottom. */
+.modal-layer { position: fixed; inset: 0; z-index: 5; display: flex; padding: 16px; overflow-y: auto; overscroll-behavior: contain;
   background: rgba(9, 4, 7, .62); -webkit-backdrop-filter: blur(3px) saturate(80%); backdrop-filter: blur(3px) saturate(80%);
   animation: dp-fade .18s var(--ease-out); }
 .modal-layer[data-open="false"] { opacity: 0; pointer-events: none; transition: opacity .16s; }
-.modal { position: relative; width: 340px; max-width: 100%; padding: 28px 24px 20px; text-align: center; border-radius: 24px; overflow: hidden; isolation: isolate;
+.modal { position: relative; flex: none; width: 340px; max-width: 100%; margin: auto; padding: 28px 24px 20px; text-align: center; border-radius: 24px; overflow: hidden; isolation: isolate;
   background: radial-gradient(70% 42% at 50% 0%, rgba(227, 32, 63, .16), transparent 72%), rgba(21, 11, 17, .96);
   box-shadow: inset 0 0 0 1px var(--hair-2), inset 0 1px 0 var(--hi), var(--lift); animation: dp-rise .42s var(--spring); }
 .modal::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; background-image: var(--grain); opacity: .05; mix-blend-mode: overlay; }
 .modal-layer[data-open="false"] .modal { transform: scale(.96); transition: transform .16s; }
+/* Confirmed by a hold: the full bar stays, and the dialog settles away a touch slower. */
+.modal-layer[data-open="false"][data-sealed] { transition: opacity .2s var(--ease-out) .04s; }
+.modal-layer[data-open="false"][data-sealed] .modal { transform: scale(.985); transition: transform .24s var(--ease-out); }
 .modal-emote { position: relative; width: 84px; height: 84px; margin: 0 auto; z-index: 0; }
 .modal-emote::before { content: ''; position: absolute; inset: -18px; border-radius: 50%; z-index: -1;
   background: radial-gradient(circle, rgba(255, 74, 99, .3), rgba(255, 122, 169, .08) 55%, transparent 72%); }
@@ -540,14 +552,20 @@
 .modal-text { font: 400 var(--fs-body)/19px var(--font); color: var(--t2); }
 .modal-lead { margin: 0; text-wrap: balance; }
 .modal-lead b { color: var(--t1); font-weight: 700; font-variant-numeric: tabular-nums; }
-.pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 12px; height: 30px; padding: 0 12px; border-radius: 999px;
-  background: rgba(255, 236, 244, .05); box-shadow: inset 0 0 0 1px var(--hair-2); font: 600 var(--fs-body)/30px var(--font); color: var(--t1); }
-.pill-glyph { color: var(--t3); font-weight: 500; }
-.pill-name { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pill-context { flex: 0 1 auto; min-width: 0; color: var(--t3); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The chat's whole name, wrapped and balanced rather than cut: a capsule on one line, a soft card on more. */
+.pill { display: block; width: fit-content; max-width: 100%; min-height: 30px; margin: 12px auto 0; padding: 5px 14px; border-radius: 16px;
+  background: rgba(255, 236, 244, .05); box-shadow: inset 0 0 0 1px var(--hair-2); font: 600 var(--fs-body)/20px var(--font); color: var(--t1);
+  text-align: center; text-wrap: balance; overflow-wrap: anywhere; }
+.pill > span { white-space: normal; }
+.pill-glyph { margin-right: 6px; color: var(--t3); font-weight: 500; }
+.pill-glyph .ico { width: 14px; height: 14px; vertical-align: -2px; }
+/* With the space before it, 6px from the name. */
+.pill-context { margin-left: 2px; color: var(--t3); font-weight: 500; }
 .modal-list { max-height: 163px; -webkit-mask-image: linear-gradient(#000 calc(100% - 10px), transparent); mask-image: linear-gradient(#000 calc(100% - 10px), transparent); overflow-y: auto; margin: 12px 0 0; padding: 4px; border-radius: 12px; text-align: left;
   background: rgba(0, 0, 0, .22); box-shadow: inset 0 0 0 1px var(--hair); scrollbar-width: thin; scrollbar-color: rgba(255, 208, 226, .18) transparent; }
-.modal-item { padding: 5px 10px; font: 500 var(--fs-body)/18px var(--font); color: var(--t1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 8px; }
+/* Read through with the keyboard: the fade would clip the ring, and there's no need to hint at more. */
+.modal-list:focus-visible { -webkit-mask-image: none; mask-image: none; outline: 2px solid var(--focus); outline-offset: 2px; }
+.modal-item { padding: 5px 10px; font: 500 var(--fs-body)/18px var(--font); color: var(--t1); border-radius: 8px; }
 .modal-item + .modal-item { margin-top: 1px; }
 .modal-who { margin-top: 8px; font: 500 var(--fs-meta)/16px var(--font); color: var(--t3); }
 .modal-who b { color: var(--t2); font-weight: 600; }
@@ -555,21 +573,42 @@
 .modal-warn::before, .modal-warn::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(255, 74, 99, .28)); }
 .modal-warn::after { transform: scaleX(-1); }
 .modal-buttons { display: grid; grid-template-columns: 1fr 1.3fr; gap: 8px; }
-.btn-hold { --hold: 0; color: #fff; background: var(--crim-700); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .5), 0 10px 24px -10px rgba(227, 32, 63, .7); filter: none; touch-action: none; user-select: none; }
+.btn-hold { color: #fff; background: var(--crim-700); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .5), 0 10px 24px -10px rgba(227, 32, 63, .7); filter: none; touch-action: none; user-select: none; }
 .btn-hold:hover:not(:disabled) { filter: brightness(1.08); }
-.hold-fill { position: absolute; top: 0; bottom: 0; left: 0; width: calc(var(--hold) * 100%); background: linear-gradient(90deg, #a70f29, #d21b3a); }
-.btn-hold:not(.is-holding) .hold-fill { transition: width .3s var(--ease-out); }
+/* The fill slides in on the compositor (a transform, not a width), so it stays smooth on a busy page. */
+.hold-fill { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; transform: translateX(-100%); will-change: transform; background: linear-gradient(90deg, #a70f29, #d21b3a); }
+.btn-hold:not(.is-holding) .hold-fill { transition: transform .22s var(--ease-out); }
 /* The leading edge licks forward like the mascot's flames. */
 .hold-fill::after { content: ''; position: absolute; top: -2px; bottom: -2px; left: calc(100% - 1px); width: 14px; opacity: 0; transition: opacity .15s;
   background: linear-gradient(90deg, #d21b3a, #ff7a3d 55%, var(--ember-300));
   -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 13 44' preserveAspectRatio='none'><path d='M0 0C5 4 2 8 7 11c4 2.5 1 6 5 9-4 3-1 6.5-5 9 5 3 2 7 6 9-5 2-8 4-13 6z'/></svg>") 0 0 / 100% 100% no-repeat;
   mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 13 44' preserveAspectRatio='none'><path d='M0 0C5 4 2 8 7 11c4 2.5 1 6 5 9-4 3-1 6.5-5 9 5 3 2 7 6 9-5 2-8 4-13 6z'/></svg>") 0 0 / 100% 100% no-repeat; }
 .btn-hold.is-holding .hold-fill::after { opacity: 1; }
+/* Sealed: the button springs back from the press and the full bar glows as the dialog goes. */
+.btn-hold.is-sealed, .btn-hold.is-sealed:active:not(:disabled) { transform: none; transition: transform .14s var(--ease-out); }
+.btn-hold.is-sealed .hold-fill { filter: brightness(1.15); }
+.btn-hold.is-sealed .hold-fill::after { opacity: 0; }
 .hold-label { position: relative; text-shadow: 0 1px 1px rgba(60, 0, 10, .45); font-variant-numeric: tabular-nums; }
 .hold-label[data-nudge] { animation: dp-nudge .5s var(--ease-out); }
+/* The two labels too long for the button at full size: the armed one, set smaller, and the let-go, which wraps. */
+.hold-label.is-long { white-space: normal; font-size: var(--fs-meta); line-height: 14px; text-wrap: balance; }
 .modal-hint { margin-top: 12px; font: 500 var(--fs-meta)/16px var(--font); color: var(--t3); text-wrap: balance; }
-.modal-hint > span { white-space: nowrap; }
+.modal-hint > div + div { margin-top: 2px; }
 .modal-hint kbd { font: 600 var(--fs-cap)/1 var(--mono); padding: 2px 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--hair-2); color: var(--t2); }
+/* Short windows keep every part of the dialog on screen: a smaller mascot, then none. */
+@media (max-height: 620px) {
+  .modal { padding: 18px 20px 14px; }
+  .modal-emote { width: 52px; height: 52px; }
+  .modal-emote img { border-radius: 16px; }
+  .modal-title { margin-top: 10px; }
+  .modal-warn { margin: 12px 0; }
+  .modal-list { max-height: max(76px, calc(100vh - 380px)); }
+}
+@media (max-height: 460px) {
+  .modal-layer { padding-block: 8px; }
+  .modal-emote { display: none; }
+  .modal-title { margin-top: 0; }
+}
 
 /* ── orb ───────────────────────────────────────────────── */
 
@@ -643,9 +682,11 @@
 .guild-all .check:indeterminate + .check-ui::after { content: ''; width: 8px; height: 2px; border-radius: 1px; background: var(--rose-100); }
 
 .modal-item { display: flex; align-items: baseline; gap: 10px; }
-.modal-item-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.modal-item-meta { flex: none; font: 600 var(--fs-body)/18px var(--font); color: var(--t2); font-variant-numeric: tabular-nums; }
+/* Up to two lines, then the full name on hover. */
+.modal-item-name { flex: 1; min-width: 0; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.modal-item-meta { flex: none; font: 600 var(--fs-body)/18px var(--font); color: var(--t2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .modal-item-meta.is-unknown { color: var(--t3); font-style: italic; font-weight: 500; }
+.modal-item-meta.is-skipped { color: var(--crim-300); font-style: normal; }
 
 .line.banner { color: #a88a9a; }
 .line.prompt { display: block; margin-top: 4px; color: var(--rose-300); white-space: nowrap; }

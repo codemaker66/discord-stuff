@@ -226,6 +226,7 @@
     targetPlain: null,    // plainError() of the chat lookup that failed
     scanning: false,
     counting: null,       // { channelId, abort }: Purify counting an uncounted chat before it asks
+    runAs: null,          // the account the last run was confirmed as
     scanError: null,      // { channelId, line, short, code, blocking }: the last failed count of that chat
     runTargets: [],
     batchRows: new Map(), // key → row
@@ -512,21 +513,23 @@
         h('span', { class: 'tf-eta' }, 'ETA ', h('b', { 'data-role': 'tf-eta', text: '--:--' }))));
   }
 
+  // The dialog is described by its one sentence (what, where, as whom, and that it's final), never by
+  // a long list; the parts a dialog doesn't have are skipped.
   function buildModal() {
     return h('div', { class: 'modal-layer', hidden: true },
-      h('div', { class: 'modal', role: 'alertdialog', tabindex: '-1', 'aria-modal': 'true', 'aria-labelledby': 'dp-modal-title', 'aria-describedby': 'dp-modal-text' },
+      h('div', { class: 'modal', role: 'alertdialog', tabindex: '-1', 'aria-modal': 'true', 'aria-labelledby': 'dp-modal-title', 'aria-describedby': 'dp-modal-lead dp-modal-pill dp-modal-who dp-modal-warn' },
         h('div', { class: 'modal-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
         h('div', { class: 'modal-title', id: 'dp-modal-title', 'data-role': 'modal-title' }),
-        h('div', { class: 'modal-text', id: 'dp-modal-text', 'data-role': 'modal-text' }),
+        h('div', { class: 'modal-text', 'data-role': 'modal-text' }),
         h('div', { class: 'modal-buttons' },
           h('button', { class: 'btn btn-quiet', 'data-act': 'cancel', text: 'Nevermind~' }),
           h('button', { class: 'btn btn-purge btn-hold', 'data-act': 'confirm', 'aria-describedby': 'dp-modal-hint' },
             h('span', { class: 'hold-fill', 'aria-hidden': 'true' }),
-            h('span', { class: 'hold-label', 'data-role': 'confirm-label', text: 'Hold to purify ✨' }))),
+            h('span', { class: 'hold-label', 'data-role': 'confirm-label' }))),
         h('div', { class: 'modal-hint', id: 'dp-modal-hint' },
-          h('span', {}, 'Hold with mouse or ', h('kbd', { text: 'Space' })), ' · ',
-          h('span', {}, 'screen reader? press twice'), ' · ',
-          h('span', {}, h('kbd', { text: 'Esc' }), ' keeps you safe'))));
+          h('div', {}, 'Hold with your mouse or ', h('kbd', { text: 'Space' }), ' · ', h('kbd', { text: 'Esc' }), ' keeps you safe'),
+          h('div', {}, 'Screen reader, voice or switch? Just press twice')),
+        h('div', { class: 'sr', 'data-role': 'modal-live', 'aria-live': 'assertive', 'aria-atomic': 'true' })));
   }
 
   function mount() {
@@ -1142,56 +1145,133 @@
     try { syncAccount(); const me = await whoAmI(); return me.username; } catch { return null; }
   }
 
-  async function askPurgeCurrent() {
-    if (!state.target || state.target.protected || run.active || modal) return;
+  const COUNT_CAP_MS = 1200;
+  const gaveUpCounting = new WeakSet(); // chats (this visit's target) whose count Discord held up
+
+  // Purify on an uncounted chat counts it first with the one search the purge would start with, so
+  // the dialog can say how many. It asks who you are first, as the dialog always has; only Discord's
+  // search is on the clock. Past COUNT_CAP_MS, or at any wait Discord asks for, the count is given up
+  // for this visit and the dialog says "all your messages". Returns { go, who }: whether the dialog
+  // should follow, and as whom.
+  async function countFirst(t) {
+    const ctl = new AbortController();
+    state.counting = { channelId: t.channelId, abort: ctl };
+    renderCurrent();
+    setStatus('Counting your messages…', 'info');
     const who = await actingAs();
-    const t = state.target; // re-read: an account switch may have reset everything meanwhile
-    if (!t || t.protected || run.active || modal || state.scanning) return; // a scan began while we asked
-    const n = isPartialCount(t.channelId) ? 0 : counts.get(t.channelId);
+    let cap = 0;
+    let plain = null;
+    let held = null;
+    try {
+      if (who) {
+        cap = setTimeout(() => ctl.abort(), COUNT_CAP_MS);
+        counts.set(t.channelId, await countMine(t, {
+          signal: ctl.signal,
+          searchOnly: true,
+          onWait: (w) => { held = w; ctl.abort(); },
+        }));
+      }
+    } catch (err) {
+      if (!(err instanceof Stopped)) {
+        plain = plainError(err);
+        if (plain.blocking) state.scanError = { channelId: t.channelId, ...plain };
+        addLog(`count failed · ${err.message}`, 'warn');
+      }
+    } finally {
+      clearTimeout(cap);
+    }
+    // Someone else ended it (left the chat, the tab, the panel or the account): nothing follows.
+    const own = !!state.counting && state.counting.abort === ctl;
+    if (own) state.counting = null;
+    if (own && !counts.has(t.channelId)) {
+      gaveUpCounting.add(t);
+      if (!who) addLog("count skipped · Discord didn't say who you are", 'warn');
+      else if (held) addLog(`count skipped · Discord asked for a wait (${held.kind}), so the purge counts as it goes`, 'info');
+      else if (!plain) addLog('count skipped · Discord took too long, so the purge counts as it goes', 'info');
+    }
+    renderCurrent();
+    const here = state.target && state.target.channelId === t.channelId && !state.target.protected;
+    if (!own || !here || run.active || modal || state.scanning) return { go: false };
+    // A chat you can't read could only fail: say so instead of asking.
+    if (plain && plain.blocking) { setStatus(plain.short, 'error'); return { go: false }; }
+    if (counts.get(t.channelId) === 0 && !isPartialCount(t.channelId)) {
+      setStatus('All clear~ nothing of yours here', 'success', { flair: '✨' });
+      return { go: false };
+    }
+    setStatus('Ready to purify~', 'info', { quiet: true, flair: '✨' }); // under the dialog, for after it
+    return { go: true, who };
+  }
+
+  async function askPurgeCurrent() {
+    if (!state.target || state.target.protected || run.active || modal || state.counting || state.scanning) return;
+    const t = state.target;
+    const blocked = state.scanError && state.scanError.channelId === t.channelId && state.scanError.blocking;
+    if (blocked) { setStatus(state.scanError.short, 'error'); return; }
+    let who;
+    if (counts.has(t.channelId) || gaveUpCounting.has(t)) who = await actingAs();
+    else {
+      const counted = await countFirst(t);
+      if (!counted.go) return;
+      ({ who } = counted);
+    }
+    // Re-read: an account switch may have reset everything meanwhile, or the person moved on.
+    const now = state.target;
+    if (!now || now.channelId !== t.channelId || now.protected || run.active || modal || state.scanning || state.counting || state.tab !== 'current') return;
+    const n = isPartialCount(now.channelId) ? 0 : counts.get(now.channelId);
+    const b = (k) => h('b', { text: k.toLocaleString() });
     confirmDialog({
       title: 'Ready to purify?',
-      lead: n ? ['This will delete all ', h('b', { text: n.toLocaleString() }), ' of your messages in'] : ['This will delete all your messages in'],
-      pill: t,
+      lead: n === 1 ? ['This will delete your ', b(1), ' message in']
+        : n ? ['This will delete all ', b(n), ' of your messages in'] : ['This will delete all your messages in'],
+      pill: now,
       who,
-      confirmLabel: 'Hold to purify ✨',
-      onConfirm: () => beginRun([{ ...t }], 'current'),
+      confirmLabel: ['Hold to purify', '✨'],
+      onConfirm: () => beginRun([{ ...now }], 'current', who),
     });
   }
 
+  // One sentence that says exactly what goes: the counted messages, every message in the chats not
+  // counted yet, and that an index still being built may hold older ones. Chats Discord won't let you
+  // into are listed as skipped, not counted as purged.
   async function askPurgeSelected() {
     if (!selectedRows().length || run.active || modal) return;
     const who = await actingAs();
     const rows = selectedRows(); // re-read: an account switch clears the selection
     if (!rows.length || run.active || modal || state.scanning) return;
-    const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
-    const known = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
-    const blocked = rows.filter((r) => r.status === 'error').length;
-    const unscanned = rows.length - scanned.length - blocked;
-    const more = unscanned || scanned.some((r) => isPartialCount(r.channelId));
-    const chats = plural(rows.length, 'chat').replace(' ', '\u00a0');
-    // Never lead with a bare "0+": say what is known, and that the rest is all of yours.
-    const lead = !known && more
-      ? ['Purging ', h('b', { text: 'all' }), ` your messages in ${chats}`, unscanned ? ' (not\u00a0counted\u00a0yet)' : ' (Discord\u00a0is\u00a0still\u00a0indexing)']
-      : known && unscanned
-        ? ['Purging ', h('b', { text: known.toLocaleString() }), ` found + all of yours in ${unscanned}\u00a0uncounted\u00a0chat${unscanned === 1 ? '' : 's'}`]
-        : ['Purging ', h('b', { text: `${known.toLocaleString()}${more ? '+' : ''}` }), ` of your messages from ${chats}`];
+    const skipped = rows.filter(accessError);
+    const counted = rows.filter((r) => !accessError(r) && r.channelId && counts.has(r.channelId));
+    const known = counted.reduce((sum, r) => sum + counts.get(r.channelId), 0);
+    const uncounted = rows.length - skipped.length - counted.length;
+    const partial = counted.some((r) => isPartialCount(r.channelId));
+    if (!known && !uncounted && !partial) return; // nothing left to purge in any of them
+    const n = rows.length - skipped.length;
+    const b = (k) => h('b', { text: k.toLocaleString() });
+    const chats = (k) => (k === 1 ? 'chat' : 'chats');
+    const lead = known && !uncounted ? ['This deletes all ', b(known), ` of your messages in ${n === 1 ? 'this chat' : 'these chats'}`]
+      : known ? ['This deletes ', b(known), ` counted message${known === 1 ? '' : 's'}, plus every message of yours in the `, b(uncounted), ` ${chats(uncounted)} not counted yet`]
+        : counted.length && uncounted ? ['This deletes every message of yours in the ', b(uncounted), ` ${chats(uncounted)} not counted yet`]
+          : n === 1 ? [`This deletes every message of yours in this chat${uncounted ? ' — not counted yet' : ''}`]
+            : ['This deletes every message of yours in these ', b(n), ` chats${uncounted ? ' — none counted yet' : ''}`];
     confirmDialog({
-      title: 'Batch purify?',
-      lead: [...lead, blocked ? ` · ${blocked}\u00a0no\u00a0access` : '', ':'],
+      title: `Purify ${plural(n, 'chat')}?`,
+      lead: [...lead, partial ? ' (Discord may find older ones later)' : '', ':'],
       list: rows.map((r) => {
-        const n = r.channelId ? counts.get(r.channelId) : undefined;
-        return { label: r.label, meta: r.status === 'error' ? 'no access' : n === undefined ? 'not scanned' : plural(n, 'msg') };
+        const k = r.channelId ? counts.get(r.channelId) : undefined;
+        if (accessError(r)) return { label: r.label, meta: `skipped · ${shortReason(r.reason)}`, tone: 'skipped' };
+        return k === undefined ? { label: r.label, meta: 'not counted', tone: 'unknown' } : { label: r.label, meta: plural(k, 'message') };
       }),
       who,
-      confirmLabel: 'Hold to purify all ✨',
-      onConfirm: () => beginRun(rows, 'batch'),
+      confirmLabel: ['Hold to purify all', '✨'],
+      onConfirm: () => beginRun(rows, 'batch', who),
     });
   }
 
-  async function beginRun(targets, mode) {
+  // `who` is the account the person confirmed as; the run is bound to it.
+  async function beginRun(targets, mode, who) {
     if (syncProtection()) protectionStale = true; // a shield from another tab; the engine honours it per chat
     state.runTargets = targets;
     state.runMode = mode;
+    state.runAs = who || null;
     state.runKey = mode === 'current' ? `c:${targets[0].channelId}` : 'batch';
     ring.done = 0;
     ring.fails = [];
@@ -1644,37 +1724,63 @@
 
   const HOLD_MS = 850;
   const ARMED_MS = 5000; // how long a first assistive press waits for the second
+  const TAP_MS = 250; // a release sooner than this was a tap, not a change of mind
+  const SLOP_PX = 12; // how far a finger or pen may drift off the button and still be holding it
   let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed }
   let dialogTimer = 0;
 
+  // The hold button's words, each a [text, flair] pair (the line's one emoji, unspoken). The two long
+  // ones are set smaller; the let-go wraps to "Let go~" over the outcome.
+  const HOLD_WORDS = {
+    holding: ['Keep holding~'],
+    sealed: ['Purifying~', '♡'],
+    tap: ['Hold it down~', '♡'],
+    letGo: ['Let go~ nothing purged', '♡'],
+    armed: ['Press again to purify~'],
+  };
+  function holdLabel(words) {
+    const label = $('[data-role="confirm-label"]');
+    label.classList.toggle('is-long', words === HOLD_WORDS.letGo || words === HOLD_WORDS.armed);
+    label.replaceChildren(...flaired(...words));
+  }
+
+  // While the dialog is up nothing behind it can be reached, by Tab or by a screen reader's browse mode.
+  const behindDialog = () => [$('[data-role="shell"]'), $('.term'), $('.orb')];
+
+  // The whole name, however long: it wraps instead of trailing off, at the moment it matters most.
   function targetPill(t) {
-    return h('div', { class: 'pill' },
-      h('span', { class: 'pill-glyph', text: t.guildId ? '#' : (t.kind === 'group' ? '👥' : '@') }),
+    return h('div', { class: 'pill', id: 'dp-modal-pill' },
+      h('span', { class: 'pill-glyph', 'aria-hidden': 'true' }, t.guildId ? '#' : (t.kind === 'group' ? icon('group') : '@')),
       h('span', { class: 'pill-name', text: t.guildId ? t.name.replace(/^#/, '') : t.name }),
-      t.guildId && t.context ? h('span', { class: 'pill-context', text: `· ${t.context}` }) : null);
+      // A real space: it is read aloud as a pause, and a long name can break there before the server.
+      t.guildId && t.context ? [' ', h('span', { class: 'pill-context', text: `· ${t.context}` })] : null);
   }
 
   function confirmDialog({ title, lead, pill, list, who, confirmLabel, onConfirm }) {
     if (modal) return;
     const layer = $('.modal-layer');
     $('[data-role="modal-title"]').textContent = title;
-    const text = $('[data-role="modal-text"]');
-    text.replaceChildren(...[
-      h('p', { class: 'modal-lead' }, lead),
+    $('[data-role="modal-text"]').replaceChildren(...[
+      h('p', { class: 'modal-lead', id: 'dp-modal-lead' }, lead),
       pill && targetPill(pill),
-      list && h('div', { class: 'modal-list' }, list.map((item) => h('div', { class: 'modal-item' },
-        h('span', { class: 'modal-item-name', text: item.label }),
-        h('span', { class: `modal-item-meta${item.meta === 'not scanned' ? ' is-unknown' : ''}`, text: item.meta })))),
-      who && h('div', { class: 'modal-who' }, 'as ', h('b', { text: `@${who}` })),
-      h('div', { class: 'modal-warn', text: "This can't be undone~ 🩸" }),
+      list && h('div', { class: 'modal-list', role: 'list', 'aria-label': plural(list.length, 'chat'), tabindex: '0' },
+        list.map((item) => h('div', { class: 'modal-item', role: 'listitem' },
+          h('span', { class: 'modal-item-name', title: item.label, text: item.label }),
+          h('span', { class: `modal-item-meta${item.tone ? ` is-${item.tone}` : ''}`, text: item.meta })))),
+      who && h('div', { class: 'modal-who', id: 'dp-modal-who' }, 'deleting as ', h('b', { text: `@${who}` })),
+      h('div', { class: 'modal-warn', id: 'dp-modal-warn' }, h('span', {}, flaired("This can't be undone", '🩸'))),
     ].filter(Boolean));
-    $('[data-role="confirm-label"]').textContent = confirmLabel;
     modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0 };
     hold.pointer = false;
+    hold.sealed = false;
     clearTimeout(dialogTimer);
+    delete layer.dataset.sealed;
+    $('[data-act="confirm"]').classList.remove('is-sealed');
     layer.hidden = false;
     layer.dataset.open = 'true';
+    layer.scrollTop = 0;
     resetHold();
+    for (const el of behindDialog()) el.inert = true;
     $('[data-act="cancel"]').focus();
   }
 
@@ -1683,84 +1789,117 @@
     const { onConfirm, restoreFocus } = modal;
     clearTimeout(modal.armed);
     modal = null;
-    resetHold();
+    for (const el of behindDialog()) el.inert = false;
+    $('[data-role="modal-live"]').textContent = '';
     const layer = $('.modal-layer');
+    // A finished hold keeps its full bar while the dialog fades: the last thing seen is the seal,
+    // never a drain that reads as a cancel.
+    const sealed = confirmed && hold.sealed;
+    if (sealed) layer.dataset.sealed = 'true';
+    else resetHold();
     layer.dataset.open = 'false';
-    const finish = () => { if (!modal) layer.hidden = true; };
     clearTimeout(dialogTimer);
-    dialogTimer = setTimeout(finish, 160);
-    if (confirmed) onConfirm();
-    else if (restoreFocus && restoreFocus.focus) restoreFocus.focus();
+    dialogTimer = setTimeout(() => {
+      if (!modal) layer.hidden = true; // a dialog opened meanwhile keeps its layer
+      delete layer.dataset.sealed;
+      $('[data-act="confirm"]').classList.remove('is-sealed');
+      hold.sealed = false;
+      resetHold();
+    }, sealed ? 240 : 160);
+    if (confirmed) {
+      handFocus('[data-act="pause"]'); // the run's own controls take over from the hold
+      onConfirm();
+    } else if (restoreFocus && restoreFocus.focus) restoreFocus.focus();
   }
 
-  const hold = { start: 0, raf: 0, active: false, nudge: 0, pointer: false };
-  const ARMED_LABEL = 'Press again to purify~';
+  // key: the key (Space or Enter) holding the button down, until it is released.
+  const hold = { start: 0, timer: 0, active: false, sealed: false, nudge: 0, pointer: false, anim: null, key: null };
 
   function resetHold() {
-    cancelAnimationFrame(hold.raf);
+    clearTimeout(hold.timer);
     clearTimeout(hold.nudge);
     hold.active = false;
-    const btn = $('[data-act="confirm"]');
-    btn.style.setProperty('--hold', '0');
-    btn.classList.remove('is-holding');
-    const label = $('[data-role="confirm-label"]');
-    delete label.dataset.nudge;
-    if (modal) label.textContent = modal.armed ? ARMED_LABEL : modal.label;
+    if (hold.anim) { hold.anim.cancel(); hold.anim = null; }
+    $('[data-act="confirm"]').classList.remove('is-holding');
+    delete $('[data-role="confirm-label"]').dataset.nudge;
+    if (modal) holdLabel(modal.armed ? HOLD_WORDS.armed : modal.label);
   }
 
+  // The fill is a compositor animation, so it flows even while Discord keeps the page busy. The
+  // commit is timed on the clock, not on frames, so it lands at HOLD_MS however slowly they come.
   function beginHold() {
-    if (!modal || hold.active) return;
-    clearTimeout(hold.nudge);
+    if (!modal || hold.active || hold.sealed) return;
+    resetHold();
     hold.active = true;
     hold.start = performance.now();
     const btn = $('[data-act="confirm"]');
     btn.classList.add('is-holding');
-    const step = (now) => {
+    holdLabel(HOLD_WORDS.holding);
+    hold.anim = $('.hold-fill').animate([{ transform: 'translateX(-100%)' }, { transform: 'translateX(0)' }],
+      { duration: HOLD_MS, easing: 'linear', fill: 'forwards' });
+    const commit = () => {
       if (!hold.active) return;
-      const t = Math.min(1, (now - hold.start) / HOLD_MS);
-      btn.style.setProperty('--hold', String(t));
-      $('[data-role="confirm-label"]').textContent = t < 1 ? 'Keep holding~' : 'Purifying~';
-      if (t >= 1) {
-        hold.active = false;
-        closeDialog(true);
-        return;
-      }
-      hold.raf = requestAnimationFrame(step);
+      const left = HOLD_MS - (performance.now() - hold.start);
+      if (left > 0) { hold.timer = setTimeout(commit, left); return; }
+      hold.anim.finish(); // full now, even if the last frame of the fill hasn't been drawn yet
+      hold.active = false;
+      hold.sealed = true;
+      btn.classList.add('is-sealed');
+      holdLabel(HOLD_WORDS.sealed);
+      closeDialog(true);
     };
-    hold.raf = requestAnimationFrame(step);
+    hold.timer = setTimeout(commit, HOLD_MS);
   }
 
-  // Let go too soon: the button says what it needs for a moment, then settles back.
-  function endHold() {
+  // Let go too soon. A quick tap is taught the gesture with a nudge; any other early end (a let-go,
+  // a slide-off, a blur, a hidden tab) just says nothing went. The bar drains from where it really is.
+  function endHold(e) {
     if (!hold.active) return;
+    const tap = performance.now() - hold.start < TAP_MS && !!e && (e.type === 'pointerup' || e.type === 'keyup');
+    const fill = $('.hold-fill');
+    if (hold.anim) {
+      try { hold.anim.commitStyles(); } catch { /* not rendered: nothing to drain */ }
+      hold.anim.cancel();
+      hold.anim = null;
+    }
     resetHold();
-    const label = $('[data-role="confirm-label"]');
-    label.textContent = 'Hold it down~ ♡';
-    void label.offsetWidth; // restart the shake on a quick second tap
-    label.dataset.nudge = 'true';
+    void fill.offsetWidth; // settle on the committed spot, so the drain transition starts there
+    fill.style.transform = '';
+    holdLabel(tap ? HOLD_WORDS.tap : HOLD_WORDS.letGo);
+    if (tap) {
+      const label = $('[data-role="confirm-label"]');
+      void label.offsetWidth; // restart the shake on a quick second tap
+      label.dataset.nudge = 'true';
+    }
     hold.nudge = setTimeout(resetHold, 1400);
   }
 
   // Screen readers, voice control and switches can't hold, so for them two presses confirm. Their
   // press is a click no pointer went down for: detail 0 in Chromium, detail 1 but no pointerdown
   // in Firefox. Mouse, pen and touch clicks always follow a pointerdown and still need the hold.
+  // Arming and its lapse are spoken, since only the button's name changes otherwise.
   function pressConfirm() {
-    if (!modal || hold.active) return;
+    if (!modal || hold.active || hold.sealed) return;
     if (modal.armed) { closeDialog(true); return; }
+    const live = $('[data-role="modal-live"]');
     modal.armed = setTimeout(() => {
       if (!modal) return;
       modal.armed = 0;
+      live.textContent = 'Disarmed. Nothing was purged.';
       if (!hold.active) resetHold();
     }, ARMED_MS);
+    live.textContent = `Armed — press again within ${ARMED_MS / 1000} seconds to purify, or Esc to cancel.`;
     resetHold();
   }
 
+  // Tab cycles Nevermind → Hold → the list of chats (to read it through) and back; from anywhere
+  // else in the dialog it starts at the safe choice.
   function trapFocus(e) {
     if (!modal || e.key !== 'Tab') return;
-    const items = [$('[data-act="cancel"]'), $('[data-act="confirm"]')];
-    const i = Math.max(-1, items.indexOf(root.activeElement));
+    const items = [$('[data-act="cancel"]'), $('[data-act="confirm"]'), $('.modal-list')].filter(Boolean);
+    const i = items.indexOf(root.activeElement);
     e.preventDefault();
-    items[(i + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
+    items[i < 0 ? 0 : (i + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
   }
 
   // ── Terminal log ────────────────────────────────────────
@@ -2425,21 +2564,36 @@
       beginHold();
     });
     // Capture keeps a release anywhere reaching endHold; sliding off (even onto Nevermind) lets go.
+    // A mouse is exact; a finger or pen may wander SLOP_PX. Letting go this way says so, and coming
+    // back never resumes: a fresh press starts from empty.
     confirmBtn.addEventListener('pointermove', (e) => {
       if (!hold.active) return;
       const r = confirmBtn.getBoundingClientRect();
-      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) resetHold();
+      const slop = e.pointerType === 'mouse' ? 0 : SLOP_PX;
+      if (e.clientX < r.left - slop || e.clientX > r.right + slop || e.clientY < r.top - slop || e.clientY > r.bottom + slop) endHold();
     });
     confirmBtn.addEventListener('pointerup', endHold);
     confirmBtn.addEventListener('pointercancel', endHold);
     confirmBtn.addEventListener('keydown', (e) => {
       if (e.key !== ' ' && e.key !== 'Enter') return;
       e.preventDefault(); // repeats too: a held key must never turn into bare clicks
-      if (!e.repeat) beginHold();
+      if (e.repeat) return;
+      beginHold();
+      if (hold.active) hold.key = e.key;
     });
-    confirmBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(); });
+    confirmBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(e); });
     confirmBtn.addEventListener('blur', endHold);
     listen(document, 'visibilitychange', () => { if (document.hidden) endHold(); });
+    // A key still held when the dialog goes (a finished hold, or Esc) belongs to that hold: its
+    // repeats and its release must not press whatever focus moved to (Pause, or Purify again).
+    for (const type of ['keydown', 'keypress', 'keyup']) {
+      listen(document, type, (e) => {
+        if (!hold.key || e.key !== hold.key) return;
+        if (!modal) { e.preventDefault(); e.stopPropagation(); }
+        if (type === 'keyup') hold.key = null;
+      }, true);
+    }
+    listen(window, 'blur', () => { hold.key = null; }); // its release happened somewhere else
     // Esc keeps you safe even if focus wandered out of the dialog.
     listen(document, 'keydown', (e) => {
       if (modal && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeDialog(false); }
@@ -2448,9 +2602,11 @@
       if (modal && e.key === 'Escape') { e.preventDefault(); closeDialog(false); }
       trapFocus(e);
     });
-    $('.modal-layer').addEventListener('pointerdown', (e) => {
+    const modalLayer = $('.modal-layer');
+    modalLayer.addEventListener('pointerdown', (e) => {
       if (!modal) return;
-      if (e.target.classList.contains('modal-layer')) {
+      if (e.target === modalLayer && e.offsetX >= modalLayer.clientWidth) return; // its scrollbar, not the backdrop
+      if (e.target === modalLayer) {
         if (performance.now() - modal.openedAt > 350) closeDialog(false); // ignore the second half of a double-click
       } else if (!e.target.closest('button')) {
         $('.modal').focus(); // keep focus (and Esc/Tab) inside the dialog
@@ -2521,7 +2677,7 @@
       try { undo(); } catch { /* already gone */ }
     }
     cancelAnimationFrame(wob.raf);
-    cancelAnimationFrame(hold.raf);
+    clearTimeout(hold.timer);
     clearTimeout(dialogTimer);
     flushPrefs();
     if (sound.ctx) sound.ctx.close().catch(() => {});
