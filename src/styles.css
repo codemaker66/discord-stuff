@@ -50,6 +50,16 @@
   --r-ctl: 12px;
   --r-row: 10px;
 
+  /* Seven type sizes and one tracking for every sans uppercase label. */
+  --fs-cap: 10.5px;
+  --fs-meta: 11.5px;
+  --fs-body: 13px;
+  --fs-em: 14px;
+  --fs-title: 20px;
+  --fs-strip: 24px;
+  --fs-hero: 56px;
+  --track-cap: .1em;
+
   --edge: inset 0 0 0 1px var(--hair), inset 0 1px 0 var(--hi);
   --lift: 0 0 0 1px rgba(0, 0, 0, .42), 0 32px 64px -24px rgba(0, 0, 0, .75), 0 12px 24px -12px rgba(0, 0, 0, .5);
   --bloom-rose: 0 0 0 1px rgba(255, 122, 169, .55), 0 10px 24px -8px rgba(255, 90, 150, .6), 0 0 36px -8px rgba(255, 122, 169, .5);
@@ -57,6 +67,7 @@
   --ease-out: cubic-bezier(.22, 1, .36, 1);
   --ease-in-out: cubic-bezier(.65, 0, .35, 1);
   --spring: linear(0, .041, .14, .269, .408, .542, .662, .766, .85, .915, .963, .997, 1.019, 1.032, 1.037, 1.038, 1.036, 1.032, 1.026, 1.021, 1.016, 1.012, 1.008, 1.005, 1.003, 1.001, 1, 1);
+  --ease-drawer: cubic-bezier(.32, .72, 0, 1);
 
   --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 .92  0 0 0 0 .95  0 0 0 .9 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
 
@@ -76,6 +87,8 @@
 :where(.layer) :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .ico { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .ico-fill { fill: currentColor; stroke-width: 1.5; }
+/* Words only screen readers need. */
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* ── shell & panel ─────────────────────────────────────── */
 
@@ -153,6 +166,8 @@
 .body::-webkit-scrollbar-thumb { background: rgba(255, 208, 226, .16); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
 .layer[data-tab="batch"] .body { padding-top: 0; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%); }
+/* Focus and the running chat stop clear of the sticky strip and the bottom fade. */
+.layer[data-tab="batch"] .body { scroll-padding-top: 76px; scroll-padding-bottom: 28px; }
 
 /* ── hero: kill ring ───────────────────────────────────── */
 
@@ -389,6 +404,9 @@
 .status[data-tone="warn"] { color: var(--coral-300); }
 .status[data-tone="warn"] .status-dot { color: #2a1206; background: var(--coral-300); }
 .status[data-tone="warn"] .status-dot::before { content: '!'; width: auto; height: auto; background: none; }
+/* What the person chose and Discord's normal pacing: the plain dot, no glyph and no ping. */
+.status[data-tone="calm"] { color: var(--t2); }
+.status[data-tone="calm"] .status-dot { color: var(--coral-300); }
 .status[data-tone="error"] { color: var(--crim-300); }
 .status[data-tone="error"] .status-dot { color: #fff; background: var(--crim-500); }
 .status[data-tone="error"] .status-dot::before { content: '✕'; width: auto; height: auto; background: none; font-size: 9px; }

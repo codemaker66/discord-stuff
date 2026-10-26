@@ -412,6 +412,8 @@
   };
 
   const processed = () => run.deleted + run.failed + run.gone;
+  // Every counted message is handled and the run is taking its last look: re-checking, not purging.
+  const verifying = () => run.active && run.total > 0 && run.uncounted <= 0 && processed() >= run.total;
 
   function progressSnapshot() {
     const done = processed();

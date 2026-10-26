@@ -1995,6 +1995,320 @@ await test('T84 a chat shielded mid-run drops out of the run total', async () =>
   await context.close();
 });
 
+// The shared helpers every package builds on live inside the userscript's closure: this build also
+// hands the named ones to the page, so a test can call them directly.
+async function bootProbe(path, names, opts = {}) {
+  const hook = 'return { start: () => whenAppReady(boot), destroy };';
+  assert(source.includes(hook), 'the build still ends its closure the way the probe expects');
+  const env = await openDiscord(browser, path, opts);
+  await injectUserscript(env.page, source.replace(hook, `window.__dp = { ${names.join(', ')} };\n  ${hook}`));
+  await env.page.waitForFunction(() => {
+    const el = document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]');
+    return el && el.textContent !== 'detecting…';
+  }, null, { timeout: 8000 });
+  return env;
+}
+
+const heroIs = (page) => page.evaluate(() => {
+  const hero = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.hero');
+  return `${hero.dataset.state}/${hero.dataset.face}`;
+});
+
+await test('T90 errors in plain words, emoji as flair, and the calm tone', async () => {
+  const { page, pageErrors, context } = await bootProbe('/channels/4001/5007', ['plainError', 'setStatus', 'DiscordError']);
+  const plain = (make) => page.evaluate(`window.__dp.plainError(${make})`);
+  // Missing Access blocks (a purge there could only fail), however it arrives; a dropped
+  // connection doesn't.
+  for (const make of [
+    "new window.__dp.DiscordError(403, { message: 'Missing Access', code: 50001 })",
+    "'Missing Access (code 50001)'", // a batch row's reason
+    "{ status: 403, code: 50001, message: 'whatever Discord says' }",
+  ]) {
+    const p = await plain(make);
+    assert(p.blocking === true && p.code === 'no-access' && p.short === 'No access here', `${make} → ${JSON.stringify(p)}`);
+    assert(p.line === "You can't read this channel, so there's nothing here to purge", `no-access line ${p.line}`);
+  }
+  for (const make of ["new window.__dp.DiscordError(0, { message: 'Network unreachable' })", "{ message: 'Network unreachable' }"]) {
+    const p = await plain(make);
+    assert(p.blocking === false && p.code === 'network' && p.short === "Can't reach Discord", `${make} → ${JSON.stringify(p)}`);
+  }
+  // A run's end reports an account switch with status 0, like a dropped connection: it must not read as one.
+  const switched = await plain("{ error: 'You switched Discord accounts — stopped to be safe', errorStatus: 0, errorCode: null }");
+  assert(switched.code === 'switched' && !switched.blocking, `switched → ${JSON.stringify(switched)}`);
+  const cases = {
+    "new window.__dp.DiscordError(401, { message: '401: Unauthorized', code: 0 })": 'logged-out',
+    "new window.__dp.DiscordError(401, { message: 'No Discord login token found — are you logged in?' })": 'logged-out',
+    "new window.__dp.DiscordError(403, { message: 'Missing Permissions', code: 50013 })": 'no-permission',
+    "new window.__dp.DiscordError(202, { message: 'Discord is still indexing this channel — try again in a minute' })": 'indexing',
+    "new window.__dp.DiscordError(400, { message: 'Discord wants a captcha — finish it in the app, then try again', code: 'captcha' })": 'captcha',
+    "new window.__dp.DiscordError(503, { message: 'Service Unavailable' })": 'server',
+    "new window.__dp.DiscordError(404, { message: 'Unknown Channel', code: 10003 })": 'gone',
+    "new window.__dp.DiscordError(400, { message: 'Invalid Form Body', code: 50035 })": 'other',
+    "new window.__dp.DiscordError(418, null)": 'other',
+  };
+  for (const [make, code] of Object.entries(cases)) {
+    const p = await plain(make);
+    assert(p.code === code, `${make} → ${JSON.stringify(p)}`);
+    assert(p.blocking === (code === 'no-permission'), `only access problems block: ${JSON.stringify(p)}`);
+    assert(!/\(code|HTTP|401: Unauthorized|[\u{1F300}-\u{1FAFF}]/u.test(`${p.line} ${p.short}`), `plain words only: ${JSON.stringify(p)}`);
+    assert(p.short.length <= 28, `short fits: ${p.short}`);
+  }
+  assert((await plain(Object.keys(cases)[7])).line === 'Discord said: Invalid Form Body', 'anything else quotes Discord without its code');
+  assert((await plain(Object.keys(cases)[8])).line === 'Discord said: error 418', 'a bare status still reads as words');
+
+  // The real path: counting #mod-only (no access) leaves the ring on "blocked".
+  assert(await heroIs(page) === 'unscanned/icon', `before the scan ${await heroIs(page)}`);
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /Scan error/);
+  assert(await heroIs(page) === 'blocked/label', `after a no-access scan ${await heroIs(page)}`);
+
+  // Flair: the emoji shows, but the status speaks only its words.
+  const statusNow = () => page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const s = r.querySelector('[data-role="status"]');
+    const t = r.querySelector('[data-role="status-text"]');
+    const flair = t.querySelector('.flair');
+    return { text: t.textContent, words: t.firstChild.nodeValue, flair: flair && flair.textContent, hidden: flair && flair.getAttribute('aria-hidden'), tone: s.dataset.tone, title: s.title };
+  });
+  await page.evaluate(() => window.__dp.setStatus('Paused~ 3 purged so far', 'calm', { flair: '♡' }));
+  const st = await statusNow();
+  assert(st.text === 'Paused~ 3 purged so far ♡' && st.words === 'Paused~ 3 purged so far' && st.flair === ' ♡' && st.hidden === 'true', `flair ${JSON.stringify(st)}`);
+  assert(st.tone === 'calm' && st.title === 'Paused~ 3 purged so far', `tone and title ${JSON.stringify(st)}`);
+  const spoken = await page.locator('[data-role="status"]').ariaSnapshot();
+  assert(spoken.includes('Paused~ 3 purged so far') && !spoken.includes('♡'), `screen readers hear: ${spoken}`);
+  await page.evaluate(() => window.__dp.setStatus('Scan cancelled~', 'info'));
+  assert((await statusNow()).flair === null && (await statusNow()).text === 'Scan cancelled~', 'no flair, no span');
+
+  // Calm wears the --t2 words and a plain coral dot: no '!' badge and no ping, even mid-run.
+  await page.evaluate(() => window.__dp.setStatus('Stopping after this one~', 'calm'));
+  const calm = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const layer = r.querySelector('[data-role="layer"]');
+    layer.dataset.run = 'running';
+    const dot = r.querySelector('.status-dot');
+    const mark = getComputedStyle(dot, '::before');
+    const out = { words: getComputedStyle(r.querySelector('[data-role="status"]')).color, dot: getComputedStyle(dot).color, disc: getComputedStyle(dot).backgroundColor, glyph: mark.content, ping: mark.animationName };
+    layer.dataset.run = 'idle';
+    return out;
+  });
+  assert(calm.words === 'rgb(207, 179, 193)' && calm.dot === 'rgb(255, 170, 140)', `calm colours ${JSON.stringify(calm)}`);
+  assert(calm.glyph === '""' && calm.ping === 'none' && calm.disc === 'rgba(0, 0, 0, 0)', `calm dot is plain ${JSON.stringify(calm)}`);
+
+  // The panel's own ready line uses the flair too.
+  await page.evaluate(() => history.pushState({}, '', '/channels/4001/5002'));
+  await untilStatus(page, /Ready to purify/, 4000);
+  const ready = await statusNow();
+  assert(ready.words === 'Ready to purify~' && ready.flair === ' ✨', `ready line ${JSON.stringify(ready)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T91 shared contracts: type tokens, .sr, height tiers, ring faces, focus hand-off', async () => {
+  const { page, stats, pageErrors, context } = await bootProbe('/channels/4001/5002', ['handFocus', 'applyFocus'], { viewport: { width: 1280, height: 720 }, latencyMs: 20 });
+  const tokens = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const css = getComputedStyle(r.querySelector('[data-role="layer"]'));
+    const names = ['--fs-cap', '--fs-meta', '--fs-body', '--fs-em', '--fs-title', '--fs-strip', '--fs-hero', '--track-cap', '--ease-drawer'];
+    const sr = document.createElement('span');
+    sr.className = 'sr';
+    sr.textContent = 'words for screen readers only';
+    r.querySelector('.foot').append(sr);
+    const box = sr.getBoundingClientRect();
+    const out = { ...Object.fromEntries(names.map((n) => [n, css.getPropertyValue(n).trim()])), sr: [box.width, box.height, getComputedStyle(sr).clipPath] };
+    sr.remove();
+    return out;
+  });
+  const want = { '--fs-cap': '10.5px', '--fs-meta': '11.5px', '--fs-body': '13px', '--fs-em': '14px', '--fs-title': '20px', '--fs-strip': '24px', '--fs-hero': '56px', '--track-cap': '.1em', '--ease-drawer': 'cubic-bezier(.32, .72, 0, 1)' };
+  for (const [name, value] of Object.entries(want)) assert(tokens[name] === value, `${name} is ${tokens[name]}`);
+  assert(JSON.stringify(tokens.sr) === '[1,1,"inset(50%)"]', `.sr box ${JSON.stringify(tokens.sr)}`);
+
+  // Height tiers follow the panel's real cap.
+  const fit = () => page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.fit);
+  for (const [width, height, tier] of [[1280, 720, 'full'], [1280, 600, 'snug'], [1093, 500, 'strip'], [1440, 900, 'full']]) {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(50);
+    assert(await fit() === tier, `${width}×${height} is ${await fit()}, not ${tier}`);
+  }
+  // A drag 200px down never reshapes the panel under the cursor; the drop does.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const head = await page.locator('[data-role="drag"]').boundingBox();
+  await page.mouse.move(head.x + 120, head.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(head.x + 120, head.y + 120, { steps: 4 });
+  await page.mouse.move(head.x + 120, head.y + 220, { steps: 4 });
+  assert(await fit() === 'full', `mid-drag ${await fit()}`);
+  await page.mouse.up();
+  assert(await fit() === 'strip', `after the drop ${await fit()}`);
+  await page.mouse.move(head.x + 120, head.y + 220);
+  await page.mouse.down();
+  await page.mouse.move(head.x + 120, head.y + 20, { steps: 6 });
+  await page.mouse.up();
+  assert(await fit() === 'full', `dragged home ${await fit()}`);
+
+  // Ring faces: unscanned → counting → ready → the run and its last look → done.
+  assert(await heroIs(page) === 'unscanned/icon', `idle ${await heroIs(page)}`);
+  const count = await holdRequests(page, /\/messages\/search/);
+  await page.click('[data-act="scan"]');
+  while (!count.held) await page.waitForTimeout(5);
+  assert(await heroIs(page) === 'counting/icon', `scanning ${await heroIs(page)}`);
+  count.release();
+  await untilStatus(page, /found/);
+  assert(await heroIs(page) === 'ready/count', `counted ${await heroIs(page)}`);
+  const look = await holdRequests(page, /\/messages\/search/, { match: () => stats.deletes.length >= 10 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  while (!look.held) await page.waitForTimeout(5);
+  assert(await text(page, '[data-role="stat-eta"] b') === 'double-checking…', `last look ${await text(page, '[data-role="stat-eta"] b')}`);
+  assert(await heroIs(page) === 'run/count', `running ${await heroIs(page)}`);
+  look.release();
+  await waitEnd(page);
+  assert(await heroIs(page) === 'done/count', `finished ${await heroIs(page)}`);
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3003"]');
+  assert(await heroIs(page) === 'none/label', `nothing picked ${await heroIs(page)}`);
+  await page.click('[data-key="c:3003"]');
+  assert(await heroIs(page) === 'unscanned/label', `picked, not counted ${await heroIs(page)}`);
+  await page.click('.tab[data-tab="current"]');
+  for (const [path, want] of [['/channels/@me/3001', 'immune/icon'], ['/channels/@me', 'none/icon']]) {
+    await page.evaluate((p) => history.pushState({}, '', p), path);
+    await page.waitForFunction((w) => {
+      const hero = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.hero');
+      return `${hero.dataset.state}/${hero.dataset.face}` === w;
+    }, want, { timeout: 4000 });
+  }
+
+  // Focus follows the work, inside the panel only.
+  const focused = () => page.evaluate(() => {
+    const el = document.querySelector('#dopa-purifier-host').shadowRoot.activeElement;
+    return el ? el.dataset.act : document.activeElement.id || document.activeElement.tagName;
+  });
+  await page.locator('[data-act="logs"]').focus();
+  await page.evaluate(() => { window.__dp.handFocus('[data-act="minimize"]'); window.__dp.applyFocus(); });
+  assert(await focused() === 'minimize', `handed straight over: ${await focused()}`);
+  await page.evaluate(() => { window.__dp.handFocus('.orb'); window.__dp.applyFocus(); });
+  assert(await focused() === 'minimize', `the hidden orb waits: ${await focused()}`);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.activeElement?.dataset.act === 'restore', null, { timeout: 2000 });
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('[data-role="shell"]:not([hidden])');
+  await page.evaluate(() => { const box = document.createElement('textarea'); box.id = 'composer'; document.body.append(box); });
+  await page.locator('[data-act="logs"]').focus();
+  await page.evaluate(() => window.__dp.handFocus('.orb'));
+  await page.focus('#composer');
+  await page.evaluate(() => window.__dp.applyFocus());
+  await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-act="minimize"]').click());
+  await page.waitForSelector('.orb:not([hidden])');
+  await page.waitForTimeout(100);
+  assert(await focused() === 'composer', `a hand-off never pulls focus out of Discord's message box: ${await focused()}`);
+  await page.evaluate(() => { window.__dp.handFocus('[data-act="restore"]'); window.__dp.applyFocus(); });
+  assert(await focused() === 'composer', `nothing is handed from outside the panel: ${await focused()}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+const batchSnapshot = (page, keys) => page.evaluate((ks) => {
+  const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+  return {
+    ticked: [...r.querySelectorAll('.row.is-selected')].map((el) => el.dataset.key).sort(),
+    checked: r.querySelectorAll('.row .check:checked').length,
+    badge: r.querySelector('[data-role="tab-badge"]').hidden ? '' : r.querySelector('[data-role="tab-badge"]').textContent,
+    purify: r.querySelector('[data-act="purify"]').disabled ? 'disabled' : 'enabled',
+    states: ks.map((k) => `${k}=${r.querySelector(`[data-key="${k}"]`).dataset.state}`).join(' '),
+  };
+}, keys);
+
+await test('T92 after a batch only what is left stays ticked', async () => {
+  {
+    const { page, stats, pageErrors, context } = await boot('/channels/4001/5001');
+    const keys = ['c:3003', 'c:5002', 'c:5007']; // a DM, #art-share and #mod-only (no access), none counted
+    await pickBatch(page, keys);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page, 30000);
+    const after = await batchSnapshot(page, keys);
+    assert(after.ticked.length === 0 && after.checked === 0, `still ticked ${JSON.stringify(after)}`);
+    assert(after.badge === '' && after.purify === 'disabled', `nothing left to offer ${JSON.stringify(after)}`);
+    assert(after.states === 'c:3003=done c:5002=done c:5007=error', `outcomes stay readable ${after.states}`);
+    const sent = stats.log.length;
+    await page.locator('[data-act="purify"]').evaluate((b) => b.click());
+    await page.waitForTimeout(300);
+    assert(await page.locator('.modal-layer[data-open="true"]').count() === 0, 'no dialog for a finished batch');
+    assert(stats.log.length === sent, `requests after the batch: ${stats.log.slice(sent).join(', ')}`);
+    assert(await heroIs(page) === 'done/count', `the verdict stays ${await heroIs(page)}`);
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    // Stopped part-way: the finished chat unticks, and the rest stay ticked for the next go.
+    const { page, context } = await boot('/channels/4001/5001', { latencyMs: 25 });
+    const keys = ['c:5002', 'c:3002', 'c:3003'];
+    await pickBatch(page, keys);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-key="c:3002"]').dataset.state === 'running', null, { timeout: 15000 });
+    await page.click('[data-act="stop"]');
+    await waitEnd(page);
+    const after = await batchSnapshot(page, keys);
+    assert(after.ticked.join() === 'c:3002,c:3003' && after.badge === '2' && after.purify === 'enabled', `after Stop ${JSON.stringify(after)}`);
+    assert(after.states === 'c:5002=done c:3002=stopped c:3003=stopped', `outcomes ${after.states}`);
+    await context.close();
+  }
+});
+
+await test('T93 the running chat scrolls into view, unless you just moved around the list', async () => {
+  const geometry = (page) => page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
+    const strip = r.querySelector('.hero').getBoundingClientRect();
+    const row = r.querySelector('[data-key="c:5004"]').getBoundingClientRect();
+    return { visible: row.top >= strip.bottom - 1 && row.bottom <= body.bottom + 1, scrollTop: r.querySelector('[data-role="body"]').scrollTop };
+  });
+  // Picked without a pointer, so the list doesn't count as touched; #Voice Lounge sits below the fold.
+  const pickQuietly = async (page) => {
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForSelector('.guild-head');
+    await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.guild-head').click());
+    await page.waitForSelector('[data-key="c:5004"]');
+    await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      r.querySelector('[data-key="c:5004"] .check').click();
+      r.querySelector('[data-role="body"]').scrollTop = 0;
+    });
+    const before = await geometry(page);
+    assert(!before.visible && before.scrollTop === 0, `the chat starts out of view ${JSON.stringify(before)}`);
+  };
+  {
+    const { page, context } = await boot('/channels/4001/5001', { viewport: { width: 1280, height: 600 } });
+    await pickQuietly(page);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    await page.waitForFunction(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
+      const row = r.querySelector('[data-key="c:5004"]').getBoundingClientRect();
+      return row.top >= r.querySelector('.hero').getBoundingClientRect().bottom - 1 && row.bottom <= body.bottom + 1;
+    }, null, { timeout: 3000 });
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001', { viewport: { width: 1280, height: 600 } });
+    await pickQuietly(page);
+    const body = await page.locator('[data-role="body"]').boundingBox();
+    await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2);
+    await page.mouse.wheel(0, 40);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="body"]').scrollTop >= 40);
+    await page.evaluate(() => { document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="body"]').scrollTop = 0; });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    await page.waitForTimeout(600);
+    const after = await geometry(page);
+    assert(!after.visible && after.scrollTop === 0, `the list stayed where the person left it ${JSON.stringify(after)}`);
+    await context.close();
+  }
+});
+
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
