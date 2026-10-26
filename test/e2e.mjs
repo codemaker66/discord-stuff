@@ -2982,6 +2982,41 @@ await test('T108 endings: only a clean finish turns the count rose, the sticker 
   }
 });
 
+await test('T109 seven type sizes and one caps tracking', async () => {
+  const css = JSON.parse(/const CSS = ("(?:[^"\\]|\\.)*");/.exec(source)[1]).replace(/\/\*[\s\S]*?\*\//g, '');
+  const tokens = [...css.matchAll(/--fs-[a-z]+:\s*([\d.]+px)/g)].map((m) => m[1]);
+  assert(tokens.join() === '10.5px,11.5px,13px,14px,20px,24px,56px', `type tokens ${tokens}`);
+  // Decorative glyphs keep their own sizes, and the ring's count and label step down to fit the arc.
+  const exempt = /\.status-dot|\.target-ico|\.guild-badge|\.confetti-glyph|\[data-len=|\[data-fit="snug"\]\[data-tab="current"\] \.count/;
+  const raw = [];
+  for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sizes = [...body.matchAll(/font-size:\s*([^;]+)/g)].map((m) => m[1].trim())
+      .concat([...body.matchAll(/(?:^|;)\s*font:\s*([^;]+)/g)].map((m) => (/(?:^|\s)(\d+(?:\.\d+)?px)(?=\/|\s)/.exec(m[1]) || [])[1]).filter(Boolean));
+    for (const size of sizes) if (!/^var\(--fs-[a-z]+\)$/.test(size) && !exempt.test(selector)) raw.push(`${selector.trim()} → ${size}`);
+    // Every sans caps label shares one tracking; the terminal's mono keeps its own.
+    const track = /letter-spacing:\s*([^;]+)/.exec(body);
+    if (/text-transform:\s*uppercase/.test(body) || (track && /^\.1\d*em$/.test(track[1].trim()) && !/--mono/.test(body))) {
+      if (!track || track[1].trim() !== 'var(--track-cap)') raw.push(`${selector.trim()} → tracking ${track ? track[1] : 'none'}`);
+    }
+  }
+  assert(raw.length === 0, `sizes and caps outside the scale:\n      ${raw.join('\n      ')}`);
+  // On screen: every word in the panel uses one of the seven sizes.
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  const used = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const out = new Set();
+    for (const el of r.querySelectorAll('.panel *')) {
+      if (!el.getClientRects().length || el.closest('.target-ico, .status-dot')) continue;
+      if ([...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) out.add(getComputedStyle(el).fontSize);
+    }
+    return [...out].sort((a, b) => parseFloat(a) - parseFloat(b));
+  });
+  assert(used.every((s) => ['10.5px', '11.5px', '13px', '14px', '20px', '24px', '56px'].includes(s)), `sizes on screen ${used}`);
+  await context.close();
+});
+
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
