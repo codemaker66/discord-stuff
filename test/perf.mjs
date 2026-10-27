@@ -109,6 +109,26 @@ await measure('T209 Many chats with 806 rows and 40 servers open', async () => {
   await context.close();
 });
 
+// D40 (T208): a whole 30-channel server ticked on a heavy account, and the dialog is up within 100 ms.
+await measure('T208 the Many chats dialog with a whole server ticked', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { world: buildWorld({ crowd: 'heavy' }) });
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForFunction(`${SR}.querySelectorAll('.guild').length >= 102`, null, { timeout: 60000 });
+  await page.locator('.guild-all').nth(2).click();
+  await page.waitForFunction(`${SR}.querySelector('[data-role="tab-badge"]').textContent === '25'`, null, { timeout: 30000 });
+  // Asking Discord who you are takes its own time; the budget is the work of drawing the dialog.
+  await page.evaluate(longTasks);
+  await page.evaluate(async (sr) => {
+    const r = eval(sr);
+    r.querySelector('[data-act="purify"]').click();
+    while (r.querySelector('.modal-layer').dataset.open !== 'true') await new Promise((done) => setTimeout(done, 0));
+    await new Promise((done) => setTimeout(done, 100));
+  }, SR);
+  const long = await page.evaluate(() => window.__long.map((t) => t.ms));
+  budget('T208 longest task as the dialog opens (D40)', round(Math.max(0, ...long)), 100);
+  await context.close();
+});
+
 // D46 (T220): the hold never stutters, on fresh pages with the sound on.
 await measure('T220 the hold on 8 fresh pages', async () => {
   let worstHold = 0;

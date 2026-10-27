@@ -269,15 +269,17 @@
 .layer[data-tab="batch"] :is(.g-dial, .gauge-pct, .blood, .sticker), .layer[data-fit="strip"][data-tab="current"] :is(.g-dial, .gauge-pct, .blood, .sticker) { display: none; }
 .layer[data-tab="batch"] :is(.g-track, .g-ok, .g-head), .layer[data-fit="strip"][data-tab="current"] :is(.g-track, .g-ok, .g-head) { stroke-width: 12; }
 .layer[data-tab="batch"] .g-fail, .layer[data-fit="strip"][data-tab="current"] .g-fail { stroke-width: 18; }
-.layer[data-tab="batch"][data-hero="preview"] .g-track, .layer[data-fit="strip"][data-tab="current"][data-hero="preview"] .g-track { stroke: rgba(255, 208, 226, .1); }
+/* The empty track reads as a ring waiting (2:1), not as a stalled spinner. */
+.layer[data-tab="batch"][data-hero="preview"] .g-track, .layer[data-fit="strip"][data-tab="current"][data-hero="preview"] .g-track { stroke: rgba(255, 208, 226, .2); }
 /* Capped at its column, or the nowrap line below widens the core past the panel instead of ending in an ellipsis. */
 .layer[data-tab="batch"] .hero-core, .layer[data-fit="strip"][data-tab="current"] .hero-core { grid-area: core; flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin: 0; align-self: center;
   min-width: 0; max-width: 100%; }
 .layer[data-tab="batch"] .count, .layer[data-fit="strip"][data-tab="current"] .count { font-size: var(--fs-strip); letter-spacing: -.03em; text-shadow: none; }
 /* In a strip the label stays on one line beside the count. */
 .layer[data-tab="batch"] .count-label, .layer[data-fit="strip"][data-tab="current"] .count-label { margin: 0; max-width: none; }
-.layer[data-tab="batch"] .hero-face, .layer[data-fit="strip"][data-tab="current"] .hero-face { width: 24px; height: 24px; align-self: center; margin-right: -2px; }
-.layer[data-tab="batch"] .hero-face .ico, .layer[data-fit="strip"][data-tab="current"] .hero-face .ico { width: 18px; height: 18px; }
+/* A strip's icon sits inside its 44 px ring, so the ring is never an empty circle. */
+.layer:is([data-tab="batch"], [data-fit="strip"]) .hero-face { position: absolute; left: -56px; top: 50%; width: 44px; height: 44px; margin: -22px 0 0; }
+.layer:is([data-tab="batch"], [data-fit="strip"]) .hero-face .ico { width: 18px; height: 18px; }
 .layer[data-tab="batch"] .hero-sub, .layer[data-fit="strip"][data-tab="current"] .hero-sub { display: block; flex-basis: 100%; margin-top: 4px; font: 500 var(--fs-meta)/16px var(--font); color: var(--t3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; pointer-events: auto; }
 .layer[data-tab="batch"] .readout, .layer[data-fit="strip"][data-tab="current"] .readout { display: none; }
@@ -382,16 +384,17 @@
   color: var(--rose-100); background: hsl(332 26% calc(19% + var(--tone, 0) * 1%)); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); letter-spacing: -.02em; }
 .row-glyph { width: 16px; flex: none; display: grid; place-items: center; color: var(--t3); font: 500 var(--fs-body)/1 var(--font); }
 .row-glyph .ico { width: 14px; height: 14px; }
-.row-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; }
-.row-name { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row-sub { font: 500 var(--fs-meta)/18px var(--font); color: var(--t3); white-space: nowrap; }
-/* Only news takes a second line (purging, still indexing, run again later). */
+.row-main { flex: 1; min-width: 0; display: flex; align-items: baseline; column-gap: 6px; }
+/* Only a row with news wraps, to give it its second line; a long name never pushes its sub-line down. */
+.row-main:has(> .row-tag:not([hidden])) { flex-wrap: wrap; }
+/* A long name gives way to its sub-line's first word, and the sub-line ends before the count. */
+.row-name { flex: 0 1 auto; min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-sub { flex: 1 1 0; min-width: min(4.5em, 35%); overflow: hidden; text-overflow: ellipsis; font: 500 var(--fs-meta)/18px var(--font); color: var(--t3); white-space: nowrap; }
+/* Only news takes a second line (still searching, run again later). */
 .row-tag { flex-basis: 100%; margin-top: 2px; display: flex; align-items: center; gap: 4px; font: 700 var(--fs-cap)/14px var(--font); letter-spacing: .03em; color: var(--rose-300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-meta { flex: none; display: flex; align-items: center; font: 600 var(--fs-meta)/1 var(--font); font-variant-numeric: tabular-nums; color: var(--t3); white-space: nowrap; }
 .row-meta b { color: var(--t1); font-weight: 700; font-size: var(--fs-body); }
 .row-meta small { font: 500 var(--fs-meta)/1 var(--font); color: var(--t3); }
-/* Plain words: a dashed outline already means disabled or queued. */
-.chip-need { font: 500 var(--fs-meta)/18px var(--font); color: var(--t3); }
 .row[data-state="ready"] .meta-count b { color: var(--rose-200); }
 /* A row with no shield (a group DM) keeps the shield's room: the 26px button minus its -6px margin. */
 .shield-slot { width: 20px; flex: none; }
@@ -403,6 +406,8 @@
 .row[data-state="running"] .row-tag { color: var(--rose-300); animation: dp-breathe 1.4s var(--ease-in-out) infinite; }
 .row[data-state="done"] .row-meta { color: var(--rose-300); }
 .row[data-state="done"] .row-name { color: var(--t3); }
+/* Finished with nothing to purge: quiet, like a counted all clear. */
+.row[data-state="done"] .meta-clear { color: var(--t3); }
 .row[data-state="error"] { background: rgba(227, 32, 63, .05); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .22); }
 .row[data-state="error"] .row-meta { color: var(--crim-300); letter-spacing: .02em; font-weight: 600; font-size: var(--fs-meta); }
 .row[data-state="stopped"] .row-meta { color: var(--coral-300); }
@@ -423,20 +428,26 @@
   color: var(--ember-ink); background: linear-gradient(180deg, #ffe4a6, #f0bb55); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 0 14px -3px rgba(247, 203, 110, .55); }
 
 .guild + .guild { margin-top: 2px; }
-.guild-head { width: 100%; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px; border: 0; border-radius: var(--r-row);
+.guild-head, .fold-head { width: 100%; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px; border: 0; border-radius: var(--r-row);
   background: none; cursor: pointer; font: 600 var(--fs-body)/1 var(--font); color: var(--t1); text-align: left; transition: background-color .15s; }
-.guild-head:hover { background: rgba(255, 236, 244, .035); }
-.guild-head:active { background: rgba(255, 236, 244, .06); }
+.guild-head:hover, .fold-head:hover { background: rgba(255, 236, 244, .035); }
+.guild-head:active, .fold-head:active { background: rgba(255, 236, 244, .06); }
 /* The rows appear at once, so the chevron turns quickly to match. */
 .guild-chevron { display: grid; place-items: center; color: var(--t3); transition: transform .16s var(--ease-out); }
 .guild-chevron .ico { width: 12px; height: 12px; }
-.guild-head[aria-expanded="true"] .guild-chevron { transform: rotate(90deg); }
+.guild-head[aria-expanded="true"] .guild-chevron, .fold-head[aria-expanded="true"] .guild-chevron { transform: rotate(90deg); }
 .guild-badge { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 7px; font: 700 9.5px/1 var(--font);
   color: var(--rose-100); background: linear-gradient(180deg, rgba(255, 122, 169, .3), rgba(200, 59, 115, .22)); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
-.guild-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* gg sans needs 1.33 em for its ascent and descent, so a g or a y keeps its tail. */
+.guild-name { flex: 1; min-width: 0; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .guild-meta { flex: none; font: 500 var(--fs-meta)/1 var(--font); color: var(--t3); font-variant-numeric: tabular-nums; }
 .guild-channels { margin: 0 0 4px 26px; padding-left: 8px; box-shadow: inset 1px 0 0 var(--hair-2); }
 .guild-channels .row { min-height: 32px; padding: 4px 10px; }
+/* Friends with a closed DM: one quiet fold at the end of the DMs, its rows full height. */
+.fold { margin-top: 2px; }
+.fold-head .guild-name { color: var(--t2); font-weight: 500; }
+.fold-rows { margin: 0 0 4px 26px; padding-left: 8px; box-shadow: inset 1px 0 0 var(--hair-2); }
+.fold-note { padding: 8px 10px; text-align: left; }
 
 /* ── footer ────────────────────────────────────────────── */
 
@@ -704,7 +715,7 @@
 .run-pill-done { color: var(--rose-200); background: rgba(255, 122, 169, .12); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .28); }
 .run-pill-error { max-width: 132px; color: var(--crim-300); background: rgba(227, 32, 63, .12); box-shadow: inset 0 0 0 1px rgba(255, 74, 99, .35); }
 /* The pill gives the reason in a few words; hovering the row shows Discord's whole answer. */
-.run-pill-why { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.run-pill-why { min-width: 0; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; }
 .run-pill-stopped { color: var(--coral-300); box-shadow: inset 0 0 0 1px rgba(255, 170, 140, .35); }
 .spin { width: 8px; height: 8px; flex: none; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: dp-orbit .8s linear infinite; }
 
@@ -722,6 +733,13 @@
 .modal-item-meta { flex: none; font: 600 var(--fs-body)/18px var(--font); color: var(--t2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .modal-item-meta.is-unknown { color: var(--t3); font-style: italic; font-weight: 500; }
 .modal-item-meta.is-skipped { color: var(--crim-300); font-style: normal; }
+/* A server with many channels picked is one line; it opens to name them all. */
+.modal-server { display: block; }
+.modal-server summary { display: flex; align-items: baseline; gap: 10px; cursor: pointer; list-style: none; border-radius: 6px; }
+.modal-server summary::-webkit-details-marker { display: none; }
+.modal-server-chev { width: 10px; height: 10px; margin-right: 6px; stroke-width: 2.6; color: var(--t3); transition: transform .16s var(--ease-out); }
+.modal-server details[open] .modal-server-chev { transform: rotate(90deg); }
+.modal-server-names { margin: 2px 0 2px 16px; font: 500 var(--fs-meta)/16px var(--font); color: var(--t3); overflow-wrap: anywhere; }
 
 .line.banner { color: #a88a9a; }
 .line.prompt { display: block; margin-top: 4px; color: var(--rose-300); white-space: nowrap; }
@@ -735,7 +753,7 @@
 /* ── shields: anyone can be made immune ────────────────── */
 
 .shield-btn { width: 26px; height: 26px; flex: none; display: grid; place-items: center; margin: -4px -6px -4px 0; padding: 0; border: 0; border-radius: 8px;
-  background: transparent; color: var(--t3); cursor: pointer; opacity: 0; transition: opacity .15s, color .15s, background-color .15s, transform .15s var(--ease-out); }
+  background: transparent; color: var(--t3); cursor: pointer; opacity: .7; transition: opacity .15s, color .15s, background-color .15s, transform .15s var(--ease-out); }
 .shield-btn .ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
 .row:hover .shield-btn, .row:focus-within .shield-btn, .shield-btn:focus-visible { opacity: 1; }
 .shield-btn:hover:not(:disabled) { color: var(--ember-200); background: rgba(247, 203, 110, .1); }
@@ -745,10 +763,11 @@
 .shield-btn:disabled .ico { opacity: .45; }
 .shield-btn.is-on { color: var(--ember-300); }
 .shield-btn.is-on .ico { fill: currentColor; }
-/* One gold mark per meaning on an immune row (the shield and the crown); the shield that undoes it
-   shows on hover or focus. */
+/* Shields show at rest (3.35:1), so the shield the welcome points to is there to find. One gold mark
+   per meaning on an immune row (the shield and the crown): the shield that undoes it shows on hover
+   or focus. */
 .row-immune .shield-btn { opacity: 0; }
-@media (hover: none) { .shield-btn, .row-immune .shield-btn { opacity: .55; } }
+@media (hover: none) { .shield-btn { opacity: .7; } .row-immune .shield-btn { opacity: .55; } }
 .target-tools { flex: none; display: flex; align-self: flex-start; }
 .target-tools .shield-btn { width: 30px; height: 30px; margin: -2px -2px 0 0; opacity: .7; }
 .target-tools .shield-btn:hover, .target-tools .shield-btn.is-on { opacity: 1; }

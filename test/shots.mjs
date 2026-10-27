@@ -103,6 +103,7 @@ async function hold(page, ms) {
   await page.waitForSelector('[data-key="c:3003"]');
   await page.click('[data-key="c:3003"]');
   await page.click('[data-key="c:3002"]');
+  await page.click('.fold-head'); // friends with a closed DM wait in a fold (D43)
   await page.click('[data-key="u:2004"]');
   await page.locator('.guild-head').first().click();
   await page.waitForSelector('[data-key="c:5002"]');
