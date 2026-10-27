@@ -1,6 +1,7 @@
 // End-to-end behaviour tests for the v4 purifier against the stateful mock Discord.
 // node e2e.mjs <userscript.js> [outDir]
-import { chromium } from 'playwright';
+// BROWSER=firefox|webkit runs it in another engine (chromium by default); CI smokes a few tests there.
+import { chromium, firefox, webkit } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,11 +14,14 @@ const OUT = process.argv[3] || path.join(here, 'out/e2e');
 fs.mkdirSync(OUT, { recursive: true });
 const source = fs.readFileSync(SRC, 'utf8');
 const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-const browser = await chromium.launch();
+const engines = { chromium, firefox, webkit };
+const engine = engines[process.env.BROWSER || 'chromium'];
+if (!engine) throw new Error(`BROWSER must be one of ${Object.keys(engines).join(', ')}`);
+const browser = await engine.launch();
 const results = [];
 
 async function test(name, fn) {
-  if (only && !only.some((o) => name.startsWith(o))) return;
+  if (only && !only.some((o) => name === o || name.startsWith(`${o} `))) return; // ONLY=T1 is T1, not T1xx
   const t0 = Date.now();
   let ctx;
   try {
@@ -2436,7 +2440,7 @@ const ringGeometry = (page) => page.evaluate(() => {
       min = Math.min(min, d - half);
     }
     const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
-    stickerClear = { arc: Math.round(min), right: Math.round(body.right - s.right), top: Math.round(s.top - body.top) };
+    stickerClear = { arc: Math.round(min), arcRaw: Number(min.toFixed(2)), right: Math.round(body.right - s.right), top: Math.round(s.top - body.top) };
   }
   return { label: inside(r.querySelector('.count-label')), count: count.getClientRects().length ? inside(ink) : null, countWidth: Math.round(cb.width), ring: Math.round(g.width), stickerClear };
 });
@@ -2570,7 +2574,7 @@ await test('T102 the panel keeps one height from preview to run; time left leads
   await page.click('[data-act="pause"]');
   await page.waitForTimeout(250);
   const paused = await page.evaluate(() => getComputedStyle(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="stats"]')).opacity);
-  assert(paused === '0.78', `paused stats opacity ${paused}`);
+  assert(paused === '1', `paused stats opacity ${paused}`); // D54: read at AA; the pause shows four other ways
   await page.click('[data-act="resume"]');
   held.release();
   await waitEnd(page);
@@ -2606,7 +2610,8 @@ await test('T103 short screens keep the chat, the count and the buttons in view;
       assert(c.label >= 4, `${where} uncounted ${JSON.stringify(c)}`);
     } else {
       const r = await ringNow(page);
-      assert(r.count === '40' && r.label === 'ready for purge' && r.daggers === 2 && /^about \d+s to purify~$/.test(r.sub), `${where} strip ${JSON.stringify(r)}`);
+      // D52: the strip's line starts with the chat Purify acts on.
+      assert(r.count === '40' && r.label === 'ready for purge' && r.daggers === 2 && /^general · ✿ Cozy Corner · about \d+s to purify~$/.test(r.sub.replace(/[\u2068\u2069]/g, '')), `${where} strip ${JSON.stringify(r)}`);
     }
     await context.close();
   }
@@ -2806,14 +2811,15 @@ await test('T105 pace and time left are honest from the first kill; big counts f
     await page.click('[data-act="pause"]');
     await page.click('[data-act="minimize"]');
     await page.waitForSelector('.orb:not([hidden])');
-    assert((await orb()).title === 'Paused~ click to open', `paused orb ${JSON.stringify(await orb())}`);
+    const paused = await orb();
+    assert(/^Paused~ \d+ of 40$/.test(paused.title) && paused.label === `Open Dopa's Purifier — paused, ${paused.title.slice(8)}`, `paused orb ${JSON.stringify(paused)}`);
     await page.click('.orb');
     await page.waitForSelector('[data-role="shell"]:not([hidden])');
     await page.click('[data-act="resume"]');
     await page.click('[data-act="minimize"]');
     await page.waitForSelector('[data-role="shell"][hidden]', { state: 'attached' });
     const live = await orb();
-    assert(/^Purging~ \d+ of 40$/.test(live.title) && /^Open Dopa's Purifier — purging, \d+ of 40$/.test(live.label), `running orb ${JSON.stringify(live)}`);
+    assert(/^Purifying~ \d+ of 40( · about \d+s left)?$/.test(spaced(live.title)) && /^Open Dopa's Purifier — purifying, \d+ of 40$/.test(live.label), `running orb ${JSON.stringify(live)}`);
     held.release();
     await waitEnd(page);
     assert((await orb()).title === 'All clean~ 40 purged', `finished orb ${JSON.stringify(await orb())}`);
@@ -3064,6 +3070,468 @@ await test('T109 seven type sizes and one caps tracking', async () => {
   await context.close();
 });
 
+// ---- WP-J (4.2) ----
+// Layout, visual system and accessibility: D51–D56, and amendments J1–J3 (T280–T283 extend T163, T102,
+// T103 and T108).
+
+// Runs fn(shadowRoot, arg) in the page (inPanel is declared further down).
+const jPanel = (page, fn, arg) => page.evaluate(([src, a]) => new Function('r', 'a', `return (${src})(r, a);`)(document.querySelector('#dopa-purifier-host').shadowRoot, a), [fn.toString(), arg]);
+// The page's pixels in a box, as [r, g, b] rows (at the page's device scale).
+async function shotPixels(page, clip) {
+  const b64 = (await page.screenshot({ clip })).toString('base64');
+  return page.evaluate(async (src) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${src}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const rows = [];
+    for (let y = 0; y < c.height; y++) {
+      const row = [];
+      for (let x = 0; x < c.width; x++) { const i = (y * c.width + x) * 4; row.push([d[i], d[i + 1], d[i + 2]]); }
+      rows.push(row);
+    }
+    return rows;
+  }, b64);
+}
+const pxRatio = (a, b) => contrast(`rgb(${a.join(',')})`, `rgb(${b.join(',')})`);
+// Whether each control is the topmost thing at its own centre.
+const hitsSelf = (page, sels) => jPanel(page, (r, list) => Object.fromEntries(list.map((sel) => {
+  const b = r.querySelector(sel).getBoundingClientRect();
+  const el = r.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+  return [sel, !!el && !!el.closest(sel)];
+})), sels);
+const rectOf = (page, sel) => jPanel(page, (r, s) => { const b = r.querySelector(s).getBoundingClientRect(); return { left: b.left, top: b.top, right: b.right, bottom: b.bottom, width: b.width, height: b.height }; }, sel);
+
+await test('T238 with no room beside the panel the log is a sheet over its body; Pause, Stop and Logs stay clear', async () => {
+  for (const [width, height, over] of [[640, 360, true], [627, 333, true], [683, 384, false], [720, 450, false]]) {
+    const where = `${width}×${height}`;
+    const { page, pageErrors, context } = await boot('/channels/4001/5001', { viewport: { width, height }, latencyMs: 10 });
+    let n = 0;
+    const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 3 });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await heldBy(held);
+    await page.click('[data-act="logs"]');
+    await page.waitForTimeout(450);
+    const hits = await hitsSelf(page, ['[data-act="copy-log"]', '[data-act="close-log"]', '[data-act="pause"]', '[data-act="stop"]', '[data-act="logs"]']);
+    assert(Object.values(hits).every(Boolean), `${where}: something is covered ${JSON.stringify(hits)}`);
+    const m = await jPanel(page, (r) => {
+      const t = r.querySelector('.term');
+      const b = t.getBoundingClientRect();
+      const p = r.querySelector('.panel').getBoundingClientRect();
+      return { over: t.hasAttribute('data-over'), inView: b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight, apart: b.right <= p.left || b.left >= p.right,
+        inert: ['.head', '.tabs', '[data-role="body"]'].map((s) => r.querySelector(s).inert) };
+    });
+    assert(m.over === over && m.inView, `${where}: ${JSON.stringify(m)}`);
+    if (over) {
+      assert(m.inert.every(Boolean), `${where}: what the sheet covers can still be reached ${JSON.stringify(m)}`);
+      await page.focus('[data-act="logs"]');
+      await page.keyboard.press('Tab');
+      const next = await jPanel(page, (r) => r.activeElement && r.activeElement.dataset.act);
+      assert(next === 'copy-log', `${where}: Tab from Logs went to ${next}`);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      const lifted = await jPanel(page, (r) => ({ focus: r.activeElement && r.activeElement.dataset.act, inert: ['.head', '.tabs', '[data-role="body"]'].some((s) => r.querySelector(s).inert), over: r.querySelector('.term').hasAttribute('data-over') }));
+      assert(lifted.focus === 'logs' && !lifted.inert && !lifted.over, `${where}: closing the sheet ${JSON.stringify(lifted)}`);
+    } else assert(m.apart && !m.inert.some(Boolean), `${where}: side by side ${JSON.stringify(m)}`);
+    held.release();
+    await page.click('[data-act="stop"]');
+    await waitEnd(page, 8000);
+    assert(pageErrors.length === 0, `${where}: page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+});
+
+await test('T239 side by side, the log is as tall as the panel, before and after the lists load', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('[data-act="logs"]');
+  await page.waitForTimeout(450);
+  const heights = () => jPanel(page, (r) => ({ term: r.querySelector('.term').getBoundingClientRect().height, panel: r.querySelector('.panel').offsetHeight }));
+  let h = await heights();
+  assert(Math.abs(h.term - h.panel) <= 1, `This chat: log ${h.term} vs panel ${h.panel}`);
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.waitForTimeout(300);
+  h = await heights();
+  assert(Math.abs(h.term - h.panel) <= 1, `Many chats: log ${h.term} vs panel ${h.panel}`);
+  await context.close();
+});
+
+await test('T240 in a 280px log the summary and Discord\'s reasons read whole', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { viewport: { width: 682, height: 800 } });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  await page.click('[data-act="logs"]');
+  await page.waitForTimeout(450);
+  const m = await jPanel(page, (r) => {
+    const line = [...r.querySelectorAll('.term-body .line')].find((l) => /SUMMARY/.test(l.textContent));
+    const msg = line.querySelector('.line-msg');
+    return { width: Math.round(r.querySelector('.term').getBoundingClientRect().width), text: msg.textContent, whole: msg.scrollWidth <= msg.clientWidth };
+  });
+  assert(m.width === 280, `log width ${m.width}`);
+  assert(m.whole, `the summary is cut ${JSON.stringify(m)}`);
+  await context.close();
+});
+
+await test('T241 a dragged panel stays docked to its side when the window grows', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { viewport: { width: 1280, height: 720 } });
+  const gap = () => jPanel(page, (r) => innerWidth - r.querySelector('[data-role="shell"]').offsetLeft - r.querySelector('.panel').offsetWidth);
+  const head = await page.locator('.titles').boundingBox();
+  await page.mouse.move(head.x + 40, head.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(head.x, head.y + 8, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const before = await gap();
+  await page.setViewportSize({ width: 1920, height: 1040 });
+  await page.waitForTimeout(200);
+  const after = await gap();
+  assert(before === 60 && after === before, `right gap ${before} → ${after}`);
+  await context.close();
+});
+
+await test('T242 minimised, screen readers hear how the purge ended; reopening empties the region', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { latencyMs: 10 });
+  let n = 0;
+  const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 3 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await heldBy(held);
+  await page.click('[data-act="minimize"]');
+  await page.waitForSelector('[data-role="shell"][hidden]', { state: 'attached' });
+  held.release();
+  await waitEnd(page);
+  const region = () => jPanel(page, (r) => { const m = r.querySelector('[data-role="milestone"]'); return { text: m.textContent, shown: !m.closest('[hidden]'), atomic: m.getAttribute('aria-atomic') }; });
+  const said = await region();
+  assert(said.text === "Dopa's Purifier: All clean~ 10 purged" && said.shown && said.atomic === 'true', `minimised ending ${JSON.stringify(said)}`);
+  await page.click('.orb');
+  await page.waitForSelector('[data-role="shell"]:not([hidden])');
+  assert((await region()).text === '', `after reopening ${JSON.stringify(await region())}`);
+  await context.close();
+});
+
+await test('T243 a run that ends with the panel open leaves no milestone behind', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { latencyMs: 10 });
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  await page.evaluate(() => {
+    window.__said = [];
+    const m = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="milestone"]');
+    new MutationObserver(() => { if (m.textContent) window.__said.push(m.textContent); }).observe(m, { childList: true, characterData: true, subtree: true });
+  });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  const end = await jPanel(page, (r) => r.querySelector('[data-role="milestone"]').textContent);
+  assert((await page.evaluate(() => window.__said.length)) >= 1 && end === '', `milestones ${JSON.stringify(await page.evaluate(() => window.__said))}, at the end ${JSON.stringify(end)}`);
+  await context.close();
+});
+
+await test('T244 the orb says what it opens and how it is going; hearts and marks are not read as symbols', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5001', { latencyMs: 10 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    let n = 0;
+    const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 15 });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await heldBy(held);
+    await page.click('[data-act="pause"]');
+    await page.click('[data-act="minimize"]');
+    await page.waitForSelector('.orb:not([hidden])');
+    const orb = await jPanel(page, (r) => ({ title: r.querySelector('.orb').title, label: r.querySelector('.orb').getAttribute('aria-label') }));
+    assert(orb.label === "Open Dopa's Purifier — paused, 14 of 40" && orb.title === 'Paused~ 14 of 40', `paused orb ${JSON.stringify(orb)}`);
+    held.release();
+    await context.close();
+  }
+  const { page, context } = await boot('/channels/4001/5001');
+  let k = 0;
+  await page.route(/\/api\/v9\/channels\/5001\/messages\/\d+$/, (route) => {
+    if (route.request().method() !== 'DELETE' || ++k % 8) return route.fallback();
+    return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'Missing Permissions', code: 50013 }) });
+  });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  await page.click('[data-act="logs"]');
+  await page.waitForTimeout(450);
+  const cdp = await context.newCDPSession(page);
+  const nodes = (await cdp.send('Accessibility.getFullAXTree')).nodes.filter((x) => !x.ignored).map((x) => ({ role: x.role && x.role.value, name: (x.name && x.name.value) || '' }));
+  const texts = nodes.filter((x) => x.role === 'StaticText').map((x) => x.name);
+  assert(!texts.some((t) => /^[\s♡>✗⚠›·]+$/.test(t)), `symbols read aloud: ${JSON.stringify(texts.filter((t) => /^[\s♡>✗⚠›·]+$/.test(t)).slice(0, 5))}`);
+  assert(texts.includes('mostly clean, princess') && !texts.some((t) => /princess ♡/.test(t)), `the mood reads ${JSON.stringify(texts.filter((t) => /princess/.test(t)))}`);
+  assert(nodes.some((x) => x.role === 'image' && x.name === 'Error'), 'a failed line is marked Error in words');
+  // Copying keeps every mark: what the log shows is what you paste.
+  await page.evaluate(() => { navigator.clipboard.writeText = async (t) => { window.__copied = t; }; });
+  await page.click('[data-act="copy-log"]');
+  const copied = await page.evaluate(() => window.__copied);
+  assert(/^>wake up, princess~\n>dopa-os v\d+\.\d+\.\d+ · loading heart\.sys · dagger\.dll\n/.test(copied) && /\n>♡{29}\n/.test(copied) && /\n\d\d:\d\d:\d\d✗FAILED · /.test(copied) && /\n\d\d:\d\d:\d\d›SUMMARY: 35 purged, 5 failed/.test(copied),
+    `copied log ${JSON.stringify(copied.slice(0, 300))}`);
+  await context.close();
+});
+
+await test('T245 the chosen tab\'s pill has an edge you can see (3:1 against the track, at 1x)', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { dpr: 1 });
+  await page.mouse.move(5, 5);
+  const pill = await rectOf(page, '.tab-pill');
+  const y = Math.round(pill.top + pill.height / 2);
+  const x = Math.round(pill.left);
+  const [row] = await shotPixels(page, { x: x - 2, y, width: 4, height: 1 });
+  const ratio = pxRatio(row[2], row[0]);
+  assert(ratio >= 3, `pill edge ${row[2]} vs track ${row[0]}: ${ratio.toFixed(2)}:1`);
+  await context.close();
+});
+
+await test('T246 before a run the caption sits midway between ring and card; the caps label never hops', async () => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 600 }]) {
+    const where = `${viewport.width}×${viewport.height}`;
+    const { page, context } = await boot('/channels/4001/5001', { viewport });
+    await heroAt(page, 'unscanned/icon');
+    const geo = () => jPanel(page, (r) => {
+      const g = r.querySelector('.gauge').getBoundingClientRect();
+      const k = g.width / 200;
+      const arcEnd = g.top + g.height / 2 + 84 * k * Math.SQRT1_2 + 4 * k; // the arc's ends, cap included
+      const card = r.querySelector('[data-role="target"]').getBoundingClientRect().top;
+      const line = r.querySelector('[data-role="readout-line"]').getBoundingClientRect();
+      return { off: line.top + line.height / 2 - (arcEnd + card) / 2, label: r.querySelector('.count-label').getBoundingClientRect().top };
+    });
+    const icon = await geo();
+    await page.click('[data-act="scan"]');
+    await heroAt(page, 'ready/count');
+    const counted = await geo();
+    assert(Math.abs(icon.off) <= 4 && Math.abs(counted.off) <= 4, `${where}: caption off midway by ${icon.off.toFixed(1)} / ${counted.off.toFixed(1)}px`);
+    assert(Math.abs(icon.label - counted.label) <= 0.5, `${where}: the label hops ${icon.label} → ${counted.label}`);
+    await context.close();
+  }
+});
+
+await test('T247 the orb draws the hero\'s 270° arc and never fills its open bottom', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { latencyMs: 10 });
+  let n = 0;
+  const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 3 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await heldBy(held);
+  await page.click('[data-act="minimize"]');
+  await page.waitForSelector('[data-role="shell"][hidden]', { state: 'attached' });
+  held.release();
+  await waitEnd(page);
+  const orb = await jPanel(page, (r) => ['.orb-track', '.orb-fill'].map((s) => {
+    const c = r.querySelector(s);
+    const cs = getComputedStyle(c);
+    return { dash: Number(c.getAttribute('stroke-dasharray').split(' ')[0]), turn: c.getAttribute('transform'), css: cs.transitionDuration.split(',').some((d) => parseFloat(d) > 0) ? cs.transitionProperty : '' };
+  }));
+  const arc = 0.75 * 2 * Math.PI * 22;
+  assert(orb.every((c) => c.turn === 'rotate(135 24 24)' && Math.abs(c.dash - arc) < 0.01), `the orb's arc ${JSON.stringify(orb)}`);
+  assert(!/stroke-dasharray|all/.test(orb[1].css), `the fill animates while minimised: ${orb[1].css}`);
+  await context.close();
+});
+
+await test('T248 a disabled Purify is a solid muted box, not the queued pill\'s dashed outline', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  const s = await jPanel(page, (r) => { const b = r.querySelector('[data-act="purify"]'); const cs = getComputedStyle(b); return { disabled: b.disabled, outline: cs.outlineStyle, shadow: cs.boxShadow }; });
+  assert(s.disabled && s.outline === 'none' && /inset/.test(s.shadow) && /1px/.test(s.shadow), `disabled Purify ${JSON.stringify(s)}`);
+  await context.close();
+});
+
+await test('T249 a label that cannot fit keeps its first letters, in any font and with WCAG text spacing', async () => {
+  const fonts = ['Verdana, sans-serif', "'DejaVu Sans', sans-serif"];
+  const spacing = '.layer * { letter-spacing: .12em !important; word-spacing: .16em !important; }';
+  const leftCut = (page) => jPanel(page, (r) => [...r.querySelectorAll('.btn')].filter((b) => b.getClientRects().length && !b.closest('[hidden]')).flatMap((b) => {
+    const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT, { acceptNode: (t) => (t.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT) });
+    const t = walker.nextNode();
+    if (!t) return [];
+    const range = document.createRange();
+    range.selectNodeContents(t);
+    const first = range.getClientRects()[0];
+    return first && first.left < b.getBoundingClientRect().left - 0.5 ? [b.textContent.trim()] : [];
+  }));
+  const style = (page, css) => jPanel(page, (r, c) => { let s = r.querySelector('#t249'); if (!s) { s = document.createElement('style'); s.id = 't249'; r.append(s); } s.textContent = c; }, css);
+  for (const font of fonts) {
+    const { page, context } = await boot('/channels/4001/5001', { firstRun: true });
+    const check = async (state) => {
+      for (const extra of ['', spacing]) {
+        await style(page, `.layer { --font: ${font} !important; } ${extra}`);
+        const cut = await leftCut(page);
+        assert(cut.length === 0, `${font}, ${state}${extra ? ' (WCAG spacing)' : ''}: ${JSON.stringify(cut)}`);
+      }
+      await style(page, '');
+    };
+    await check('welcome');
+    await page.click('[data-act="welcome-ok"]');
+    await check('idle');
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    await check('confirm');
+    await page.keyboard.press('Escape');
+    await pickBatch(page, ['c:3002', 'c:3003']);
+    await check('batch');
+    await context.close();
+  }
+});
+
+await test('T250 marks show in forced colours; light Discord gets a light shadow; the welcome has no seam and sits centred', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5001');
+    await page.emulateMedia({ forcedColors: 'active' });
+    await page.evaluate(() => { navigator.clipboard.writeText = async () => {}; });
+    await page.click('[data-act="share"]');
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').dataset.tone === 'success');
+    const dot = await rectOf(page, '.status-dot');
+    const px = (await shotPixels(page, { x: dot.left, y: dot.top, width: dot.width, height: dot.height })).flat();
+    const ground = px[0];
+    const inked = px.filter((p) => pxRatio(p, ground) >= 3).length;
+    assert(inked >= 10, `the success mark in forced colours: ${inked} px`);
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001', { light: true });
+    const lift = await jPanel(page, (r) => ({ host: r.querySelector('[data-role="layer"]').dataset.host, shadow: getComputedStyle(r.querySelector('.panel')).boxShadow }));
+    assert(lift.host === 'light' && /rgba\(0, 0, 0, 0\.14\)/.test(lift.shadow) && !/0\.75\)/.test(lift.shadow), `light Discord ${JSON.stringify(lift)}`);
+    await context.close();
+  }
+  {
+    const { page, context } = await boot('/channels/4001/5001', { firstRun: true, viewport: { width: 1440, height: 900 } });
+    await page.waitForTimeout(400);
+    const w = await rectOf(page, '[data-role="welcome"]');
+    const cx = Math.round(w.left + w.width / 2);
+    const rows = await shotPixels(page, { x: cx - 30, y: Math.round(w.top) - 2, width: 60, height: 4 });
+    const mean = (row) => [0, 1, 2].map((i) => row.reduce((s, p) => s + p[i], 0) / row.length);
+    const [above, below] = [mean(rows[0]), mean(rows[3])];
+    const step = Math.max(...above.map((v, i) => Math.abs(v - below[i])));
+    assert(step < 2, `seam at the welcome's top ${above.map(Math.round)} → ${below.map(Math.round)} (${step.toFixed(2)})`);
+    const gaps = await jPanel(page, (r) => {
+      const box = r.querySelector('[data-role="welcome"]').getBoundingClientRect();
+      const card = r.querySelector('.welcome-card').getBoundingClientRect();
+      return { top: card.top - box.top, bottom: box.bottom - card.bottom };
+    });
+    assert(Math.abs(gaps.top - gaps.bottom) <= 10, `welcome gaps ${JSON.stringify(gaps)}`);
+    await context.close();
+  }
+});
+
+await test('T280 (extends T163) in forced colours, focus shows on checkboxes, the filter and the chosen tab', async () => {
+  for (const colorScheme of ['dark', 'light']) {
+    const { page, context } = await boot('/channels/4001/5001', { colorScheme });
+    await page.emulateMedia({ forcedColors: 'active' });
+    await page.click('.tab[data-tab="batch"]');
+    await page.locator('.guild-head').first().click();
+    await page.waitForSelector('[data-key="c:5004"]');
+    await page.waitForSelector('[data-key="c:3004"]');
+    await page.mouse.move(5, 5);
+    for (const [name, sel, box] of [['group DM box', '[data-key="c:3004"] .check', '[data-key="c:3004"] .check-ui'], ['channel box', '[data-key="c:5004"] .check', '[data-key="c:5004"] .check-ui'],
+      ['filter', '[data-role="filter"]', '[data-role="filter"]'], ['chosen tab', '.tab[aria-selected="true"]', '.tab[aria-selected="true"]']]) {
+      await jPanel(page, (r) => r.activeElement && r.activeElement.blur());
+      await jPanel(page, (r, s) => r.querySelector(s).scrollIntoView({ block: 'center' }), box);
+      await page.waitForTimeout(100);
+      const b = await rectOf(page, box);
+      const clip = { x: Math.floor(b.left) - 6, y: Math.floor(b.top) - 6, width: Math.ceil(b.width) + 12, height: Math.ceil(b.height) + 12 };
+      const blurred = await shotPixels(page, clip);
+      await page.keyboard.press('Shift'); // the last input was a key, so focus shows as it does for Tab
+      await jPanel(page, (r, s) => r.querySelector(s).focus(), sel);
+      await page.waitForTimeout(100);
+      const focused = await shotPixels(page, clip);
+      let changed = 0;
+      focused.forEach((row, y) => row.forEach((p, x) => { if (pxRatio(p, blurred[y][x]) >= 3) changed++; }));
+      assert(changed >= 128, `${colorScheme}: focus on the ${name} changes ${changed} px²`);
+    }
+    await context.close();
+  }
+});
+
+await test('T281 (extends T102) the snug panel keeps one height from preview to run', async () => {
+  const { page, context } = await boot('/channels/4001/5001', { viewport: { width: 1280, height: 600 } });
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  const height = () => jPanel(page, (r) => ({ fit: r.querySelector('[data-role="layer"]').dataset.fit, h: r.querySelector('.panel').offsetHeight }));
+  const preview = await height();
+  let n = 0;
+  const held = await holdRequests(page, /\/messages\/\d+$/, { match: (q) => q.method() === 'DELETE' && ++n === 5 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await heldBy(held);
+  const running = await height();
+  assert(preview.fit === 'snug' && running.h === preview.h, `snug ${JSON.stringify(preview)} → ${JSON.stringify(running)}`);
+  held.release();
+  await waitEnd(page);
+  await context.close();
+});
+
+await test('T282 (extends T103) tight windows keep the chat named, the count and Purify in view, and every row reachable', async () => {
+  for (const [width, height, tight] of [[627, 333, true], [480, 270, true], [470, 250, true], [640, 360, false], [683, 384, false], [720, 450, false]]) {
+    const where = `${width}×${height}`;
+    const { page, context } = await boot('/channels/4001/5001', { viewport: { width, height } });
+    const isTight = await jPanel(page, (r) => r.querySelector('[data-role="layer"]').hasAttribute('data-tight'));
+    assert(isTight === tight, `${where}: data-tight ${isTight}`);
+    if (!tight) { await context.close(); continue; }
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /found/);
+    const sub = await jPanel(page, (r) => {
+      const s = r.querySelector('[data-role="hero-sub"]').getBoundingClientRect();
+      const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
+      return { text: r.querySelector('[data-role="hero-sub"]').textContent.replace(/[\u2068\u2069]/g, '').replace(/\u00a0/g, ' '), inside: s.top >= body.top - 0.5 && s.bottom <= body.bottom + 0.5 };
+    });
+    assert(sub.text.startsWith('general · ✿ Cozy Corner') && sub.inside, `${where}: the strip line ${JSON.stringify(sub)}`);
+    // The count takes no pointer (the ring's core is see-through to clicks): its own strip is on top of it.
+    const shown = await jPanel(page, (r) => {
+      const c = r.querySelector('[data-role="count"]').getBoundingClientRect();
+      const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
+      const el = r.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
+      return !!el && !!el.closest('.hero') && c.top >= body.top && c.bottom <= body.bottom;
+    });
+    const hits = await hitsSelf(page, ['[data-act="purify"]']);
+    assert(shown && Object.values(hits).every(Boolean), `${where}: count ${shown}, ${JSON.stringify(hits)}`);
+    // Many chats: walking the DMs keeps each focused row whole in the body, never under the strip.
+    await page.click('.tab[data-tab="batch"]');
+    await page.waitForSelector('[data-key="c:3002"]');
+    await page.focus('[data-role="dm-list"] .check');
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.press('ArrowDown');
+      await page.waitForTimeout(120);
+      const seen = await jPanel(page, (r) => {
+        const row = r.activeElement.closest('.row').getBoundingClientRect();
+        const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
+        const strip = r.querySelector('.hero').getBoundingClientRect();
+        // A row taller than the whole body (470×250: 44px of body for a two-line row) shows from its top.
+        const fits = row.height <= body.height ? row.bottom <= body.bottom + 0.5 : row.top <= body.top + 8;
+        return { inside: row.top >= body.top - 0.5 && fits, under: row.top < strip.bottom - 0.5 && row.bottom > strip.top + 0.5, row: [row.top, row.bottom], body: [body.top, body.bottom] };
+      });
+      assert(seen.inside && !seen.under, `${where}: row ${i + 2} ${JSON.stringify(seen)}`);
+    }
+    await context.close();
+  }
+});
+
+await test('T283 (extends T108) the sticker grows away from the ring, whatever the word\'s width', async () => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 600 }]) {
+    const where = `${viewport.width}×${viewport.height}`;
+    const { page, context } = await boot('/channels/4001/5001', { viewport });
+    let k = 0;
+    await page.route(/\/api\/v9\/channels\/5001\/messages\/\d+$/, (route) => {
+      if (route.request().method() !== 'DELETE' || ++k % 8) return route.fallback();
+      return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'Missing Permissions', code: 50013 }) });
+    });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    await page.waitForTimeout(800);
+    const a = (await ringClearance(page)).stickerClear;
+    await jPanel(page, (r) => { const s = document.createElement('style'); s.textContent = '.sticker { letter-spacing: .06em !important; }'; r.append(s); });
+    const b = (await ringClearance(page)).stickerClear;
+    assert(a && b && a.arcRaw >= 2 && b.arcRaw >= 2 && Math.abs(a.arcRaw - b.arcRaw) <= 0.5 && a.right >= 0 && a.top >= 0, `${where}: sticker ${JSON.stringify({ a, b })}`);
+    await context.close();
+  }
+});
+
 // ── Confirm, hold and count-first (T120–T133) ──
 
 const isOpen = (page) => page.locator('.modal-layer[data-open="true"]').count().then((n) => n > 0);
@@ -3256,7 +3724,8 @@ await test('T125 letting go early says nothing went; a tap still teaches; a fing
   assert(/^Let go~/.test(await label()), `mouse slide-off: ${await label()}`);
   await page.mouse.up();
   await page.waitForTimeout(1500);
-  // A finger 20px off lets go; 10px off still holds, to the end.
+  // A finger 20px off lets go; 10px off still holds, to the end. (Touch goes through CDP: Chromium only.)
+  if (engine !== chromium) { await context.close(); return; }
   const cdp = await context.newCDPSession(page);
   const at = ([x, y]) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(mid) });

@@ -33,8 +33,6 @@
     disposers.push(() => clearInterval(id));
   }
 
-  const shortVersion = VERSION.split('.').slice(0, 2).join('.');
-
   // ── DOM helpers ─────────────────────────────────────────
   // Everything Discord hands us (names, message text) goes in as text nodes —
   // never through innerHTML.
@@ -120,6 +118,8 @@
   // saved: what boot read from storage (null when storage is blocked).
   function loadPrefs(saved) {
     if (!saved) return;
+    const d = saved.dock;
+    if (d && (d.side === 'left' || d.side === 'right') && Number.isFinite(d.dx) && Number.isFinite(d.y)) prefs.dock = { side: d.side, dx: d.dx, y: d.y };
     if (Number.isFinite(saved.x)) prefs.x = saved.x;
     if (Number.isFinite(saved.y)) prefs.y = saved.y;
     if (typeof saved.open === 'boolean') prefs.open = saved.open;
@@ -303,7 +303,7 @@
     crown: 'M3.2 8.2l4.6 3.9L12 5l4.2 7.1 4.6-3.9-1.9 10.4H5.1z',
     drop: 'M12 3.2c3 4.4 6.2 7.5 6.2 11a6.2 6.2 0 0 1-12.4 0c0-3.5 3.2-6.6 6.2-11z',
     megaphone: 'M3 11l18-5v12L3 14zM11.6 16.8a3 3 0 1 1-5.8-1.6',
-    share: 'M12 15V3M7.5 7.5L12 3l4.5 4.5M5 12v7h14v-7',
+    share: 'M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1',
     forum: 'M4 5h16v10H9l-5 4z',
     group: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
     dagger: 'M12 1.8l2.1 3.4v9.4H9.9V5.2zM6.8 14.6h10.4v2.2H6.8zM10.9 16.8h2.2v3.4h-2.2zM12 20a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z',
@@ -329,6 +329,7 @@
   G.len = G.c * G.sweep;
   const ARC = { cx: G.cx, cy: G.cy, r: G.r, transform: 'rotate(135 100 100)', fill: 'none' };
   const ROSE_STROKE = 'url(#dp-g-rose) #ff7aa9';
+  const ORB_C = 2 * Math.PI * 22; // the orb's ring, r 22 in a 48 box
 
   function buildGauge() {
     return h('div', { class: 'gauge', 'aria-hidden': 'true' },
@@ -495,12 +496,12 @@
         h('button', { class: 'avatar', 'data-act': 'poke', 'aria-label': 'Poke Dopa', title: 'boop~' },
           h('img', { src: EMOTE_IMG, alt: '', draggable: 'false' })),
         h('div', { class: 'titles' },
-          h('div', { class: 'title' }, h('span', { text: "Dopa's Purifier" }), h('span', { class: 'ver', text: `v${shortVersion}` })),
+          h('div', { class: 'title', title: `Dopa's Purifier v${VERSION}` }, h('span', { text: "Dopa's Purifier" })),
           h('div', { class: 'mood', 'data-role': 'mood', text: 'awaiting orders, princess~' })),
         h('div', { class: 'head-tools' },
-          h('button', { class: 'icon-btn', 'data-act': 'share', 'aria-label': 'Share with a friend', title: 'Share with a friend ♡' }, icon('share')),
+          h('button', { class: 'icon-btn', 'data-act': 'share', 'aria-label': 'Copy the install link', title: 'Copy the install link for a friend ♡' }, icon('share')),
           h('button', { class: 'icon-btn', 'data-act': 'mute', 'aria-label': 'Mute sound', title: 'Sound' }, icon('sound')),
-          h('button', { class: 'icon-btn', 'data-act': 'minimize', 'aria-label': 'Minimise', title: 'Minimise' }, icon('minimize')))),
+          h('button', { class: 'icon-btn', 'data-act': 'minimize', title: 'Minimise' }, icon('minimize')))),
       h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'What to purify' },
         h('span', { class: 'tab-pill', 'aria-hidden': 'true' }),
         h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'This chat' }),
@@ -538,16 +539,15 @@
           h('div', { class: 'status', 'data-role': 'status', role: 'status', 'aria-live': 'polite', dataset: { tone: 'info' } },
             h('span', { class: 'status-dot', 'aria-hidden': 'true' }),
             h('span', { 'data-role': 'status-text' }, flaired('Ready to purify~', '✨'))),
-          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' }))),
-        h('div', { class: 'sr', 'data-role': 'milestone', 'aria-live': 'polite' })));
+          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' })))));
   }
 
   function buildTerminal() {
     return h('section', { class: 'term', 'aria-label': 'Purifier log', hidden: true },
       h('header', { class: 'term-head', 'data-role': 'term-drag' },
         h('span', { class: 'term-title' }, 'DOPA-OS ♡ ', h('span', { class: 'term-title-mid', text: 'PURIFIER ' }), 'MAINFRAME'),
-        h('button', { class: 'icon-btn', 'data-act': 'copy-log', 'aria-label': 'Copy log', title: 'Copy log' }, icon('copy')),
-        h('button', { class: 'icon-btn', 'data-act': 'close-log', 'aria-label': 'Close log', title: 'Close' }, icon('close'))),
+        h('button', { class: 'icon-btn', 'data-act': 'copy-log', title: 'Copy log' }, icon('copy')),
+        h('button', { class: 'icon-btn', 'data-act': 'close-log', title: 'Close log' }, icon('close'))),
       h('div', { class: 'term-screen' }, h('div', { class: 'term-body', 'data-role': 'term-body', role: 'log', 'aria-live': 'off' })),
       h('footer', { class: 'term-foot', 'aria-hidden': 'true' },
         h('span', {}, 'PURGED ', h('b', { 'data-role': 'tf-purged', text: '000' })),
@@ -585,12 +585,15 @@
       h('div', { class: 'layer', 'data-role': 'layer' },
         h('div', { class: 'shell', 'data-role': 'shell' }, h('div', { class: 'wobble', 'data-role': 'wobble' }, buildPanel())),
         buildTerminal(),
+        // The orb draws the hero's 270° arc, open at the bottom.
         h('button', { class: 'orb', 'data-act': 'restore', 'aria-label': "Open Dopa's Purifier", hidden: true },
           svg('svg', { class: 'orb-ring', viewBox: '0 0 48 48', 'aria-hidden': 'true' },
-            svg('circle', { class: 'orb-track', cx: '24', cy: '24', r: '22' }),
-            svg('circle', { class: 'orb-fill', cx: '24', cy: '24', r: '22', 'stroke-dasharray': `0 ${2 * Math.PI * 22}` })),
+            svg('circle', { class: 'orb-track', cx: '24', cy: '24', r: '22', transform: 'rotate(135 24 24)', 'stroke-dasharray': `${(ORB_C * G.sweep).toFixed(2)} ${ORB_C.toFixed(2)}` }),
+            svg('circle', { class: 'orb-fill', cx: '24', cy: '24', r: '22', transform: 'rotate(135 24 24)', 'stroke-dasharray': `0 ${ORB_C.toFixed(2)}` })),
           h('img', { src: EMOTE_IMG, alt: '', draggable: 'false' }),
           h('span', { class: 'orb-badge', 'data-role': 'orb-badge', hidden: true })),
+        // Outside the shell, so milestones and the ending are heard while minimised too.
+        h('div', { class: 'sr', 'data-role': 'milestone', 'aria-live': 'polite', 'aria-atomic': 'true' }),
         buildModal(),
         h('div', { class: 'fx', 'aria-hidden': 'true' })));
     // Keep Discord's global hotkeys (type-to-focus-composer, Esc, etc.) out of our UI.
@@ -598,7 +601,31 @@
       host.addEventListener(type, (e) => e.stopPropagation());
     }
     document.body.appendChild(host);
+    watchHost();
+    // A two-line status, a two-line name or lists loading change the panel's height: the open log follows.
+    const fit = new ResizeObserver(() => placeTerminal());
+    fit.observe($('.panel'));
+    fit.observe($('.foot'));
+    disposers.push(() => fit.disconnect());
     return host;
+  }
+
+  // Light Discord gets a lighter shadow under the panel. Discord marks its theme on <html>; where it
+  // doesn't, a light page behind us decides.
+  function watchHost() {
+    const read = () => {
+      const html = document.documentElement.classList;
+      let light = html.contains('theme-light');
+      if (!light && !html.contains('theme-dark')) {
+        const [r, g, b, a = 1] = (getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g) || []).map(Number);
+        light = a > 0.5 && (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5;
+      }
+      $('[data-role="layer"]').dataset.host = light ? 'light' : 'dark';
+    };
+    read();
+    const obs = new MutationObserver(read);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    disposers.push(() => obs.disconnect());
   }
 
   // ── Status, meter, gauge ────────────────────────────────
@@ -624,8 +651,9 @@
     el.dataset.tone = tone;
   }
 
+  // A trailing heart is flair: it shows, but isn't read aloud.
   function setMood(text) {
-    $('[data-role="mood"]').textContent = text;
+    $('[data-role="mood"]').replaceChildren(...(text.endsWith(' ♡') ? flaired(text.slice(0, -2), '♡') : [text]));
   }
 
   let shownCount = null;
@@ -831,23 +859,33 @@
     else sub.replaceChildren(...(idle.sub || idle.line.map((x) => (x instanceof Node ? x.cloneNode(true) : x))));
     sub.title = sub.textContent; // the strip truncates; hover shows all of it
 
-    // Minimised through the finish line: the orb keeps the full ring and count until reopened.
+    // This chat's strip names the chat Purify acts on first, so a short window needs no scroll to see it.
+    if (mode === 'preview' && state.tab === 'current' && state.target && !['lookup', 'lookup-error'].includes(name)) {
+      const t = state.target;
+      const chat = [iso(t.guildId ? t.name.replace(/^#/, '') : t.name), t.guildId && t.context ? `${SEP}${t.context}` : ''].join('');
+      sub.prepend(sub.textContent ? `${chat}${SEP}` : chat);
+      sub.title = sub.textContent;
+    }
+
+    // Minimised through the finish line: the orb keeps the arc and count until reopened. Its ring is
+    // the hero's 270° arc, so it never fills the open bottom.
     const orb = $('.orb');
-    const orbC = 2 * Math.PI * 22;
     const orbFrac = run.active ? (known ? Math.min(1, processedNow / p.total) : 0)
       : state.orbDone ? (state.orbDone.clean ? 1 : (p.total ? Math.min(1, processedNow / p.total) : 0)) : 0;
-    $('.orb-fill').setAttribute('stroke-dasharray', `${(orbC * orbFrac).toFixed(2)} ${orbC.toFixed(2)}`);
+    $('.orb-fill').setAttribute('stroke-dasharray', `${(ORB_C * G.sweep * orbFrac).toFixed(2)} ${ORB_C.toFixed(2)}`);
     $('.orb-fill').setAttribute('visibility', orbFrac > 0 ? 'visible' : 'hidden');
     const badge = $('[data-role="orb-badge"]');
     badge.textContent = fmt(p.deleted);
     badge.hidden = !(run.active || state.orbDone) || !p.deleted;
     orb.dataset.live = run.active ? 'true' : state.orbDone ? (state.orbDone.clean ? 'done' : 'trouble') : 'false';
-    // Hovering the orb says how it's going, so a minimised purge needs no reopening to check on.
-    const progress = p.total ? `${fmt(processedNow)} of ${fmt(p.total)}` : `${fmt(p.deleted)} so far`;
-    const orbSays = run.active ? (run.paused ? 'Paused~ click to open' : `Purging~ ${progress}${p.total && !known ? '+' : ''}`)
-      : state.orbDone ? (state.orbDone.clean ? `All clean~ ${fmt(p.deleted)} purged` : 'Done~ something needs a look') : "Open Dopa's Purifier";
-    orb.title = orbSays;
-    orb.setAttribute('aria-label', run.active && !run.paused ? `Open Dopa's Purifier — purging, ${progress}` : orbSays);
+    // Hovering the orb says how it's going, so a minimised purge needs no reopening to check on; its
+    // name says what it opens, then the same.
+    const progress = p.total ? `${fmt(processedNow)} of ${fmt(p.total)}${known ? '' : '+'}` : `${fmt(p.deleted)} so far`;
+    const ending = !run.active && state.orbDone ? endingWords(p) : null;
+    orb.title = run.active ? (run.paused ? `Paused~ ${progress}` : `Purifying~ ${progress}${shownEta != null ? `${SEP}about ${formatDuration(shownEta)} left` : ''}`)
+      : ending ? ending.title : "Open Dopa's Purifier";
+    orb.setAttribute('aria-label', run.active ? `Open Dopa's Purifier — ${run.paused ? 'paused' : 'purifying'}, ${progress}`
+      : ending ? `Open Dopa's Purifier — ${ending.said}` : "Open Dopa's Purifier");
 
     let mood = 'awaiting orders, princess~';
     if (mode === 'run') mood = run.stopping ? 'wrapping up~' : run.paused ? 'paused~ take your time' : "purging… don't look~";
@@ -2146,6 +2184,24 @@
     $('[data-role="milestone"]').textContent = `${Math.floor((done / p.total) * 100)}% · ${fmt(p.deleted)} of ${fmt(p.total)} purged${failed}${left}`;
   }
 
+  // How a run that finished while minimised ended, for the orb and screen readers: a clean finish by
+  // its number, any other by its verdict.
+  function endingWords(p) {
+    const clean = state.orbDone && state.orbDone.clean && lastEnd && !lastEnd.failed;
+    if (clean) return { clean, title: `All clean~ ${fmt(p.deleted)} purged`, said: `all clean, ${fmt(p.deleted)} purged` };
+    const text = lastEnd ? lastEnd.text : '';
+    return { clean, title: text, said: text };
+  }
+
+  // After the main end handler: minimised, the region says how it ended (the panel isn't there to);
+  // open, it empties, so no stale milestone outlives the verdict.
+  function wireMilestone() {
+    on('end', (p) => {
+      const minimised = $('[data-role="shell"]').hidden;
+      $('[data-role="milestone"]').textContent = minimised && state.orbDone ? `Dopa's Purifier: ${endingWords(p).title}` : '';
+    });
+  }
+
   // ── Tabs ────────────────────────────────────────────────
 
   function switchTab(tab, { initial = false } = {}) {
@@ -2359,22 +2415,29 @@
 
   const LOG_LIMIT = 800;
   const LOG_PREFIX = { success: '♡', error: '✗', warn: '⚠', info: '›', skip: '·' };
+  // Only the marks that carry meaning are read, as words; the rest are decoration.
+  const SAID_PREFIX = { error: 'Error', warn: 'Warning' };
+
+  function linePrefix(tone, text) {
+    return SAID_PREFIX[tone] ? h('span', { class: 'line-pfx', role: 'img', 'aria-label': SAID_PREFIX[tone] }, h('span', { 'aria-hidden': 'true', text }))
+      : h('span', { class: 'line-pfx', 'aria-hidden': 'true', text });
+  }
 
   function bannerLine(text) {
-    return h('div', { class: 'line banner' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text }));
+    return h('div', { class: 'line banner' }, linePrefix('banner', '>'), h('span', { class: 'line-msg', text }));
   }
 
   function logBanner() {
     return [
       bannerLine('wake up, princess~'),
-      bannerLine('loading heart.sys · dagger.dll'),
+      bannerLine(`dopa-os v${VERSION} · loading heart.sys · dagger.dll`),
       bannerLine(`immune · ${immuneSummary()}`),
       bannerLine('♡ SYSTEM ONLINE ♡'),
       bannerLine('AWAITING ORDERS, PRINCESS~'),
-      h('div', { class: 'line banner rule' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text: '♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡' })),
+      h('div', { class: 'line banner rule', 'aria-hidden': 'true' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text: '♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡' })),
       h('div', { class: 'line prompt', 'data-role': 'prompt' },
         h('span', { class: 'prompt-who', text: 'dopa@mainframe' }),
-        h('span', { class: 'prompt-sep', text: ' ♡ ' }),
+        h('span', { class: 'prompt-sep', 'aria-hidden': 'true', text: ' ♡ ' }),
         h('span', { class: 'prompt-cmd', 'data-role': 'prompt-cmd' }),
         h('span', { class: 'cursor', 'aria-hidden': 'true' })),
     ];
@@ -2404,7 +2467,7 @@
     const time = new Date().toTimeString().slice(0, 8);
     const line = h('div', { class: `line ${tone}${wrap ? ' wrap' : ''}` },
       h('span', { class: 'line-time', text: time }),
-      h('span', { class: 'line-pfx', text: LOG_PREFIX[tone] || '›' }),
+      linePrefix(tone, LOG_PREFIX[tone] || '›'),
       h('span', { class: 'line-msg', text }));
     if (scrub) line.dataset.scrub = scrub;
     body.insertBefore(line, $('[data-role="prompt"]'));
@@ -2433,6 +2496,7 @@
         logExit.cancel();
         logExit = null;
         delete term.dataset.leaving;
+        placeTerminal();
       } else if (term.hidden) {
         term.hidden = false;
         placeTerminal();
@@ -2443,6 +2507,7 @@
       body.scrollTop = body.scrollHeight;
     } else if (isOpen) {
       term.dataset.leaving = 'true'; // clicks go through it to whatever is underneath
+      unplaceTerminal();
       const exit = term.animate(reducedMotion() ? [{ opacity: 1 }, { opacity: 0 }]
         : [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(4px) scale(.985)' }], { duration: 140, easing: 'cubic-bezier(.4,0,1,1)' });
       logExit = exit;
@@ -2451,36 +2516,73 @@
         logExit = null;
         delete term.dataset.leaving;
         term.hidden = true;
+        unplaceTerminal();
         applyFocus();
       }, () => {});
     }
     applyFocus();
   }
 
-  // The log sits beside the panel, on whichever side has room for it, and narrows to fit. With
-  // no room on either side it tucks behind the panel, so Pause and Stop always stay in reach.
+  // The log sits beside the panel, on whichever side has room for it, narrowed to fit and as tall as
+  // the panel. With no room on either side it becomes a sheet over the panel's body, above its
+  // footer, so Pause, Stop, Logs and the status stay uncovered; what it covers can't be reached.
+  const UNDER_SHEET = ['.head', '.tabs', '[data-role="body"]', '[data-role="welcome"]'];
+
+  function sheetCovers(on) {
+    const welcome = $('[data-role="welcome"]');
+    const welcoming = !welcome.hidden && !welcome.dataset.leaving;
+    for (const sel of UNDER_SHEET) {
+      const el = $(sel);
+      // Lifting the sheet leaves the welcome's own cover where it was.
+      el.inert = on || (welcoming && underWelcome().includes(el)) || (el === welcome && !!welcome.dataset.leaving);
+    }
+  }
+
   function placeTerminal() {
     const term = $('.term');
     if (term.hidden) return;
-    const panel = $('.panel').getBoundingClientRect();
-    const hgt = term.offsetHeight || 440;
+    const panelEl = $('.panel');
+    const panel = panelEl.getBoundingClientRect();
     const gap = 14;
     const MIN = 280;
     const roomL = panel.left - gap - 8;
     const roomR = innerWidth - panel.right - gap - 8;
-    let w = Math.min(380, innerWidth - 16);
-    let left = 8;
-    if (roomL >= MIN) {
-      w = Math.min(380, roomL);
-      left = panel.left - gap - w;
-    } else if (roomR >= MIN) {
-      w = Math.min(380, roomR);
-      left = panel.right + gap;
+    let w;
+    let left;
+    let top;
+    let hgt;
+    if (roomL >= MIN || roomR >= MIN) {
+      w = Math.min(380, roomL >= MIN ? roomL : roomR);
+      left = roomL >= MIN ? panel.left - gap - w : panel.right + gap;
+      // offsetHeight ignores the drag's tilt.
+      hgt = clamp(panelEl.offsetHeight, 300, innerHeight - 16);
+      top = clamp(panel.top, 8, Math.max(8, innerHeight - hgt - 8));
+      if (term.hasAttribute('data-over')) {
+        delete term.dataset.over;
+        sheetCovers(false);
+      }
+    } else {
+      const foot = $('.foot').getBoundingClientRect();
+      w = panel.width;
+      left = panel.left;
+      top = panel.top;
+      hgt = Math.max(120, foot.top - panel.top - 8);
+      term.dataset.over = '';
+      sheetCovers(true);
     }
-    const top = clamp(panel.top, 8, Math.max(8, innerHeight - hgt - 8));
     term.style.width = `${Math.round(w)}px`;
+    term.style.height = `${Math.round(hgt)}px`;
     term.style.left = `${Math.round(left)}px`;
     term.style.top = `${Math.round(top)}px`;
+  }
+
+  // Closing the log lifts the sheet at once, and its size goes once it has faded.
+  function unplaceTerminal() {
+    const term = $('.term');
+    if (term.hasAttribute('data-over')) sheetCovers(false);
+    if (!term.hidden) return;
+    delete term.dataset.over;
+    term.style.height = '';
   }
 
   async function copyLog() {
@@ -2629,9 +2731,22 @@
     }
   }
 
-  // Never dragged: stay anchored to the right edge at any window size.
+  // The panel is docked to the side it was dragged nearer to, at the same gap from that edge, so a
+  // window that grows keeps it where you left it. Never dragged: the right edge at any window size.
+  function dockFor(x, y) {
+    const w = panelSize().w || 360;
+    const side = x + w / 2 > innerWidth / 2 ? 'right' : 'left';
+    return { side, dx: side === 'right' ? innerWidth - x - w : x, y };
+  }
+
   function homePosition() {
-    return prefs.x != null && prefs.y != null ? { x: prefs.x, y: prefs.y } : defaultPosition();
+    if (!prefs.dock && prefs.x != null && prefs.y != null) {
+      prefs.dock = dockFor(prefs.x, prefs.y); // a spot saved before docking, read once in this window
+      savePrefs('dock');
+    }
+    const d = prefs.dock;
+    if (!d) return defaultPosition();
+    return { x: d.side === 'right' ? innerWidth - d.dx - (panelSize().w || 360) : d.dx, y: d.y };
   }
 
   const MIN_PANEL = 400;
@@ -2650,9 +2765,13 @@
     const maxH = Math.max(240, innerHeight - top - 12);
     $('.panel').style.maxHeight = `${maxH}px`;
     // The height tier follows the real cap, and never reshapes under a drag. Natural heights: full
-    // 536, snug 460 and strip 344 px, plus 18 for a chat name on two lines.
+    // 532, snug 460 and strip 334 px, plus 18 for a chat name on two lines. Below the strip, tight
+    // lets the strip scroll away so the rows and the card can be reached.
     const layer = $('[data-role="layer"]');
-    if (!layer.dataset.dragging) layer.dataset.fit = maxH >= 556 ? 'full' : maxH >= 482 ? 'snug' : 'strip';
+    if (!layer.dataset.dragging) {
+      layer.dataset.fit = maxH >= 556 ? 'full' : maxH >= 482 ? 'snug' : 'strip';
+      layer.toggleAttribute('data-tight', maxH < 330);
+    }
     placeTerminal();
     placeOrb();
   }
@@ -2703,7 +2822,8 @@
       kick({ squash: Math.min(0.25, Math.abs(vx) * 0.01) });
       delete layer.dataset.dragging;
       layoutPanel(); // the height tier waited for the drop
-      savePrefs('x', 'y');
+      prefs.dock = dockFor(prefs.x, prefs.y);
+      savePrefs('dock');
     };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
@@ -2770,6 +2890,7 @@
     };
     if (open) {
       state.orbDone = null;
+      $('[data-role="milestone"]').textContent = '';
       shell.hidden = false;
       const home = homePosition();
       placeShell(home.x, home.y);
@@ -3199,6 +3320,7 @@
     makeDraggable();
     wireRunEvents();
     wireJournal();
+    wireMilestone();
   }
 
   // ── Init ────────────────────────────────────────────────
