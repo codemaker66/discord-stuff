@@ -3550,7 +3550,8 @@ await test('T282 (extends T103) tight windows keep the chat named, the count and
       await page.keyboard.press('ArrowDown');
       await page.waitForTimeout(120);
       const seen = await jPanel(page, (r) => {
-        const row = r.activeElement.closest('.row').getBoundingClientRect();
+        // A line of the list: a row, or a server's or the friends fold's bar (D43), which the arrows also stop on.
+        const row = r.activeElement.closest('.row, .guild-bar, .fold-bar').getBoundingClientRect();
         const body = r.querySelector('[data-role="body"]').getBoundingClientRect();
         const strip = r.querySelector('.hero').getBoundingClientRect();
         // A row taller than the whole body (470×250: 44px of body for a two-line row) shows from its top.
@@ -4019,18 +4020,21 @@ await test('T130 screen readers: nothing behind the dialog, the armed press is s
 
 await test('T131 Purify\'s glow switches with its fill, both ways', async () => {
   const { page, context } = await boot('/channels/4001/5001', { latencyMs: 300 });
-  // Every frame the bloom is either all there (with the gradient) or not at all (without it).
+  // Every frame the bloom is either all there (with the gradient) or not at all: without it Purify wears
+  // its resting hairline (D56's solid muted box), the same on every frame.
   const watch = page.evaluate(() => new Promise((resolve) => {
     const p = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-act="purify"]');
     const bloom = getComputedStyle(p).boxShadow;
     const odd = [];
     let flips = 0;
     let was = null;
+    let rest = null;
     const t0 = performance.now();
     const look = () => {
       const cs = getComputedStyle(p);
       const fill = cs.backgroundImage !== 'none';
-      if (cs.boxShadow !== (fill ? bloom : 'none')) odd.push({ t: Math.round(performance.now() - t0), fill, glow: cs.boxShadow.slice(0, 40) });
+      if (!fill && rest === null) rest = cs.boxShadow;
+      if (fill ? cs.boxShadow !== bloom : cs.boxShadow === bloom || cs.boxShadow !== rest) odd.push({ t: Math.round(performance.now() - t0), fill, glow: cs.boxShadow.slice(0, 40) });
       if (was !== null && was !== fill) flips++;
       was = fill;
       if (performance.now() - t0 < 2500) requestAnimationFrame(look); else resolve({ odd, flips });
