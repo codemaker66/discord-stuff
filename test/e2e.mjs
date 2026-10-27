@@ -3464,6 +3464,8 @@ await test('T280 (extends T163) in forced colours, focus shows on checkboxes, th
     await page.locator('.guild-head').first().click();
     await page.waitForSelector('[data-key="c:5004"]');
     await page.waitForSelector('[data-key="c:3004"]');
+    // The tab's glide (D50) has settled, so the before and after pictures frame the same pixels.
+    await page.waitForFunction(() => !document.querySelector('#dopa-purifier-host').shadowRoot.getAnimations().some((a) => a.effect.getTiming().iterations !== Infinity));
     await page.mouse.move(5, 5);
     for (const [name, sel, box] of [['group DM box', '[data-key="c:3004"] .check', '[data-key="c:3004"] .check-ui'], ['channel box', '[data-key="c:5004"] .check', '[data-key="c:5004"] .check-ui'],
       ['filter', '[data-role="filter"]', '[data-role="filter"]'], ['chosen tab', '.tab[aria-selected="true"]', '.tab[aria-selected="true"]']]) {
@@ -6627,6 +6629,7 @@ await test('T230 a kill animates only what the compositor plays, and This chat\'
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await untilCount(page, 3);
+  await page.waitForTimeout(350); // the run's start (the avatar's dot turning rose) has played out
   const seen = await page.evaluate((src) => new Promise((done) => {
     const r = eval(src);
     const props = new Set();
