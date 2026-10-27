@@ -309,7 +309,9 @@ export async function installMockDiscord(page, opts = {}) {
     let mm;
     if (api === '/users/@me' && m === 'GET') return json(route, 200, user);
     if (api === '/users/@me/channels' && m === 'GET') {
-      return json(route, 200, Object.values(world.channels).filter((c) => c.type === 1 || c.type === 3));
+      // A DM marked closed: true is one you closed in Discord. Its messages stay, and opening it again
+      // brings it back.
+      return json(route, 200, Object.values(world.channels).filter((c) => (c.type === 1 || c.type === 3) && !c.closed));
     }
     if (api === '/users/@me/channels' && m === 'POST') {
       const body = JSON.parse(req.postData() || '{}');
@@ -317,7 +319,8 @@ export async function installMockDiscord(page, opts = {}) {
       const user = Object.values(world.users).find((u) => u.id === rid);
       if (!user) return json(route, 400, { message: 'Invalid recipient', code: 50033 });
       let ch = Object.values(world.channels).find((c) => c.type === 1 && c.recipients[0].id === rid);
-      if (!ch) {
+      if (ch) delete ch.closed;
+      else {
         const id = String(3100 + stats.opened.length);
         ch = { id, type: 1, recipients: [user] };
         world.channels[id] = ch;

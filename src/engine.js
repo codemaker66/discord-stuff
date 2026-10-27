@@ -732,7 +732,6 @@
               if (err instanceof Stopped || fatalError(err)) throw err;
             }
           }
-          const countedBefore = counts.get(target.channelId);
           const result = await (target.guildId ? purgeBySearch(target, signal) : purgeByHistory(target, signal));
           // A chat we couldn't count up front is now fully known.
           counted(target, done(target));
@@ -746,9 +745,13 @@
             partialCounts.delete(target.channelId);
             emit('target-end', { target, index: i, ok: true });
           }
-          // A DM we opened only to look inside, with nothing of ours in it, goes back to how it was.
-          if (target.openedByUs && !target.deleted && !target.failed && countedBefore === 0) {
-            try { await request(`/channels/${target.channelId}`, { method: 'DELETE', signal }); } catch { /* cosmetic */ }
+          // A DM we opened to purify goes back to how it was: closed again, which deletes nothing. One
+          // still holding messages that wouldn't go, or still being indexed, stays open to look at.
+          if (target.openedByUs && !target.failed && !result.indexing) {
+            try {
+              await request(`/channels/${target.channelId}`, { method: 'DELETE', signal });
+              emit('log', { tone: 'info', text: `closed the DM with ${target.name} again` });
+            } catch { /* cosmetic */ }
           }
         } catch (err) {
           if (err instanceof Stopped) {
