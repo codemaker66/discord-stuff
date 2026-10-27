@@ -23,9 +23,9 @@ and asks before updating itself.
 
 ## What it does
 
-- **Scan** any chat to see how many of your messages are in it and how long a purge takes.
+- **Count** any chat to see how many of your messages are in it and how long purifying takes.
 - **Hold to purify** — no accidental clicks.
-- **Batch**: tick DMs, groups and server channels (threads and forum posts included), then purge them in one go.
+- **Batch**: tick DMs, groups and server channels (threads and forum posts included), then purify them in one go.
 - **Shield** anyone and their chat is immune. Bardo is shielded from the start ♡
 - Paces itself to Discord's rate limits (about 40 messages a minute), pauses and resumes,
   and tells you honestly what was skipped.
@@ -44,6 +44,7 @@ npm run build   # src/ → dist/ (userscript + BetterDiscord plugin) and docs/
 npm run check   # fails if dist/ or docs/ are out of date with src/
 npm test        # end-to-end tests against a mock Discord (Playwright + Chromium)
 node test/site.mjs                                   # install-page tests
+node test/perf.mjs                                   # timing budgets, logged only (never fails)
 node test/shots.mjs dist/dopas-discord-purifier.user.js test/out/shots 2 --showcase   # every UI state, at the shipped pace
 python3 tools/marketing.py test/out/shots            # those shots → docs/img/*.webp and the og.png link preview
 ```

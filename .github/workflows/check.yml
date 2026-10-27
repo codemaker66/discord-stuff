@@ -18,5 +18,9 @@ jobs:
         run: npm run check
       - name: purifier end-to-end
         run: npm test
+      # Timing budgets flake on shared runners, so they are logged here and never fail the build.
+      - name: timing budgets (logged only)
+        run: node test/perf.mjs
+        continue-on-error: true
       - name: install page
         run: node test/site.mjs

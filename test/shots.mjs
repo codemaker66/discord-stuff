@@ -111,7 +111,7 @@ async function hold(page, ms) {
   await page.waitForTimeout(400);
   await shot(page, '10-batch-selected', await panelClip(page));
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(`/Scan done/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`, null, { timeout: 60000 });
+  await page.waitForFunction(`/Counted~/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`, null, { timeout: 60000 });
   await page.waitForTimeout(300);
   await shot(page, '11-batch-scanned', await panelClip(page));
   await page.click('[data-act="purify"]');

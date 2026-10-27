@@ -825,8 +825,10 @@
 
   // ── Voice: every line the panel says ────────────────────
   // Words. "Chat" is the umbrella word; "channel" means a server channel only; DM and group DM as
-  // Discord says them. "Shield" is the verb and "immune" the state. Purify is the button and the
-  // action, "purged" the result; "delete" appears plainly only in the confirm lead.
+  // Discord says them. "Shield" is the verb and "immune" the state. Count is the safe look first,
+  // Pick chooses chats in Many chats, Purify is the button and the action, "purged" the result;
+  // "purge" stays only as wit (the ring's 'ready for purge', the moods, the terminal). "Delete"
+  // appears plainly only in the confirm lead.
   // Lines stay short, kind and plain, above all when something goes wrong: errors reach the panel
   // through plainError(), and Discord's own wording stays in the log. A name from Discord set in a
   // line of ours sits in bidi isolates (U+2068 … U+2069), so a right-to-left name can't reorder the
@@ -891,14 +893,26 @@
   // A line's emoji is decoration: it shows, but screen readers hear only the words.
   const flaired = (text, flair) => (flair ? [text, h('span', { class: 'flair', 'aria-hidden': 'true', text: ` ${flair}` })] : [text]);
 
-  const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+  // Joins the phrases of a line. The space before the dot can't break, so a wrapped line never
+  // starts with '·'.
+  const SEP = '\u00a0· ';
 
+  // Numbers group the way the browser's language does (de 123.456, hi 1,23,456), always in the
+  // digits 0-9 of the English around them.
+  const NUM = new Intl.NumberFormat(undefined, { numberingSystem: 'latn' });
+  const fmt = (n) => NUM.format(n);
+
+  const plural = (n, word) => `${fmt(n)} ${word}${n === 1 ? '' : 's'}`;
+
+  // Rounded up, so it never promises less than it takes, and never says '60s', '60 min' or '1h 60m'.
   function formatDuration(seconds) {
     if (!Number.isFinite(seconds)) return '';
-    if (seconds < 60) return `${Math.max(1, Math.ceil(seconds))}s`;
-    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.round((seconds % 3600) / 60);
+    const s = Math.max(1, Math.ceil(seconds));
+    if (s < 60) return `${s}s`;
+    const m = Math.ceil(s / 60);
+    if (m < 60) return `${m} min`;
+    const hours = Math.floor(m / 60);
+    const mins = m % 60;
     return mins ? `${hours}h ${mins}m` : `${hours}h`;
   }
 
@@ -1296,27 +1310,27 @@
       h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-labelledby': 'dp-welcome-title' },
         h('div', { class: 'welcome-card' },
           h('div', { class: 'welcome-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
-          h('div', { class: 'welcome-title', id: 'dp-welcome-title', text: 'Hi princess~ ♡' }),
-          h('div', { class: 'welcome-lead', text: 'Two steps and your messages are gone:' }),
+          h('div', { class: 'welcome-title', id: 'dp-welcome-title' }, flaired('Hi princess~', '♡')),
+          h('div', { class: 'welcome-lead', text: 'Clear your side of any chat in two steps:' }),
           h('ol', { class: 'welcome-steps' },
             h('li', {}, h('span', {}, h('b', { text: 'Open a chat' }), ' — any DM, group or server channel')),
             h('li', {}, h('span', {}, h('b', { text: 'Purify' }), ', then hold the red button till it fills'))),
           h('div', { class: 'welcome-note' },
             icon('shield'),
-            h('span', { text: 'Only your own messages, nothing leaves Discord, and anyone you shield is immune.' })),
+            h('span', { text: 'Only your own messages, and nothing leaves Discord. Tap the shield by a name and that DM is immune~' })),
           h('div', { class: 'welcome-actions' },
-            h('button', { class: 'btn btn-purge', 'data-act': 'welcome-ok', text: 'Got it ♡' }),
-            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Purify many chats' })))),
+            h('button', { class: 'btn btn-purge', 'data-act': 'welcome-ok' }, h('span', {}, flaired('Got it', '♡'))),
+            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Pick many chats' })))),
       h('div', { class: 'body', 'data-role': 'body' },
         buildHero(),
         buildCurrentView(),
         buildBatchView()),
       h('footer', { class: 'foot' },
         h('div', { class: 'actions', 'data-role': 'idle-actions' },
-          h('button', { class: 'btn btn-quiet', 'data-act': 'scan' }, icon('scan'), h('span', { 'data-role': 'scan-label', text: 'Scan' })),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'scan' }, icon('scan'), h('span', { 'data-role': 'scan-label', text: 'Count' })),
           h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true }),
             h('span', { class: 'sr', 'data-role': 'purify-unit' })),
-          h('button', { class: 'btn btn-quiet', 'data-act': 'go-batch', hidden: true }, icon('sparkle'), h('span', { text: 'Purify many chats' }))),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'go-batch', hidden: true }, icon('sparkle'), h('span', { text: 'Pick many chats' }))),
         h('div', { class: 'actions', 'data-role': 'run-actions', hidden: true },
           h('button', { class: 'btn btn-quiet', 'data-act': 'pause' }, icon('pause'), h('span', { text: 'Pause' })),
           h('button', { class: 'btn btn-purge', 'data-act': 'resume', hidden: true }, icon('play'), h('span', { text: 'Resume' })),
@@ -1352,7 +1366,7 @@
         h('div', { class: 'modal-title', id: 'dp-modal-title', 'data-role': 'modal-title' }),
         h('div', { class: 'modal-text', 'data-role': 'modal-text' }),
         h('div', { class: 'modal-buttons' },
-          h('button', { class: 'btn btn-quiet', 'data-act': 'cancel', text: 'Nevermind~' }),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'cancel', text: 'Never mind~' }),
           h('button', { class: 'btn btn-purge btn-hold', 'data-act': 'confirm', 'aria-describedby': 'dp-modal-hint' },
             h('span', { class: 'hold-fill', 'aria-hidden': 'true' }),
             h('span', { class: 'hold-label', 'data-role': 'confirm-label' }))),
@@ -1363,7 +1377,8 @@
   }
 
   function mount() {
-    const host = h('div', { id: 'dopa-purifier-host' });
+    // The panel speaks English, so screen readers use an English voice inside any Discord.
+    const host = h('div', { id: 'dopa-purifier-host', lang: 'en' });
     host.style.cssText = 'position:fixed;inset:0 auto auto 0;width:0;height:0;z-index:2147483600;';
     root = host.attachShadow({ mode: 'open' });
     root.append(
@@ -1390,17 +1405,21 @@
   // ── Status, meter, gauge ────────────────────────────────
 
   // Per-kill updates are quiet (aria-live off) so screen readers aren't read every deletion. The
-  // flair is the line's one emoji from the palette above. A new line ends any wait's countdown.
+  // flair is the line's one emoji from the palette above. sr is said before the line and never
+  // shown, so a number the line no longer repeats is still heard. A new line ends any wait's countdown.
   let waitTick = 0;
-  function setStatus(text, tone = 'info', { quiet = false, flair = '' } = {}) {
+  function setStatus(text, tone = 'info', { quiet = false, flair = '', sr = '' } = {}) {
     clearInterval(waitTick);
     waitTick = 0;
-    paintStatus(text, tone, { quiet, flair });
+    paintStatus(text, tone, { quiet, flair, sr });
   }
 
-  function paintStatus(text, tone, { quiet, flair }) {
+  function paintStatus(text, tone, { quiet, flair, sr = '' }) {
     const el = $('[data-role="status"]');
     el.setAttribute('aria-live', quiet ? 'off' : 'polite');
+    const said = el.querySelector(':scope > .sr');
+    if (said) said.remove();
+    if (sr) el.prepend(h('span', { class: 'sr', text: sr }));
     $('[data-role="status-text"]').replaceChildren(...flaired(text, flair));
     el.title = text; // past two lines the line is clamped; hover shows all of it
     el.dataset.tone = tone;
@@ -1446,30 +1465,31 @@
         case 'counting': return { icon: 'scan', label: 'counting…', line: [], tone: 'quiet' };
         case 'blocked': return { label: 'no access', labelTone: 'error', line: [state.scanError.line], tone: 'error' };
         case 'scan-error': return { icon: 'scan', label: 'not counted yet', line: [state.scanError.line], tone: 'error' };
-        case 'unscanned': return { icon: 'scan', label: 'not counted yet', line: flaired('Purify counts them first', '♡'), tone: 'quiet' };
-        case 'indexing': return { icon: 'scan', label: 'still indexing', line: ['Discord is still sorting this chat~ purify anyway, or scan again soon'], tone: 'quiet' };
+        case 'unscanned': return { icon: 'scan', label: 'not counted yet', line: flaired('Purify asks before anything goes', '♡'), tone: 'quiet' };
+        case 'indexing': return { icon: 'scan', label: 'still indexing', line: ['Discord is still sorting this chat~ purify anyway, or count again soon'], tone: 'quiet' };
         case 'partial': return { count: n, total: n, label: 'found so far', line: ['Discord is still indexing older ones~'], tone: 'ready' };
         case 'clear': return { count: 0, label: 'messages found', line: flaired('All clear~ nothing of yours here', '✨'), tone: 'clear' };
-        default: return { count: n, total: n, label: 'ready for purge', labelTone: 'ready', line: [`about ${formatDuration(estimateSeconds(n))} to purge~`], tone: 'ready' };
+        // The ring keeps its battle cry; every line says Purify, the action.
+        default: return { count: n, total: n, label: 'ready for purge', labelTone: 'ready', line: [`about ${formatDuration(estimateSeconds(n))} to purify~`], tone: 'ready' };
       }
     }
-    if (name === 'none') return { label: 'nothing picked yet', line: [], sub: ['tick any DMs or channels below~'], tone: 'quiet' };
+    if (name === 'none') return { label: 'nothing picked yet', line: [], sub: ['pick any DMs or channels below~'], tone: 'quiet' };
     const rows = selectedRows();
     const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
     const total = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
     // A closed DM (a friend with no DM open) can't be counted without opening one; the run counts it.
     const closed = rows.filter((r) => r.needsDM && r.status !== 'error').length;
-    const toScan = rows.length - scanned.length - closed - rows.filter((r) => r.status === 'error').length;
+    const toCount = rows.length - scanned.length - closed - rows.filter((r) => r.status === 'error').length;
     const chats = plural(rows.length, 'chat');
     // The numeral already says how many were found, so the line says what is still unknown.
-    const parts = [[chats, toScan ? `${toScan.toLocaleString()} to scan` : '', closed ? plural(closed, 'closed DM') : ''].filter(Boolean).join(' · ')];
+    const parts = [[chats, toCount ? `${fmt(toCount)} to count` : '', closed ? plural(closed, 'closed DM') : ''].filter(Boolean).join(SEP)];
     const shared = { line: [], tone: total ? 'ready' : 'quiet' };
     if (name === 'unscanned') return { ...shared, label: 'not counted yet', sub: parts };
     if (name === 'partial') return { ...shared, count: total, total, label: 'found so far', sub: parts };
-    if (name === 'clear') return { ...shared, count: 0, label: 'messages found', sub: closed ? parts : flaired(`${chats} · all clear`, '✨') };
+    if (name === 'clear') return { ...shared, count: 0, label: 'messages found', sub: closed ? parts : flaired(`${chats}${SEP}all clear`, '✨') };
     return {
       ...shared, count: total, total, label: 'ready for purge', labelTone: 'ready',
-      sub: closed ? parts : [`${chats} · about ${formatDuration(estimateSeconds(total))} to purge~`],
+      sub: closed ? parts : [`${chats}${SEP}about ${formatDuration(estimateSeconds(total))} to purify~`],
     };
   }
 
@@ -1543,12 +1563,12 @@
     const countEl = $('[data-role="count"]');
     if (shown !== shownCount) {
       shownCount = shown;
-      countEl.textContent = shown.toLocaleString();
+      countEl.textContent = fmt(shown);
     }
     countEl.classList.toggle('is-found', !!idle && shown > 0);
     countEl.classList.toggle('is-zero', shown === 0);
     // Sized from the larger of the count and the run's total, so it is set once and never jumps mid-run.
-    countEl.dataset.len = String(Math.max(shown, idle ? 0 : p.total).toLocaleString().length);
+    countEl.dataset.len = String(fmt(Math.max(shown, idle ? 0 : p.total)).length);
 
     const label = $('[data-role="count-label"]');
     const labelText = idle ? idle.label : 'messages purged';
@@ -1567,8 +1587,8 @@
     const pct = $('[data-role="pct"]');
     const went = mode === 'done' && p.failed && !lastEnd.stopped && !lastEnd.error ? p.deleted : processedNow;
     pct.textContent = idle ? ''
-      : known ? `${Math.min(went, p.total).toLocaleString()} of ${p.total.toLocaleString()}`
-        : p.total ? `${went.toLocaleString()} of ${p.total.toLocaleString()}+` : '';
+      : known ? `${fmt(Math.min(went, p.total))} of ${fmt(p.total)}`
+        : p.total ? `${fmt(went)} of ${fmt(p.total)}+` : '';
     pct.classList.toggle('is-full', mode === 'done' && !p.failed && processedNow >= ringTotal && ringTotal > 0);
 
     // The ETA counts down freely and goes up only for a real slow-down (over 15 %), never a jitter.
@@ -1584,7 +1604,7 @@
     if (mode === 'run') {
       $('[data-role="stat-eta"] b').textContent = left || 'counting as we go~';
       const fail = $('[data-role="stat-fail"]');
-      fail.querySelector('b').textContent = p.failed.toLocaleString();
+      fail.querySelector('b').textContent = fmt(p.failed);
       fail.classList.toggle('has-fails', p.failed > 0);
       readout.dataset.tone = run.paused ? 'paused' : 'live';
     } else if (mode === 'done') {
@@ -1604,9 +1624,9 @@
     const sub = $('[data-role="hero-sub"]');
     if (mode === 'run') {
       sub.replaceChildren(...(p.total ? [
-        `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}${known ? '' : '+'}`,
-        left && ` · ${left}`,
-        p.failed > 0 && h('span', { class: 'sub-fail', text: ` · ${p.failed.toLocaleString()} failed` }),
+        `${fmt(processedNow)} of ${fmt(p.total)}${known ? '' : '+'}`,
+        left && `${SEP}${left}`,
+        p.failed > 0 && h('span', { class: 'sub-fail', text: `${SEP}${fmt(p.failed)} failed` }),
       ].filter(Boolean) : ['counting as we go~']));
     } else if (mode === 'done') sub.replaceChildren(...flaired(lastEnd.text, lastEnd.flair));
     else sub.replaceChildren(...(idle.sub || idle.line.map((x) => (x instanceof Node ? x.cloneNode(true) : x))));
@@ -1620,13 +1640,13 @@
     $('.orb-fill').setAttribute('stroke-dasharray', `${(orbC * orbFrac).toFixed(2)} ${orbC.toFixed(2)}`);
     $('.orb-fill').setAttribute('visibility', orbFrac > 0 ? 'visible' : 'hidden');
     const badge = $('[data-role="orb-badge"]');
-    badge.textContent = p.deleted.toLocaleString();
+    badge.textContent = fmt(p.deleted);
     badge.hidden = !(run.active || state.orbDone) || !p.deleted;
     orb.dataset.live = run.active ? 'true' : state.orbDone ? (state.orbDone.clean ? 'done' : 'trouble') : 'false';
     // Hovering the orb says how it's going, so a minimised purge needs no reopening to check on.
-    const progress = p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}` : `${p.deleted.toLocaleString()} so far`;
+    const progress = p.total ? `${fmt(processedNow)} of ${fmt(p.total)}` : `${fmt(p.deleted)} so far`;
     const orbSays = run.active ? (run.paused ? 'Paused~ click to open' : `Purging~ ${progress}${p.total && !known ? '+' : ''}`)
-      : state.orbDone ? (state.orbDone.clean ? `All clean~ ${p.deleted.toLocaleString()} purged` : 'Done~ something needs a look') : "Open Dopa's Purifier";
+      : state.orbDone ? (state.orbDone.clean ? `All clean~ ${fmt(p.deleted)} purged` : 'Done~ something needs a look') : "Open Dopa's Purifier";
     orb.title = orbSays;
     orb.setAttribute('aria-label', run.active && !run.paused ? `Open Dopa's Purifier — purging, ${progress}` : orbSays);
 
@@ -1670,10 +1690,10 @@
 
   // ── This chat ───────────────────────────────────────────
 
-  // A real lookup failure (not just "no chat open"): Scan becomes Try again.
+  // A real lookup failure (not just "no chat open"): Count becomes Try again.
   const describeFailed = () => !!state.targetError && state.targetError !== 'none';
 
-  // The last count of this chat failed: Scan becomes Try again, one request the person asks for.
+  // The last count of this chat failed: Count becomes Try again, one request the person asks for.
   const scanFailed = (t) => !!t && !!state.scanError && state.scanError.channelId === t.channelId;
 
   // Discord won't let you read or delete in this chat: a purge could only fail, so Purify waits
@@ -1729,7 +1749,7 @@
       && !(shown && shown.protected) && state.tab === 'current';
     if (purified) card.dataset.state = 'purified';
     const eyebrow = $('[data-role="eyebrow-text"]');
-    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purging']));
+    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purifying']));
     else if (shown && shown.protected) eyebrow.replaceChildren(icon('crown', 'ico-crown'), 'Immune');
     else if (purified) eyebrow.replaceChildren(icon('check'), lastEnd.failed ? 'Mostly purified' : 'Purified');
     else if (blocked) eyebrow.replaceChildren('No access');
@@ -1803,9 +1823,9 @@
       clean = usable && n === 0 && !isPartialCount(t.channelId);
       scan.disabled = (!usable && !state.scanning && !describeFailed()) || counting;
       purify.disabled = !usable || state.scanning || clean || blockedHere(t);
-      scanLabel.textContent = state.scanning ? 'Cancel scan' : retry ? 'Try again' : (n !== undefined ? 'Scan again' : 'Scan');
+      scanLabel.textContent = state.scanning ? 'Cancel' : retry ? 'Try again' : n !== undefined ? 'Count again' : 'Count';
       purifyLabel.textContent = counting ? 'Counting…' : 'Purify';
-      purifyCount.textContent = n ? n.toLocaleString() : '';
+      purifyCount.textContent = n ? fmt(n) : '';
       purifyCount.hidden = !n || counting;
     } else {
       scan.disabled = !rows.length && !state.scanning;
@@ -1813,7 +1833,7 @@
       const empty = (r) => !!r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId);
       clean = rows.length > 0 && rows.every(empty);
       purify.disabled = !rows.length || state.scanning || rows.every((r) => empty(r) || accessError(r));
-      scanLabel.textContent = state.scanning ? 'Cancel scan' : 'Scan selected';
+      scanLabel.textContent = state.scanning ? 'Cancel' : 'Count';
       purifyLabel.textContent = 'Purify selected';
       purifyCount.textContent = String(rows.length);
       purifyCount.hidden = !rows.length;
@@ -1825,7 +1845,7 @@
     for (const act of ['dm-all', 'dm-none', 'dm-refresh', 'server-refresh']) $(`[data-act="${act}"]`).disabled = busy;
     for (const b of $$('.shield-btn')) {
       b.disabled = run.active;
-      b.title = run.active ? 'Stop the purge to change shields' : shieldTitle(b.classList.contains('is-on'));
+      b.title = run.active ? 'Stop purifying to change shields~' : shieldTitle(b.classList.contains('is-on'));
     }
     if (root.querySelector('.guild')) syncGuildChecks();
     speakCounts(rows);
@@ -1854,7 +1874,7 @@
     }
   }
 
-  // Scans are cancellable: the Scan button becomes Cancel, and leaving the channel cancels too.
+  // Counts are cancellable: Count becomes Cancel, and leaving the channel cancels too.
   function beginScan(kind) {
     state.scanning = true;
     state.scanKind = kind;
@@ -1895,7 +1915,7 @@
       const n = await countMine(t, {
         signal,
         onWait: showWait,
-        onProgress: ({ count, scanned }) => setStatus(`Checked ${scanned.toLocaleString()} · ${count.toLocaleString()} of yours so far`, 'info', { quiet: true }),
+        onProgress: ({ count, scanned }) => setStatus(`Checked ${fmt(scanned)}${SEP}${fmt(count)} of yours so far`, 'info', { quiet: true }),
       });
       counts.set(t.channelId, n);
       if (lastEnd && lastEnd.key === `c:${t.channelId}`) lastEnd = null;
@@ -1905,12 +1925,12 @@
       // Shielded while we were counting: there's nothing to offer here any more.
       if (here && state.target && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
       else if (isPartialCount(t.channelId)) {
-        setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones` : `Discord is still indexing${where}~ older messages may be hiding`, 'warn');
+        setStatus(n ? `${plural(n, 'message')} found so far${where}${SEP}Discord is still indexing older ones` : `Discord is still indexing${where}~ older messages may be hiding`, 'warn');
       } else if (n) {
-        setStatus(`${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge`, 'success', { flair: '✨' });
+        setStatus(`${plural(n, 'message')} found${where}${SEP}~${formatDuration(estimateSeconds(n))} to purify`, 'success', { flair: '✨' });
       } else setStatus(`All clear~ nothing of yours ${here ? 'here' : `in \u2068${t.name}\u2069`}`, 'success', { flair: '✨' });
     } catch (err) {
-      if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
+      if (err instanceof Stopped) setStatus('Stopped counting~', 'calm');
       else {
         state.scanError = { channelId: t.channelId, ...plainError(err) };
         addLog(`scan failed · ${err.message}`, 'error');
@@ -1941,7 +1961,7 @@
         // Search is Discord's tightest limit: pace it like a purge does instead of leaning on 429s.
         if (searched) await sleep(TIMING.searchDelayMs, signal);
         searched = true;
-        setStatus(`Counting ${i + 1} of ${rows.length} · \u2068${row.display}\u2069`, 'info', { quiet: true });
+        setStatus(`Counting ${i + 1} of ${rows.length}${SEP}\u2068${row.display}\u2069`, 'info', { quiet: true });
         setRowState(row, 'scanning');
         try {
           const n = await countMine(row, { signal, onWait: showWait });
@@ -1959,14 +1979,14 @@
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
       const counted = rows.length - deferred - missed;
-      if (!searched) setStatus("Closed DMs are counted as they're purged~", 'info', { flair: '♡' });
-      else if (missed) setStatus(`Scan done~ ${plural(grand, 'message')} · ${plural(missed, 'chat')} skipped · ${shortReason(missedWhy)}${missed > 1 ? ' and more' : ''}`, 'warn');
-      else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')}`, 'warn');
+      if (!searched) setStatus('Closed DMs are counted when you purify them~', 'info', { flair: '♡' });
+      else if (missed) setStatus(`Counted~ ${plural(grand, 'message')}${SEP}${plural(missed, 'chat')} skipped${SEP}${shortReason(missedWhy)}${missed > 1 ? ' and more' : ''}`, 'warn');
+      else if (indexing) setStatus(`Counted~ ${plural(grand, 'message')} so far${SEP}Discord is still indexing ${plural(indexing, 'chat')}`, 'warn');
       else if (!grand) setStatus(`All clear~ nothing of yours in ${counted === 1 ? 'that chat' : `those ${counted} chats`}`, 'success', { flair: '✨' });
-      else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(counted, 'chat')}`, 'success', { flair: '✨' });
+      else setStatus(`Counted~ ${plural(grand, 'message')} in ${plural(counted, 'chat')}`, 'success', { flair: '✨' });
     } catch (err) {
       for (const row of rows) if (row.status === 'scanning') setRowState(row, 'idle');
-      if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
+      if (err instanceof Stopped) setStatus('Stopped counting~', 'calm');
       else {
         addLog(`scan failed · ${err.message}`, 'error');
         setStatus(plainError(err).short, 'error');
@@ -2010,7 +2030,7 @@
     { code: 'switched', when: (e) => /switched Discord accounts/.test(e.message), line: 'You switched Discord accounts~ stopped to be safe', short: 'Switched accounts' },
     { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha/i.test(e.message), line: 'Discord wants a captcha~ solve it in Discord, then press Purify to finish', short: 'Discord wants a captcha' },
     { code: 'logged-out', when: (e) => e.status === 401 || /login token/.test(e.message), line: "You're logged out of Discord~ log in, then press Try again", short: 'Logged out of Discord' },
-    { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so there's nothing here to purge", short: 'No access here', blocking: true },
+    { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so there's nothing here to purify", short: 'No access here', blocking: true },
     { code: 'no-permission', when: (e) => e.code === 50013 || /Missing Permissions/.test(e.message), line: "Discord won't let you delete here", short: 'No permission here', blocking: true },
     { code: 'indexing', when: (e) => e.status === 202 || /indexing/.test(e.message), line: 'Discord is still sorting this chat~ try again in a minute', short: 'Discord is still indexing' },
     { code: 'network', when: (e) => e.status === 0 || /Network unreachable/.test(e.message), line: "Can't reach Discord~ check your internet, then press Try again", short: "Can't reach Discord" },
@@ -2037,7 +2057,7 @@
     addLog(`couldn't load ${what} · ${err.message}`, 'error');
     const p = plainError(err);
     if (p.code === 'logged-out') return "You're logged out of Discord~ log in and your chats show up here";
-    return `${p.code === 'other' ? p.line : p.short} · press ↻ to try again`;
+    return `${p.code === 'other' ? p.line : p.short}${SEP}press ↻ to try again`;
   }
 
   // The dialog names the account doing the deleting, so a switched account can't surprise anyone.
@@ -2118,7 +2138,7 @@
     const now = state.target;
     if (!now || now.channelId !== t.channelId || now.protected || run.active || modal || state.scanning || state.counting || state.tab !== 'current') return;
     const n = isPartialCount(now.channelId) ? 0 : counts.get(now.channelId);
-    const b = (k) => h('b', { text: k.toLocaleString() });
+    const b = (k) => h('b', { text: fmt(k) });
     confirmDialog({
       title: 'Ready to purify?',
       lead: n === 1 ? ['This will delete your ', b(1), ' message in']
@@ -2145,7 +2165,7 @@
     const partial = counted.some((r) => isPartialCount(r.channelId));
     if (!known && !uncounted && !partial) return; // nothing left to purge in any of them
     const n = rows.length - skipped.length;
-    const b = (k) => h('b', { text: k.toLocaleString() });
+    const b = (k) => h('b', { text: fmt(k) });
     const chats = (k) => (k === 1 ? 'chat' : 'chats');
     const lead = known && !uncounted ? ['This deletes all ', b(known), ` of your messages in ${n === 1 ? 'this chat' : 'these chats'}`]
       : known ? ['This deletes ', b(known), ` counted message${known === 1 ? '' : 's'}, plus every message of yours in the `, b(uncounted), ` ${chats(uncounted)} not counted yet`]
@@ -2207,31 +2227,31 @@
     el.dataset.state = status;
     el.title = detail || '';
     const n = counts.get(row.channelId);
-    const deleted = (row.deleted || 0).toLocaleString();
+    const deleted = fmt(row.deleted || 0);
     const tag = el.querySelector('.row-tag');
-    const tagText = status === 'running' ? (row.failed ? `purging~ · ${row.failed} failed` : 'purging~')
+    const tagText = status === 'running' ? (row.failed ? `purifying~${SEP}${fmt(row.failed)} failed` : 'purifying~')
       : status === 'partial' ? detail || 'run again later'
         : status === 'indexing' ? 'Discord is still indexing~' : '';
     if (tag.textContent !== tagText) tag.textContent = tagText;
     tag.hidden = !tagText;
-    const progress = n ? `${deleted}/${n.toLocaleString()}` : deleted;
+    const progress = n ? `${deleted}/${fmt(n)}` : deleted;
     // Each kill changes only the running pill's number, so its spinner keeps turning.
     const live = was === 'running' && status === 'running' && el.querySelector('.run-pill-live .run-pill-n');
     if (live) { live.textContent = progress; return; }
-    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: k.toLocaleString() }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
+    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: fmt(k) }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
     const clear = () => h('span', { class: 'meta-clear' }, 'all clear', h('span', { 'aria-hidden': 'true', text: ' ✓' }));
     const pill = (kind, ...children) => h('span', { class: `run-pill run-pill-${kind}` }, ...children);
     const say = (text) => h('span', { class: 'sr', text });
     let meta = null;
     if (status === 'idle') meta = row.needsDM ? h('span', { class: 'chip-need', text: 'closed DM' }) : null;
-    else if (status === 'scanning') meta = pill('scan', h('i', { class: 'spin' }), 'scanning');
+    else if (status === 'scanning') meta = pill('scan', h('i', { class: 'spin' }), 'counting');
     else if (status === 'ready') meta = n ? msgs(n) : null;
     else if (status === 'indexing') meta = n ? msgs(n) : 'none yet';
     else if (status === 'clean') meta = clear();
     else if (status === 'queued') meta = pill('queued', 'queued');
-    else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), say('purging '), h('span', { class: 'run-pill-n', text: progress }));
-    else if (status === 'done') meta = pill('done', icon('check'), say('purged '), row.failed ? `${deleted} · ${row.failed} failed` : deleted);
-    else if (status === 'partial') meta = pill('stopped', `${deleted} · again later`);
+    else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), say('purifying '), h('span', { class: 'run-pill-n', text: progress }));
+    else if (status === 'done') meta = pill('done', icon('check'), say('purged '), row.failed ? `${deleted}${SEP}${fmt(row.failed)} failed` : deleted);
+    else if (status === 'partial') meta = pill('stopped', `${deleted}${SEP}again later`);
     else if (status === 'error') meta = pill('error', h('span', { 'aria-hidden': 'true', text: '✗ ' }), h('span', { class: 'run-pill-why', text: detail ? shortReason(detail) : 'skipped' }));
     else if (status === 'stopped') meta = pill('stopped', 'stopped');
     el.querySelector('.row-meta').replaceChildren(...(meta ? [meta] : []));
@@ -2351,7 +2371,7 @@
   async function loadDMs() {
     const list = $('[data-role="dm-list"]');
     if (run.active || state.scanning) {
-      if (!state.dmsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when the purge finishes~' }));
+      if (!state.dmsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when purifying is done~' }));
       return;
     }
     const seq = ++dmSeq;
@@ -2424,7 +2444,7 @@
 
   function toggleProtection(user) {
     if (!user) return;
-    if (run.active) { setStatus('Stop the purge first to change shields~', 'warn'); return; }
+    if (run.active) { setStatus('Stop purifying to change shields~', 'warn'); return; }
     const synced = syncProtection(); // start from every tab's shields, not just this one's
     const before = { ids: new Set(protection.ids), released: new Set(protection.released) };
     const shield = !isProtectedUser(user);
@@ -2492,7 +2512,7 @@
   async function loadServers({ refresh = false } = {}) {
     const list = $('[data-role="server-list"]');
     if (run.active || state.scanning) {
-      if (!state.guildsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when the purge finishes~' }));
+      if (!state.guildsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when purifying is done~' }));
       return;
     }
     const seq = ++guildSeq;
@@ -2541,7 +2561,7 @@
               protected: false, label: `${glyph === '#' ? '#' : ''}${iso(ch.name)} (${iso(guild.name)})`, context: guild.name,
             };
           });
-          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'Nothing here you can purge~' })]));
+          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'No channels here you can purify~' })]));
           head.querySelector('[data-role="guild-meta"]').textContent = plural(rows.length, 'channel');
           applyFilter();
           syncGuildChecks();
@@ -2761,9 +2781,9 @@
     if (passed < milestone.next || passed >= 100 || now - milestone.at < 60000) return;
     milestone.next = passed + 25;
     milestone.at = now;
-    const failed = p.failed ? ` · ${p.failed.toLocaleString()} failed` : '';
+    const failed = p.failed ? ` · ${fmt(p.failed)} failed` : '';
     const left = p.etaSeconds != null ? ` · about ${formatDuration(p.etaSeconds)} left` : '';
-    $('[data-role="milestone"]').textContent = `${Math.floor((done / p.total) * 100)}% · ${p.deleted.toLocaleString()} of ${p.total.toLocaleString()} purged${failed}${left}`;
+    $('[data-role="milestone"]').textContent = `${Math.floor((done / p.total) * 100)}% · ${fmt(p.deleted)} of ${fmt(p.total)} purged${failed}${left}`;
   }
 
   // ── Tabs ────────────────────────────────────────────────
@@ -2963,7 +2983,7 @@
     resetHold();
   }
 
-  // Tab cycles Nevermind → Hold → the list of chats (to read it through) and back; from anywhere
+  // Tab cycles Never mind → Hold → the list of chats (to read it through) and back; from anywhere
   // else in the dialog it starts at the safe choice.
   function trapFocus(e) {
     if (!modal || e.key !== 'Tab') return;
@@ -3470,7 +3490,7 @@
     on('target-start', ({ target, index, count }) => {
       setPrompt(`purge ${target.name}`);
       addLog(`── Starting: ${target.label || target.name} ──`, 'info');
-      if (count > 1) setStatus(`Chat ${index + 1} of ${count} · \u2068${target.name}\u2069`, 'info');
+      if (count > 1) setStatus(`Chat ${index + 1} of ${count}${SEP}\u2068${target.name}\u2069`, 'info');
       if (target.row) setRowState(target, 'running');
       revealRow(target);
     });
@@ -3491,7 +3511,7 @@
       if (!run.paused && !run.stopping) {
         if (state.runMode === 'batch') {
           const i = state.runTargets.indexOf(target) + 1;
-          setStatus(`Chat ${i} of ${state.runTargets.length} · \u2068${target.name}\u2069 · ${target.deleted.toLocaleString()} of ${target.planned ? target.planned.toLocaleString() : '?'}`, 'info', { quiet: true });
+          setStatus(`Chat ${i} of ${state.runTargets.length}${SEP}\u2068${target.name}\u2069${SEP}${fmt(target.deleted)} of ${target.planned ? fmt(target.planned) : '?'}`, 'info', { quiet: true });
         } else setStatus(`Deleted "${preview(msg, 34)}"`, 'info', { quiet: true, flair: '♡' });
       }
       if (target.row) setRowState(target, 'running');
@@ -3501,7 +3521,7 @@
       ring.done++;
       const tags = [msg.pinned && 'pinned', msg.type && msg.type !== 0 && msg.type !== 19 && 'system'].filter(Boolean);
       addLog(`FAILED · ${shortReason(reason)}${tags.length ? ` · ${tags.join(', ')}` : ''} · "${preview(msg, 40)}"`, 'error');
-      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}" · ${shortReason(reason)}`, 'warn', { quiet: true });
+      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}"${SEP}${shortReason(reason)}`, 'warn', { quiet: true });
       if (target.row) setRowState(target, 'running');
     });
     on('gone', ({ msg }) => {
@@ -3526,7 +3546,7 @@
       $('[data-role="dm-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your DMs…' }));
       $('[data-role="server-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your servers…' }));
       addLog('switched Discord accounts — counts and lists reset', 'warn');
-      if (!keepVerdict) setStatus('Switched Discord accounts~ scan again to count', 'warn');
+      if (!keepVerdict) setStatus('Switched Discord accounts~ count again', 'warn');
       if (state.tab === 'batch' && !run.active) { loadDMs(); loadServers({ refresh: true }); }
       // Re-read the chat without a fresh "Ready~": the switch notice (or the stopped run's error) stays.
       setTimeout(() => refreshRoute({ keepScan: true, keepStatus: true }), 0);
@@ -3539,12 +3559,12 @@
     on('log', ({ text, tone }) => addLog(text, tone));
     on('target-end', ({ target, ok, error, immune, midway, stopped, warn }) => {
       if (immune) addLog(midway ? `${target.name} was shielded in another tab — stopped purging there` : `${target.name} is immune — skipped`, 'warn');
-      else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${(target.deleted || 0).toLocaleString()} purged) ──`, 'info');
+      else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${fmt(target.deleted || 0)} purged) ──`, 'info');
       if (target.row) setRowState(target, immune ? 'immune' : ok ? 'done' : warn ? 'partial' : stopped ? 'stopped' : 'error', error || warn);
     });
     // What the person chose, and the run's own pace, are calm: no alarm badge.
     on('pause', (p) => {
-      setStatus(`Paused~ ${p.deleted.toLocaleString()} purged so far`, 'calm');
+      setStatus(`Paused~ ${fmt(p.deleted)} purged so far`, 'calm');
       renderCurrent();
       renderActions();
     });
@@ -3566,12 +3586,12 @@
       addLog('────────────────────', 'info');
       if (p.error) addLog(`STOPPED · ${plainError(p).short}`, 'error');
       else if (p.stopped) addLog('STOPPED by you · nothing after this point was touched', 'warn');
-      addLog(`SUMMARY: ${p.deleted.toLocaleString()} purged, ${p.failed.toLocaleString()} failed${p.skipped ? `, ${p.skipped} system skipped` : ''}`, 'info');
+      addLog(`SUMMARY: ${fmt(p.deleted)} purged, ${fmt(p.failed)} failed${p.skipped ? `, ${p.skipped} system skipped` : ''}`, 'info');
       if (p.failures.length) {
         addLog('FAILED MESSAGES:', 'error');
         const shown = p.failures.slice(0, 50);
         shown.forEach((f, i) => addLog(`${i + 1}. ${shortReason(f.reason)}${f.msg.pinned ? ' · pinned' : ''} · "${preview(f.msg, 40)}"`, 'error'));
-        if (p.failures.length > shown.length) addLog(`…and ${(p.failures.length - shown.length).toLocaleString()} more`, 'error');
+        if (p.failures.length > shown.length) addLog(`…and ${fmt(p.failures.length - shown.length)} more`, 'error');
       }
       scrubLog();
       const minimised = $('[data-role="shell"]').hidden;
@@ -3586,7 +3606,7 @@
         const plain = plainError(p);
         if (plain.code === 'switched') {
           setStatus('Stopped to be safe~ you switched Discord accounts', 'warn');
-          lastEnd = { key, text: `Stopped to be safe~ you switched accounts · ${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'error', error: plain.code };
+          lastEnd = { key, text: `Stopped to be safe~ you switched accounts${SEP}${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'error', error: plain.code };
         } else {
           // A purge that broke off carries on with Purify; Try again is This chat's way to count.
           setStatus(plain.short, 'error');
@@ -3595,29 +3615,29 @@
       } else if (p.stopped) {
         const handled = p.deleted + p.failed + (p.gone || 0);
         setStatus('Stopped~ Purify picks up the rest', 'calm');
-        lastEnd = { key, text: p.total > 0 && !p.partial ? `Stopped at ${handled.toLocaleString()} of ${p.total.toLocaleString()}~` : `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
+        lastEnd = { key, text: p.total > 0 && !p.partial ? `Stopped at ${fmt(handled)} of ${fmt(p.total)}~` : `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
       } else if (problems.length) {
         const n = problems.length;
         const indexingOnly = problems.every((x) => /indexing/i.test(x.reason));
         setStatus(indexingOnly ? `${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go later~ Discord is still indexing`
-          : `${plural(n, 'chat')} skipped · ${shortReason(problems[0].reason)}${n > 1 ? ' and more' : ''} · see Logs`, 'warn');
-        lastEnd = { key, text: indexingOnly ? `Purged ${purged} · run again later for older ones` : `Purged ${purged} · ${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
+          : `${plural(n, 'chat')} skipped${SEP}${shortReason(problems[0].reason)}${n > 1 ? ' and more' : ''}${SEP}see Logs`, 'warn');
+        lastEnd = { key, text: indexingOnly ? `Purged ${purged}${SEP}run again later for older ones` : `Purged ${purged}${SEP}${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
       } else if (shielded.length) {
         // Shielded from another tab mid-purge: what's left there stays on purpose, so no "all clean".
         const who = shielded.length === 1 ? `\u2068${shielded[0]}\u2069` : plural(shielded.length, 'chat');
         setStatus(`Done~ ${who} stays shielded`, 'immune');
-        lastEnd = { key, text: `Purged ${purged} · ${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
+        lastEnd = { key, text: `Purged ${purged}${SEP}${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
       } else if (p.failed) {
-        setStatus(`Done~ ${p.failed.toLocaleString()} wouldn't go · reasons in Logs`, 'warn');
-        lastEnd = { key, text: `Purged ${p.deleted.toLocaleString()} · ${p.failed.toLocaleString()} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
+        setStatus(`Done~ ${fmt(p.failed)} wouldn't go${SEP}reasons in Logs`, 'warn');
+        lastEnd = { key, text: `Purged ${fmt(p.deleted)}${SEP}${fmt(p.failed)} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
         if (p.deleted > 0) celebrate();
       } else if (p.deleted) {
-        setStatus(`Done in ${formatDuration(p.elapsedMs / 1000)} · 0 failed`, 'success', { flair: '♡' });
+        setStatus(`Done in ${formatDuration(p.elapsedMs / 1000)}${SEP}0 failed`, 'success', { flair: '♡' });
         lastEnd = { key, text: 'All clean~ nothing left of you here', flair: '✨', tone: 'cheer', sticker: 'flawless~' };
         celebrate();
       } else {
         setStatus('Done~ nothing of yours was here', 'success');
-        lastEnd = { key, text: 'All clear~ nothing to purge here', flair: '✨', tone: 'clear' };
+        lastEnd = { key, text: 'All clear~ nothing of yours here', flair: '✨', tone: 'clear' };
       }
       // Minimised through the finish line: the orb carries the outcome until reopened.
       state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd.tone } : null;
@@ -3723,7 +3743,7 @@
       confirmBtn.setPointerCapture(e.pointerId);
       beginHold();
     });
-    // Capture keeps a release anywhere reaching endHold; sliding off (even onto Nevermind) lets go.
+    // Capture keeps a release anywhere reaching endHold; sliding off (even onto Never mind) lets go.
     // A mouse is exact; a finger or pen may wander SLOP_PX. Letting go this way says so, and coming
     // back never resumes: a fresh press starts from empty.
     confirmBtn.addEventListener('pointermove', (e) => {
