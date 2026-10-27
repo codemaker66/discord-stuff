@@ -1,5 +1,6 @@
 // Stateful mock of the slice of the Discord web app + REST API the purifier touches.
 // Used with Playwright: installMockDiscord(page, opts) routes every https://discord.com/* request.
+import { readFileSync } from 'node:fs';
 
 const XSS = '<img src=x onerror="window.__xss=(window.__xss||0)+1">';
 const SYSTEM_UNDELETABLE = new Set([1, 2, 3, 4, 5, 21]);
@@ -462,6 +463,10 @@ function appHtml(world, path, { light = false } = {}) {
 
 export const TOKEN = 'mock-token.abc';
 
+// The version whose news an ordinary test's person has already seen (prefs.seenVersion), so only a
+// test that seeds an older blob sees the one-time "New look~" line.
+export const SEEN_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version.split('.').slice(0, 2).join('.');
+
 // Open a fresh page at a channel path with the token planted the way Discord stores it.
 // Besides installMockDiscord's options:
 //   viewport, dpr, reducedMotion, permissions  as Playwright's browser context takes them.
@@ -470,7 +475,8 @@ export const TOKEN = 'mock-token.abc';
 //   light        Discord's light theme behind the panel (html.theme-light).
 //   clock        Playwright's fake clock, installed before the page loads. Time flows as usual
 //                until the test moves it: page.clock.fastForward('01:15') skips a 75 s wait at once.
-//   prefs        the stored prefs blob, e.g. one an older version wrote (default: welcomed).
+//   prefs        the stored prefs blob, e.g. one an older version wrote (default: welcomed, and this
+//                version's news seen).
 //   firstRun     no prefs at all, so the welcome shows.
 export async function openDiscord(browser, path = '/channels/4001/5001', opts = {}) {
   const context = await browser.newContext({
@@ -486,7 +492,7 @@ export async function openDiscord(browser, path = '/channels/4001/5001', opts = 
   const mock = await installMockDiscord(page, opts);
   // Token (and, unless testing first run, "already welcomed") planted once in the top frame,
   // so tests can change them later the way Discord would.
-  const prefs = opts.firstRun ? null : opts.prefs || { welcomed: true };
+  const prefs = opts.firstRun ? null : opts.prefs || { welcomed: true, seenVersion: SEEN_VERSION };
   await page.addInitScript(({ t, prefs }) => {
     if (window.top !== window || sessionStorage.getItem('planted')) return;
     try {

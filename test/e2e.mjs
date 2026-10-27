@@ -58,6 +58,19 @@ const spaced = (s) => (typeof s === 'string' ? s.replace(/\u00a0/g, ' ') : s);
 const text = async (page, sel) => spaced(await page.locator(sel).first().textContent());
 const count = async (page) => Number((await text(page, '[data-role="count"]')).replace(/\D/g, '')) || 0;
 const status = (page) => text(page, '[data-role="status-text"]');
+// What the footer says aloud: its .sr (a number the line no longer repeats, D37) and then the line.
+const heard = (page) => page.evaluate(() => {
+  const el = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]');
+  const sr = el.querySelector(':scope > .sr');
+  return ((sr ? sr.textContent : '') + el.querySelector('[data-role="status-text"]').textContent).replace(/ /g, ' ');
+});
+// In the page: whether the footer's line, as shown or as heard, matches.
+const FOOTER_SAYS = (src) => {
+  const el = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]');
+  const shown = el.querySelector('[data-role="status-text"]').textContent.replace(/ /g, ' ');
+  const sr = el.querySelector(':scope > .sr');
+  return new RegExp(src).test(shown) || new RegExp(src).test((sr ? sr.textContent : '') + shown);
+};
 
 async function holdConfirm(page, ms = 1100) {
   const btn = page.locator('[data-act="confirm"]');
@@ -84,9 +97,9 @@ await test('T1 guild channel: scan is one request, purge deletes exactly mine', 
   assert((await text(page, '[data-role="target-context"]')) === '✿ Cozy Corner', 'guild context');
   const before = stats.searches;
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /found|clear/i.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  await page.waitForFunction(() => /found|clear/i.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
   assert(stats.searches - before === 1, `scan used ${stats.searches - before} searches`);
-  assert((await status(page)).startsWith('40 messages found'), `status: ${await status(page)}`);
+  assert((await heard(page)).startsWith('40 messages found'), `status: ${await status(page)}`);
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
   assert((await text(page, '.pill-name')) === 'general' && (await text(page, '.pill-context')) === '· ✿ Cozy Corner', 'modal names target');
@@ -103,7 +116,7 @@ await test('T1 guild channel: scan is one request, purge deletes exactly mine', 
   assert(world.messages['5001'].length === 85, 'others untouched (incl. the second account)');
   assert((await count(page)) === 40, 'counter shows 40');
   assert(/^All clean~/.test(await text(page, '[data-role="readout-line"]')), 'hero verdict');
-  assert(/^Done in .* · 0 failed/.test(await status(page)), `final status ${await status(page)}`);
+  assert(/^Done in \d+s ♡$/.test(await status(page)), `final status ${await status(page)}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await page.screenshot({ path: `${OUT}/t1-done.png` });
   await context.close();
@@ -113,8 +126,8 @@ await test('T2 DM: search count, history purge, call message skipped not failed'
   const { page, stats, world, pageErrors, context } = await boot('/channels/@me/3002');
   assert((await text(page, '[data-role="target-name"]')) === 'Alice ✿', 'dm name uses display name');
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /found|clear/i.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
-  assert((await status(page)).startsWith('31 messages found'), `scan status ${await status(page)}`);
+  await page.waitForFunction(() => /found|clear/i.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
+  assert((await heard(page)).startsWith('31 messages found'), `scan status ${await status(page)}`);
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await waitEnd(page);
@@ -122,7 +135,7 @@ await test('T2 DM: search count, history purge, call message skipped not failed'
   assert(left.length === 1 && left[0].type === 3, `left: ${JSON.stringify(left.map((m) => m.type))}`);
   assert(stats.deletes.length === 31, `deleted ${stats.deletes.length}`);
   const logText = await page.locator('[data-role="term-body"]').textContent();
-  assert(/skipped a system message/.test(logText), 'skip logged');
+  assert(/kept a call notice — Discord doesn't let anyone delete those/.test(logText), 'skip logged');
   assert(!/FAILED/.test(logText), 'no failures');
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
@@ -132,7 +145,7 @@ await test('T3 protected DM is immune in current tab', async () => {
   const { page, stats, context } = await boot('/channels/@me/3001');
   assert(await page.locator('[data-act="purify"]').isDisabled(), 'purify disabled');
   assert(await page.locator('[data-act="scan"]').isDisabled(), 'scan disabled');
-  assert((await text(page, '[data-role="eyebrow"]')).includes('Immune'), 'immune eyebrow');
+  assert(await page.locator('[data-role="target"]').getAttribute('data-state') === 'immune' && (await text(page, '[data-role="eyebrow"]')).includes('Direct message'), 'immune card');
   assert(stats.deletes.length === 0, 'nothing deleted');
   await page.screenshot({ path: `${OUT}/t3-immune.png` });
   await context.close();
@@ -224,8 +237,8 @@ await test('T6 rate limits are absorbed, nothing fails, pace slows', async () =>
 await test('T7 search index 202 is waited out', async () => {
   const { page, context } = await boot('/channels/4001/5001', { indexingOnce: ['5001'] });
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 10000 });
-  assert((await status(page)).startsWith('40 messages found'), await status(page));
+  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent), null, { timeout: 10000 });
+  assert((await heard(page)).startsWith('40 messages found'), await status(page));
   await context.close();
 });
 
@@ -239,7 +252,7 @@ await test('T8 pause holds, resume continues, stop stops', async () => {
   const a = stats.deletes.length;
   await page.waitForTimeout(700);
   assert(stats.deletes.length === a, `deleted while paused ${a}→${stats.deletes.length}`);
-  assert((await status(page)).startsWith('Paused~'), await status(page));
+  assert((await status(page)).startsWith('Resume picks up right here~'), await status(page));
   await page.screenshot({ path: `${OUT}/t8-paused.png` });
   await page.click('[data-act="resume"]');
   await page.waitForFunction((n) => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= n + 3, a);
@@ -249,7 +262,7 @@ await test('T8 pause holds, resume continues, stop stops', async () => {
   await page.waitForTimeout(500);
   assert(stats.deletes.length === stoppedAt, 'no deletes after stop');
   assert(stoppedAt < 40 && mine(world, '5001').length === 40 - stoppedAt, 'partial');
-  assert(/^Stopped~/.test(await status(page)), await status(page));
+  assert(/^Purify picks up the rest~$/.test(await status(page)), await status(page));
   await context.close();
 });
 
@@ -262,7 +275,7 @@ await test('T9 bad token surfaces a clear error', async () => {
   await env.page.waitForTimeout(500);
   const st = await status(env.page);
   const disabled = await env.page.locator('[data-act="scan"]').isDisabled();
-  assert(disabled || /logged out/i.test(st), `status ${st}`);
+  assert(disabled || /Login not working/.test(st), `status ${st}`);
   assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
   await env.context.close();
 });
@@ -381,8 +394,8 @@ await test('T15 batch without scanning: friend DM opened mid-run, totals grow ho
 await test('T16 thread replies found by a parent-channel search are deleted in their thread', async () => {
   const { page, stats, world, context } = await boot('/channels/4001/5003');
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
-  assert((await status(page)).startsWith('5 messages found'), await status(page));
+  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
+  assert((await heard(page)).startsWith('5 messages found'), await status(page));
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await waitEnd(page);
@@ -395,17 +408,17 @@ await test('T16 thread replies found by a parent-channel search are deleted in t
 await test('T17 account switch in place: next scan uses the new account, lists reset, run refuses stale confirm', async () => {
   const { page, stats, world, context } = await boot('/channels/4001/5001');
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
-  assert((await status(page)).startsWith('40 messages found'), await status(page));
+  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
+  assert((await heard(page)).startsWith('40 messages found'), await status(page));
   await page.evaluate(() => localStorage.setItem('token', JSON.stringify('mock-token.b')));
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /found|Switched Discord accounts/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  await page.waitForFunction(() => /found|Switched Discord accounts/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
   await page.waitForTimeout(300);
-  if (!/5 messages found/.test(await status(page))) {
+  if (!/5 messages found/.test(await heard(page))) {
     await page.click('[data-act="scan"]');
-    await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+    await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
   }
-  assert(/5 messages found/.test(await status(page)), `second account count: ${await status(page)}`);
+  assert(/5 messages found/.test(await heard(page)), `second account count: ${await status(page)}`);
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
   assert(/@second\.acc/.test(await text(page, '.modal-who')), 'dialog names the acting account');
@@ -464,7 +477,7 @@ await test('T21 deep historical index: warns instead of declaring all clean', as
   await holdConfirm(page);
   await waitEnd(page);
   const st = await status(page);
-  assert(/another go|problems/.test(st), `status ${st}`);
+  assert(/later/.test(st), `status ${st}`);
   assert(/indexing/.test(await page.locator('[data-role="term-body"]').textContent()), 'log explains indexing');
   await context.close();
 });
@@ -549,7 +562,7 @@ await test('T27 account switch + navigation mid-run stops the run; nothing is se
   await waitEnd(page, 10000);
   const deleteTokens = stats.log.map((l, i) => [l, stats.tokens[i]]).filter(([l]) => l.startsWith('DELETE /api/v9/channels/')).map(([, t]) => t);
   assert(deleteTokens.length > 0 && deleteTokens.every((t) => t === 'mock-token.abc'), `delete tokens: ${[...new Set(deleteTokens)]}`);
-  assert(/switched Discord accounts/.test(await status(page)), `status ${await status(page)}`);
+  assert(/^Switched accounts~ \d+ messages? purged/.test(await status(page)), `status ${await status(page)}`);
   assert(mine(world, '5001').length > 0, 'run stopped before finishing');
   assert(firstDelete >= 0, 'had deletes');
   await context.close();
@@ -584,7 +597,7 @@ await test('T29 batch lists opened during a run load when it finishes', async ()
 await test('T30 after Stop the cached count matches what is left', async () => {
   const { page, world, context } = await boot('/channels/4001/5001', { latencyMs: 30 });
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 8);
@@ -744,8 +757,8 @@ await test('T37 scan is honest while Discord is still indexing', async () => {
   {
     const { page, context } = await boot('/channels/4001/5002', { deepIndex: ['5002'] });
     await page.click('[data-act="scan"]');
-    await page.waitForFunction(() => /indexing/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
-    assert(/10 messages found so far/.test(await status(page)), `status: ${await status(page)}`);
+    await page.waitForFunction(() => /found so far/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
+    assert(/10 messages found so far/.test(await heard(page)), `status: ${await heard(page)}`);
     assert(!(await page.locator('[data-act="purify"]').isDisabled()), 'purify offered');
     await context.close();
   }
@@ -759,7 +772,7 @@ await test('T37 scan is honest while Discord is still indexing', async () => {
     const { page } = env;
     await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent !== 'finding this chat…');
     await page.click('[data-act="scan"]');
-    await page.waitForFunction(() => /indexing/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+    await page.waitForFunction(() => /still searching/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
     assert(!/All clear/.test(await text(page, '.panel')), 'no "All clear" while indexing');
     assert(!(await page.locator('[data-act="purify"]').isDisabled()), 'purify still offered at 0 found');
     // Batch: the row says it's still indexing instead of "no messages found".
@@ -770,7 +783,7 @@ await test('T37 scan is honest while Discord is still indexing', async () => {
     await page.click('[data-act="scan"]');
     await page.waitForFunction(() => /Counted~/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
     assert(await page.locator('[data-key="c:5002"][data-state="indexing"]').count() === 1, 'row marked indexing');
-    assert(/still indexing/.test(await status(page)), `batch status: ${await status(page)}`);
+    assert(/still searching/.test(await status(page)), `batch status: ${await status(page)}`);
     assert(!(await page.locator('[data-act="purify"]').isDisabled()), 'batch purify offered');
     await env.context.close();
   }
@@ -1011,7 +1024,7 @@ await test('T45 shielding the open DM mid-scan ends on "immune", not an offer to
   await page.click('[data-role="target-tools"] .shield-btn');
   assert((await scanLabel()) === 'Cancel', 'shielded while the scan was still running');
   await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="scan-label"]').textContent !== 'Cancel', null, { timeout: 15000 });
-  assert(/is immune~/.test(await status(page)) && !/found/.test(await status(page)), `status: ${await status(page)}`);
+  assert(/^Open another chat to purify~$/.test(await status(page)) && /is immune/.test(await heard(page)), `status: ${await heard(page)}`);
   assert(await tone(page) === 'immune', 'immune tone');
   assert(await page.locator('[data-act="purify"]').isDisabled(), 'purify stays off');
   await context.close();
@@ -1049,12 +1062,12 @@ await test('T46 Scan pressed while Purify is still asking never opens the dialog
   // Whichever came first settles: the scan's count, or a dialog that couldn't wait for one.
   await page.waitForFunction(() => {
     const r = document.querySelector('#dopa-purifier-host').shadowRoot;
-    return r.querySelector('.modal-layer').dataset.open === 'true' || /found/.test(r.querySelector('[data-role="status-text"]').textContent);
+    return r.querySelector('.modal-layer').dataset.open === 'true' || /found/.test(r.querySelector('[data-role="status"]').textContent);
   }, null, { timeout: 15000 });
   if (await dialogOpen(page)) {
     await page.click('[data-act="cancel"]');
     await page.click('[data-act="scan"]');
-    await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 15000 });
+    await page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent), null, { timeout: 15000 });
   }
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
@@ -1208,7 +1221,7 @@ const shieldFromOtherTab = (page, userId) => page.evaluate((id) => {
   window.dispatchEvent(new StorageEvent('storage', { key: 'dopa-purifier:prefs' }));
 }, userId);
 
-const untilStatus = (page, re, timeout = 3000) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent.replace(/\u00a0/g, ' ')), re.source, { timeout });
+const untilStatus = (page, re, timeout = 3000) => page.waitForFunction(FOOTER_SAYS, re.source, { timeout });
 
 // fetch() used to get no signal: a request that never answers trapped Cancel scan and Stop.
 await test('T50 Cancel scan and Stop end a hung search at once', async () => {
@@ -1224,7 +1237,7 @@ await test('T50 Cancel scan and Stop end a hung search at once', async () => {
   while (hold.held < 2) await page.waitForTimeout(10); // the run's count search hangs too
   await page.click('[data-act="stop"]');
   await waitEnd(page, 1500).catch(() => { throw new Error('Stop stuck on a hung search'); });
-  assert(/^Stopped~/.test(await status(page)), `status ${await status(page)}`);
+  assert(/^Purify picks up the rest~$/.test(await status(page)), `status ${await status(page)}`);
   hold.release();
   await context.close();
 });
@@ -1251,13 +1264,13 @@ await test('T51 a DELETE that never answers times out: Stop ends the run, otherw
       assert(/Stopping after this one/.test(await status(page)), `status ${await status(page)}`);
       await waitEnd(page, 4000).catch(() => { throw new Error('Stop waited on the hung DELETE for ever'); });
       assert(reqs.since(t0).length === 0, `sent after Stop: ${reqs.since(t0)}`);
-      assert(/^Stopped~/.test(await status(page)), `status ${await status(page)}`);
+      assert(/^Purify picks up the rest~$/.test(await status(page)), `status ${await status(page)}`);
     } else {
       await waitEnd(page, 10000).catch(() => { throw new Error('run never got past the hung DELETE'); });
       assert(mine(world, '5002').length === 0, `${mine(world, '5002').length} left`);
       const log = await page.locator('[data-role="term-body"]').textContent();
       assert(/Connection hiccup/.test(log), 'the retry wait was shown');
-      assert(/^Done in .* · 0 failed/.test(await status(page)), `status ${await status(page)}`);
+      assert(/^Done in \d+s ♡$/.test(await status(page)), `status ${await status(page)}`);
     }
     hold.release();
     assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
@@ -1274,7 +1287,7 @@ await test('T52 Pause holds between chats, before opening a DM, and before the l
     while (!hold.done) await page.waitForTimeout(10);
     await page.waitForTimeout(600);
     assert(reqs.since(t0).length === 0, `${label}: sent while paused: ${reqs.since(t0)}`);
-    assert(/^Paused~/.test(await status(page)), `${label}: status ${await status(page)}`);
+    assert(/^Resume picks up right here~$/.test(await status(page)), `${label}: status ${await status(page)}`);
   };
   // (a) group DM → friend Bob: Pause during the group's last history page; Stop then ends the run.
   {
@@ -1291,7 +1304,7 @@ await test('T52 Pause holds between chats, before opening a DM, and before the l
     await page.click('[data-act="stop"]');
     await waitEnd(page, 2000);
     assert(reqs.since(t0).length === 0 && stats.opened.length === 0, `after Stop: ${reqs.since(t0)}`);
-    assert(/^Stopped~/.test(await status(page)), `a: status ${await status(page)}`);
+    assert(/^Purify picks up the rest~$/.test(await status(page)), `a: status ${await status(page)}`);
     await context.close();
   }
   // (b) Mallory → Alice: Alice is shielded (from another tab) while paused between them.
@@ -1367,7 +1380,7 @@ await test('T53 a skipped chat leaves progress honest: "N of 40", an ETA, no "+"
     await waitEnd(page);
     const end = await hero(page);
     assert(end.pct === '40 of 40', `end ${JSON.stringify(end)}`);
-    assert(/^Done in .* · 0 failed/.test(await status(page)), `status ${await status(page)}`);
+    assert(/^Done in \d+s · skipped #mod-only ♡$/.test((await status(page)).replace(/[\u2068\u2069]/g, '')), `status ${await status(page)}`);
     await context.close();
   }
   {
@@ -1405,7 +1418,7 @@ await test('T54 an archived thread costs one DELETE per run, not one per message
     await holdConfirm(page);
     await waitEnd(page);
     assert(threadDeletes - before === 1, `run ${runNo}: ${threadDeletes - before} DELETEs into the archived thread`);
-    assert(/^Done~ 13 wouldn't go/.test(await status(page)), `run ${runNo}: status ${await status(page)}`);
+    assert(/^Done in \d+s · reasons in Logs$/.test(await status(page)) && /^13 couldn't be purged/.test(await heard(page)), `run ${runNo}: status ${await heard(page)}`);
     const log = await page.locator('[data-role="term-body"]').textContent();
     assert((log.match(/archived~ reopen it in Discord/g) || []).length === 1, `run ${runNo}: archived note logged once`);
   }
@@ -1482,7 +1495,7 @@ await test('T56 a friend with no DM yet is counted at purge, not "needs a scan" 
 });
 
 const nameIs = (page, name) => page.waitForFunction((n) => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="target-name"]').textContent === n, name, { timeout: 4000 });
-const statusMatches = (page, re, timeout = 8000) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent.replace(/\u00a0/g, ' ')), re.source, { timeout });
+const statusMatches = (page, re, timeout = 8000) => page.waitForFunction(FOOTER_SAYS, re.source, { timeout });
 
 // Any failed lookup of the open chat ends the same way; a 5xx blip that outlasts request()'s
 // retries is the usual cause (one 403 here keeps the test fast). Try again is the user's, never a poll's.
@@ -1508,7 +1521,7 @@ await test('T60 a failed channel lookup offers Try again, and Try again recovers
   assert((await text(page, '[data-role="scan-label"]')) === 'Count', 'Try again is Count again');
   await page.click('[data-act="scan"]');
   await statusMatches(page, /found/);
-  assert((await status(page)).startsWith('10 messages found'), await status(page));
+  assert((await heard(page)).startsWith('10 messages found'), await status(page));
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });
@@ -1889,7 +1902,7 @@ await test('T80 a shield from another tab stops the purge inside that chat', asy
   assert(after <= 2, `${after} more deleted after the shield`);
   assert(mine('3002') > 20, `Alice's DM kept its messages (${mine('3002')} left)`);
   assert(/shielded in another tab/.test(await text(b.page, '[data-role="term-body"]')), 'tab B logs why it stopped');
-  assert(await b.page.locator('[data-role="eyebrow"]').first().textContent() === 'Immune', 'tab B shows the chat as immune');
+  assert(await b.page.locator('[data-role="target"]').first().getAttribute('data-state') === 'immune', 'tab B shows the chat as immune');
   // What's left there stays on purpose: no "All clean", no purified card.
   assert(/stays shielded/.test(await status(b.page)), `tab B status: ${await status(b.page)}`);
   assert(!/All clean/.test(await text(b.page, '[data-role="readout-line"]')), `tab B verdict: ${await text(b.page, '[data-role="readout-line"]')}`);
@@ -1950,7 +1963,7 @@ await test('T81 after a mid-run account switch the error stays on screen', async
     if (tab === 'current') await page.click('a[href="/channels/4001/5002"]');
     await waitEnd(page, 15000);
     await page.waitForTimeout(1500); // the re-read of the chat and the lists have landed by now
-    assert((await status(page)) === 'Stopped to be safe~ you switched Discord accounts', `${tab}: status ${await status(page)}`);
+    assert(/^Switched accounts~ \d+ messages? purged/.test(await status(page)), `${tab}: status ${await status(page)}`);
     assert(await page.locator('[data-role="status"]').getAttribute('data-tone') === 'warn', `${tab}: warn tone (it needs the person; nothing is broken)`);
     await context.close();
   }
@@ -2017,7 +2030,7 @@ await test('T83 a "found so far" scan doesn\'t cap the run\'s progress', async (
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ total_results: 3, messages: [], doing_deep_historical_index: true }) });
   });
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(() => /so far/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  await page.waitForFunction(() => /so far/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').textContent));
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await waitEnd(page);
@@ -2092,7 +2105,7 @@ await test('T90 errors in plain words, emoji as flair, and the calm tone', async
   ]) {
     const p = await plain(make);
     assert(p.blocking === true && p.code === 'no-access' && p.short === 'No access here', `${make} → ${JSON.stringify(p)}`);
-    assert(p.line === "You can't read this channel, so there's nothing here to purify", `no-access line ${p.line}`);
+    assert(p.line === "You can't read this channel, so Purify can't reach your messages here", `no-access line ${p.line}`);
   }
   for (const make of ["new window.__dp.DiscordError(0, { message: 'Network unreachable' })", "{ message: 'Network unreachable' }"]) {
     const p = await plain(make);
@@ -2502,13 +2515,13 @@ await test('T100 before a run the ring says how many of yours it found, never "0
     await heroAt(page, want);
     r = await look();
     if (want === 'clear/count') assert(r.count === '0' && r.label === 'messages found' && r.line === 'All clear~ nothing of yours here ✨' && r.heard === 'All clear~ nothing of yours here', `clear ${JSON.stringify(r)}`);
-    else assert(r.count === null && r.label === 'no access' && r.labelColor === 'rgb(255, 128, 144)' && r.line === "You can't read this channel, so there's nothing here to purify", `blocked ${JSON.stringify(r)}`);
+    else assert(r.count === null && r.label === 'no access' && r.labelColor === 'rgb(255, 128, 144)' && r.line === "You can't read this channel, so Purify can't reach your messages here", `blocked ${JSON.stringify(r)}`);
   }
   await goTo(page, '/channels/@me/3001');
   await heroAt(page, 'immune/icon');
   r = await look();
   assert(r.icon === 'shield' && r.label === 'immune' && r.labelColor === 'rgb(247, 203, 110)', `immune ${JSON.stringify(r)}`);
-  assert(r.line === 'Immune from the start ♡ nothing here gets purged' && r.heard === 'Immune from the start nothing here gets purged', `immune line ${JSON.stringify(r)}`);
+  assert(r.line === 'Safe from the start~ Bardo & Dopa made the purifier ♡' && r.heard === 'Safe from the start~ Bardo & Dopa made the purifier', `immune line ${JSON.stringify(r)}`);
   assert(await text(page, '[data-role="mood"]') === "this one's immune~", `mood ${await text(page, '[data-role="mood"]')}`);
   // A shield you set yourself says how to undo it.
   await goTo(page, '/channels/@me/3002');
@@ -2516,7 +2529,7 @@ await test('T100 before a run the ring says how many of yours it found, never "0
   await page.click('[data-role="target-tools"] .shield-btn');
   await heroAt(page, 'immune/icon');
   r = await look();
-  assert(r.line === 'Immune ♡ tap the shield to undo', `your shield ${JSON.stringify(r)}`);
+  assert(r.line === 'You shielded this DM ♡ tap the shield to undo', `your shield ${JSON.stringify(r)}`);
   await goTo(page, '/channels/@me');
   await heroAt(page, 'none/icon');
   r = await look();
@@ -4119,7 +4132,7 @@ await test('T140 a chat Discord won\'t open says so plainly, keeps Purify off, a
     const env = await openDiscord(browser, '/channels/4001/5001', { badToken: true });
     await injectUserscript(env.page, source);
     const { page } = env;
-    await untilStatus(page, /^Logged out of Discord$/, 6000);
+    await untilStatus(page, /^Login not working$/, 6000);
     assert(await tone(page) === 'error', `logged out: tone ${await tone(page)}`);
     assert(await text(page, '[data-role="target-name"]') === 'this chat', `the card never shows a raw id: ${await text(page, '[data-role="target-name"]')}`);
     assert(await text(page, '[data-role="scan-label"]') === 'Try again', `scan label ${await text(page, '[data-role="scan-label"]')}`);
@@ -4138,7 +4151,7 @@ await test('T140 a chat Discord won\'t open says so plainly, keeps Purify off, a
       const r = document.querySelector('#dopa-purifier-host').shadowRoot;
       return { state: r.querySelector('[data-role="target"]').dataset.state, eyebrow: r.querySelector('[data-role="eyebrow-text"]').textContent, color: getComputedStyle(r.querySelector('[data-role="eyebrow"]')).color };
     });
-    assert(card.state === 'blocked' && card.eyebrow === 'No access' && card.color === 'rgb(255, 128, 144)', `card ${JSON.stringify(card)}`);
+    assert(card.state === 'blocked' && card.eyebrow === 'Server channel' && card.color !== 'rgb(255, 128, 144)', `card ${JSON.stringify(card)}`);
     assert(await tone(page) === 'error' && await heroIs(page) === 'blocked/label', `tone ${await tone(page)}, ring ${await heroIs(page)}`);
     assert(await page.locator('[data-act="purify"]').isDisabled(), 'a purge here could only fail: Purify is off');
     assert(await text(page, '[data-role="scan-label"]') === 'Try again', `scan label ${await text(page, '[data-role="scan-label"]')}`);
@@ -4162,7 +4175,7 @@ await test('T141 a count that fails says why in plain words: still indexing, off
   const quick = withTiming(source, { waitUnitMs: 10 });
   const json = (status, body) => (route) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   const cases = [
-    ['still indexing', json(202, { message: 'Index not yet available. Try again later', code: 110000, retry_after: 0.01 }), 'Discord is still indexing'],
+    ['still indexing', json(202, { message: 'Index not yet available. Try again later', code: 110000, retry_after: 0.01 }), 'Discord is still searching'],
     ['offline', (route) => route.abort('internetdisconnected'), "Can't reach Discord"],
     ['Discord down', json(503, { message: 'Service Unavailable' }), 'Discord is having a moment'],
   ];
@@ -4185,8 +4198,8 @@ await test('T141 a count that fails says why in plain words: still indexing, off
 
 await test('T142 a purge that breaks off says what happened and how to carry on', async () => {
   const answers = {
-    captcha: { status: 400, body: { captcha_key: ['captcha-required'], captcha_sitekey: 'x' }, short: 'Discord wants a captcha', line: 'Discord wants a captcha~ solve it in Discord, then press Purify to finish' },
-    'logged out': { status: 401, body: { message: '401: Unauthorized', code: 0 }, short: 'Logged out of Discord', line: "You're logged out of Discord~ log in, then press Purify to finish" },
+    captcha: { status: 400, body: { captcha_key: ['captcha-required'], captcha_sitekey: 'x' }, short: 'Discord wants a human check', line: "Discord wants to check you're human~ take a break, then press Purify to finish" },
+    'logged out': { status: 401, body: { message: '401: Unauthorized', code: 0 }, short: 'Login not working', line: "Couldn't use your Discord login~ reload Discord, then press Purify to finish" },
   };
   for (const [label, a] of Object.entries(answers)) {
     const { page, stats, pageErrors, context } = await boot('/channels/4001/5002', { latencyMs: 20 });
@@ -4374,7 +4387,7 @@ await test('T146 one name per idea: This chat, Many chats, a chat\'s kind, and w
   // and check the isolate is there.
   const read = said.map((x) => x.replace(/[\u2066-\u2069]/g, '').replace(/\u00a0/g, ' '));
   assert(read.includes('Chat 1 of 2 · Alice ✿') && read.includes('Chat 2 of 2 · Alice ✿, Carol'), `chats: ${said.filter((x) => /^Chat \d of 2 · [^·]+$/.test(x))}`);
-  assert(read.includes('Chat 1 of 2 · Alice ✿ · 1 of 31') && read.includes('Chat 2 of 2 · Alice ✿, Carol · 3 of 3'), `per kill: ${said.filter((x) => / of \d+$/.test(x)).slice(0, 3)}`);
+  assert(read.includes('Chat 1 of 2 · 1 of 31 · Alice ✿') && read.includes('Chat 2 of 2 · 3 of 3 · Alice ✿, Carol'), `per kill: ${said.filter((x) => / of \d+ · /.test(x)).slice(0, 3)}`);
   assert(said.some((x) => x.startsWith('Chat 2 of 2\u00a0· \u2068')), 'the chat name is isolated');
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
@@ -4438,7 +4451,7 @@ await test('T149 endings are honest and said once: all clean, all clear, stopped
     assert(await height() === during, `the finish grows the panel ${during} → ${await height()}`);
     assert(/^All clean~ nothing left of you here/.test(await text(page, '[data-role="readout-line"]')), `verdict "${await text(page, '[data-role="readout-line"]')}"`);
     const done = await statusParts(page);
-    assert(/^Done in \d+s · 0 failed$/.test(done.words) && done.flair === ' ♡' && done.tone === 'success', `footer ${JSON.stringify(done)}`);
+    assert(/^Done in \d+s$/.test(done.words) && done.flair === ' ♡' && done.tone === 'success', `footer ${JSON.stringify(done)}`);
     const purify = await page.evaluate(() => {
       const b = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-act="purify"]');
       const s = getComputedStyle(b);
@@ -4471,9 +4484,9 @@ await test('T149 endings are honest and said once: all clean, all clear, stopped
     await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 3);
     await page.click('[data-act="stop"]');
     await waitEnd(page, 5000);
-    assert(/^Stopped at \d+ of 40~$/.test(await text(page, '[data-role="readout-line"]')), `verdict "${await text(page, '[data-role="readout-line"]')}"`);
+    assert(/^Stopped~ \d+ of yours still here$/.test(await text(page, '[data-role="readout-line"]')), `verdict "${await text(page, '[data-role="readout-line"]')}"`);
     const done = await statusParts(page);
-    assert(done.words === 'Stopped~ Purify picks up the rest' && done.tone === 'calm', `footer ${JSON.stringify(done)}`);
+    assert(done.words === 'Purify picks up the rest~' && done.tone === 'calm', `footer ${JSON.stringify(done)}`);
     assert(/STOPPED by you · nothing after this point was touched/.test(await logText(page)), 'the log marks where you stopped');
     assert(await page.locator('[data-act="purify"]').isEnabled(), 'and Purify does pick up the rest');
     await context.close();
@@ -4491,9 +4504,9 @@ await test('T150 a finish with failures counts what went, and the log gives each
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await waitEnd(page);
-  assert(await text(page, '[data-role="readout-line"]') === "Purged 2 · 13 wouldn't go", `verdict "${await text(page, '[data-role="readout-line"]')}"`);
+  assert(await text(page, '[data-role="readout-line"]') === "13 messages couldn't be purged", `verdict "${await text(page, '[data-role="readout-line"]')}"`);
   const done = await statusParts(page);
-  assert(done.words === "Done~ 13 wouldn't go · reasons in Logs" && done.tone === 'warn' && !done.flair, `footer ${JSON.stringify(done)}`);
+  assert(/^Done in \d+s · reasons in Logs$/.test(done.words) && done.tone === 'warn' && !done.flair, `footer ${JSON.stringify(done)}`);
   await page.click('[data-act="logs"]');
   const lines = await page.evaluate(() => [...document.querySelector('#dopa-purifier-host').shadowRoot.querySelectorAll('.line.error .line-msg')]
     .map((m) => ({ text: m.textContent, whole: m.scrollWidth <= m.clientWidth, wrap: getComputedStyle(m).whiteSpace })));
@@ -4514,10 +4527,10 @@ await test('T151 an account switch mid-batch keeps the verdict: what was purged,
   await waitEnd(page, 15000);
   await page.waitForTimeout(1500); // the lists and the chat have been re-read as the new account by now
   const verdict = await text(page, '[data-role="hero-sub"]');
-  assert(/^Stopped to be safe~ you switched accounts · \d+ messages? purged( as @princess\.dopa)?$/.test(verdict), `verdict "${verdict}"`);
+  assert(verdict === 'Stopped to be safe~ you switched accounts', `verdict "${verdict}"`);
   assert(await heroIs(page) === 'done/count', `the verdict stays on screen: ${await heroIs(page)}`);
   const said = await statusParts(page);
-  assert(said.words === 'Stopped to be safe~ you switched Discord accounts' && said.tone === 'warn', `footer ${JSON.stringify(said)}`);
+  assert(/^Switched accounts~ \d+ messages? purged( as @princess\.dopa)?$/.test(said.words) && said.tone === 'warn', `footer ${JSON.stringify(said)}`);
   assert(/STOPPED · Switched accounts/.test(await logText(page)), 'the log says why it stopped');
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
@@ -4543,10 +4556,10 @@ await test('T152 waits and pauses are calm, and a breather counts down without a
   await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 4, null, { timeout: 4000 });
   await page.click('[data-act="pause"]');
   const paused = await statusParts(page);
-  assert(/^Paused~ \d+ purged so far$/.test(paused.words) && paused.tone === 'calm' && paused.glyph === '""', `paused ${JSON.stringify(paused)}`);
+  assert(paused.words === 'Resume picks up right here~' && paused.tone === 'calm' && paused.glyph === '""', `paused ${JSON.stringify(paused)}`);
   await page.click('[data-act="resume"]');
   const again = await statusParts(page);
-  assert(again.words === 'Purging again~' && again.flair === ' ✨' && again.tone === 'info', `resumed ${JSON.stringify(again)}`);
+  assert(again.words === 'Purifying~ you can minimise me' && again.flair === ' ✨' && again.tone === 'info', `resumed ${JSON.stringify(again)}`);
   await waitEnd(page);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
@@ -4565,7 +4578,7 @@ await test('T153 the footer speaks words, not emoji, and the small lines are kin
   walk.release();
   await untilStatus(page, /^31 messages found/);
   const found = await statusParts(page);
-  assert(found.flair === ' ✨' && !/\p{Extended_Pictographic}/u.test(await page.locator('[data-role="status"]').ariaSnapshot()), `found ${JSON.stringify(found)}`);
+  assert(found.flair === '' && found.words === "Counted~ press Purify when you're ready" && !/\p{Extended_Pictographic}/u.test(await page.locator('[data-role="status"]').ariaSnapshot()), `found ${JSON.stringify(found)}`);
   assert(await page.evaluate(() => window.__dp.preview({ content: '', attachments: [] })) === '[sticker or embed]', 'a message with no words');
   // Discord can lock the clipboard: the link waits in the log, whole.
   await page.evaluate(() => { navigator.clipboard.writeText = () => Promise.reject(new DOMException('locked', 'NotAllowedError')); });
@@ -4594,8 +4607,8 @@ await test('T154 the footer shows the whole message; Esc, Home and End, and the 
       return { whole: t.scrollHeight <= t.clientHeight + 1 && t.scrollWidth <= t.clientWidth + 1, lines: Math.round(t.clientHeight / 16), wrap: getComputedStyle(t).whiteSpace };
     });
     for (const said of [
-      "Couldn't save~ Alice ✿ is not immune (Discord's storage is full or blocked)",
-      'Discord wants a captcha~ solve it in Discord, then press Purify to finish',
+      "Couldn't save~ Alice the Magnificent Wanderer ✿ isn't immune yet",
+      "Discord wants to check you're human~ take a break, then press Purify to finish",
       "Couldn't copy~ the link is waiting in Logs",
     ]) {
       await page.evaluate((s) => window.__dp.setStatus(s, 'error'), said);
@@ -4709,7 +4722,7 @@ await test('T156 Many chats: the strip keeps up mid-scan, and a chat that shuts 
   second.release();
   await untilStatus(page, /^Counted~/);
   const done = await statusParts(page);
-  assert(done.words === 'Counted~ 10 messages · 1 chat skipped · no access' && done.tone === 'warn', `scan verdict ${JSON.stringify(done)}`);
+  assert(done.words === "Counted~ 10 messages · skipped 1 chat you can't read" && done.tone === 'success', `scan verdict ${JSON.stringify(done)}`);
   await page.click('[data-key="c:5002"]'); // untick #art-share: only #mod-only is left
   assert(await page.locator('[data-act="purify"]').isDisabled(), 'nothing to offer in a chat Discord keeps you out of');
   await page.click('[data-key="c:5002"]');
@@ -5143,7 +5156,7 @@ await test('T169 one word per idea: shield and immune, and "#" only for text cha
   await pickBatch(page, ['c:5001']);
   const words = () => inPanel(page, (r) => [...r.querySelectorAll('.shield-btn')].map((b) => `${b.getAttribute('aria-label')} | ${b.title} | ${b.getAttribute('aria-pressed')}`));
   const before = (await words()).map(unmarked);
-  assert(before.includes('Shield Alice ✿ | Shield this DM~ never purged | false') && before.includes('Shield Bardo | Immune ♡ click to remove the shield | true'), `shields ${JSON.stringify(before)}`);
+  assert(before.includes('Shield Alice ✿ | Shield this DM~ never purged | false') && before.includes('Shield Bardo | Immune ♡ tap to remove the shield | true'), `shields ${JSON.stringify(before)}`);
   assert(!before.some((w) => /protect/i.test(w)), `no "protect" ${JSON.stringify(before)}`);
   const labels = (await inPanel(page, (r) => ['5001', '5003', '5004'].map((id) => r.querySelector(`[data-key="c:${id}"] .check`).getAttribute('aria-label')))).map(unmarked);
   assert(JSON.stringify(labels) === JSON.stringify(['#general (✿ Cozy Corner)', 'announcements (✿ Cozy Corner)', 'Voice Lounge (✿ Cozy Corner)']), `channel labels ${JSON.stringify(labels)}`);
@@ -5177,7 +5190,7 @@ const linesSeen = (page) => page.evaluate(() => window.__lines || []);
 
 // Count, not Scan; Purify is the action. Purge stays only where it is wit (the moods, the terminal,
 // 'messages purged') and on the ring's label.
-const OLD_WORDS = [/\bscan(s|ned|ning)?\b/i, /to purge~/i, /Nevermind/i, /Purify many chats/i, /counts them first/i];
+const OLD_WORDS = [/\bscan(s|ned|ning)?\b/i, /to purge~/i, /Nevermind/i, /Purify many chats/i, /counts them first/i, /\bPurging\b/];
 function sayOnlyNewWords(said, where) {
   for (const re of OLD_WORDS) assert(!re.test(said), `${where}: "${said.match(re)?.[0]}" in "${said}"`);
 }
@@ -5225,7 +5238,7 @@ await test('T170 one word for each thing: Count, Purify and Pick, in every state
     await atLeast(page, 3);
     assert(/Purifying/.test(await oneVocabulary(page, '05 purifying')), 'the running eyebrow says Purifying');
     await page.click('[data-act="pause"]');
-    await untilStatus(page, /^Paused~/);
+    await untilStatus(page, /^Resume picks up right here~$/);
     await oneVocabulary(page, '06 paused');
     await page.click('[data-act="resume"]');
     await waitEnd(page);
@@ -5307,13 +5320,13 @@ await test('T170 one word for each thing: Count, Purify and Pick, in every state
   }
   // Logged out (e01), a rate limit's wait (e02), a short window's strip (e05, e06), a deep index (e08).
   for (const [where, path, opts, act] of [
-    ['e01 logged out', '/channels/4001/5001', { badToken: true }, async (page) => { await page.click('[data-act="scan"]'); await untilStatus(page, /^Logged out of Discord$/); }],
+    ['e01 logged out', '/channels/4001/5001', { badToken: true }, async (page) => { await page.click('[data-act="scan"]'); await untilStatus(page, /^Login not working$/); }],
     ['e02 a rate limit', '/channels/4001/5002', { rateLimitEvery: 3 }, async (page) => { await page.click('[data-act="purify"]'); await holdConfirm(page); await waitEnd(page); }],
     ['e05 e06 a short window', '/channels/4001/5001', { viewport: { width: 720, height: 450 } }, async (page) => { await oneVocabulary(page, 'e05 strip'); await page.click('[data-act="scan"]'); await untilStatus(page, /found/); }],
     ['e08 still indexing', '/channels/4001/5004', { deepIndex: ['5004'], indexingOnce: ['5004'] }, async (page) => {
       await page.click('[data-act="scan"]');
       await heroAt(page, 'indexing/icon', 6000);
-      assert(/count again soon/.test(await text(page, '[data-role="readout-line"]')), `indexing readout ${await text(page, '[data-role="readout-line"]')}`);
+      assert(/count again in a minute/.test(await text(page, '[data-role="readout-line"]')), `indexing readout ${await text(page, '[data-role="readout-line"]')}`);
     }],
   ]) {
     const { page, pageErrors, context } = await boot(path, opts);
@@ -5356,7 +5369,7 @@ await test('T171 shared helpers: honest durations, Latin digits, a dot that neve
     await page.click('[data-act="scan"]');
     await untilStatus(page, /found/);
     assert(await text(page, '[data-role="count"]') === '40' && await text(page, '[data-role="purify-count"]') === '40', `count ${await text(page, '[data-role="count"]')}`);
-    assert((await status(page)).startsWith('40 messages found'), `status ${await status(page)}`);
+    assert((await heard(page)).startsWith('40 messages found'), `status ${await status(page)}`);
     await context.close();
   }
   // 50,000 of yours at the shipped pace, in a narrow window: the footer wraps, never before a dot.
@@ -5364,7 +5377,7 @@ await test('T171 shared helpers: honest durations, Latin digits, a dot that neve
     const { page, context } = await bootWith(source, '/channels/4001/5001', { world: buildWorld({ bulk: { 5001: 49960 } }), viewport: { width: 360, height: 740 } });
     await page.click('[data-act="scan"]');
     await untilStatus(page, /found/, 15000);
-    assert(await status(page) === '50,000 messages found · ~20h 9m to purify ✨', `status ${await status(page)}`);
+    assert(await heard(page) === "50,000 messages found. Counted~ press Purify when you're ready" && await text(page, '[data-role="readout-line"]') === 'about 20h 9m to purify~', `status ${await heard(page)}`);
     const starts = await inPanel(page, (r) => {
       const out = [];
       let top = null;
@@ -5382,7 +5395,7 @@ await test('T171 shared helpers: honest durations, Latin digits, a dot that neve
       }
       return out;
     });
-    assert(starts.length === 2 && !starts.includes('·'), `the footer's lines start with ${JSON.stringify(starts)}`);
+    assert(starts.length >= 1 && !starts.includes('·'), `the footer's lines start with ${JSON.stringify(starts)}`);
     await context.close();
   }
 });
@@ -5420,7 +5433,7 @@ await test('T251 the audit\'s worlds live in the repo: crowds, a big #general, n
     const { page, context } = await boot('/channels/4001/5001', { world: buildWorld({ bulk: { 5001: 3000 } }) });
     await page.click('[data-act="scan"]');
     await untilStatus(page, /found/, 8000);
-    assert((await status(page)).startsWith('3,040 messages found'), `status ${await status(page)}`);
+    assert((await heard(page)).startsWith('3,040 messages found'), `status ${await status(page)}`);
     await context.close();
   }
   // Every name at its limit draws, in This chat and in Many chats.
@@ -5910,7 +5923,7 @@ await test('T182 a DELETE Discord keeps failing ends the run, not the chat, and 
   assert(stats.refused === 8, `one message tried ${stats.refused} times (once, then after each of the 7 waits)`);
   assert(!stats.log.some((l) => /\/channels\/3003\//.test(l)), 'the run went on to the next chat');
   assert(await status(page) === 'Discord is having a moment' && await tone(page) === 'error', `footer ${await status(page)} (${await tone(page)})`);
-  assert(await text(page, '[data-role="hero-sub"]') === 'Discord is having a moment~ try again in a minute', `verdict ${await text(page, '[data-role="hero-sub"]')}`);
+  assert(await text(page, '[data-role="hero-sub"]') === 'Discord is busy~ press Purify in a minute' && await text(page, '[data-role="readout-line"]') === 'Discord is having a moment~ try again in a minute', `verdict ${await text(page, '[data-role="hero-sub"]')}`);
   assert(await text(page, '[data-role="tf-failed"]') === '000' && /STOPPED · Discord is having a moment/.test(await logText(page)), 'Discord\'s trouble is no failure of yours');
   const rows = await inPanel(page, (r) => ['c:5002', 'c:3003'].map((k) => r.querySelector(`[data-key="${k}"]`).dataset.state));
   assert(rows.join() === 'stopped,stopped' && (await ticked(page, ['c:5002', 'c:3003'])).every(Boolean), `rows ${rows}, both still ticked`);
@@ -7291,6 +7304,444 @@ await test('T269 Many chats names what goes: "in 1 chat", never "this chat", and
   await page.click('.modal-server summary');
   assert(await page.locator('.modal-server-names').isVisible() && await text(page, '.modal-server-names') === names, 'opened, it names them');
   await page.click('[data-act="cancel"]');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// ---- WP-G (4.2) ----
+// Words and endings: each ending says what happened once, the footer names what's next (and screen
+// readers still hear the verdict), no access is calm, Discord's indexing is 'still searching'.
+
+// The footer's line without its bidi isolates, its .sr, and the panel's visible words (no .sr).
+const plainWords = (s) => s.replace(/[⁨⁩]/g, '');
+const srNow = (page) => page.evaluate(() => {
+  const sr = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"] > .sr');
+  return sr ? sr.textContent.replace(/ /g, ' ') : '';
+});
+const seenText = (page) => page.evaluate(() => {
+  const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+  const out = [];
+  const walk = document.createTreeWalker(r.querySelector('.panel'), NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    const el = n.parentElement;
+    if (!el.closest('.sr') && el.checkVisibility({ visibilityProperty: true, opacityProperty: true })) out.push(n.nodeValue);
+  }
+  return out.join(' ').replace(/ /g, ' ');
+});
+const times = (s, re) => (s.match(re) || []).length;
+
+await test('T191 a clean finish: the footer is "Done in Ns" with ♡ and no "failed", and 40 of 40 stays', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001');
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /40 messages found/);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  const done = await statusParts(page);
+  assert(/^Done in \d+s$/.test(done.words) && done.flair === ' ♡' && done.tone === 'success', `footer ${JSON.stringify(done)}`);
+  assert(await srNow(page) === 'All clean. ', `heard ${await srNow(page)}`);
+  assert(await text(page, '[data-role="pct"]') === '40 of 40', `finish line ${await text(page, '[data-role="pct"]')}`);
+  assert(/^All clean~ nothing left of you here/.test(await text(page, '[data-role="readout-line"]')), 'verdict');
+  assert(!/failed/.test(await seenText(page)), 'no "failed" anywhere');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T192 a finish with failures says how many couldn\'t be purged, once, and where the reasons are', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001');
+  const failing = new Set();
+  await page.route(/\/api\/v9\/channels\/5001\/messages\/\d+$/, (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    const id = route.request().url().split('/').pop();
+    if (failing.size < 5) failing.add(id);
+    return failing.has(id) ? route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: 'Invalid Form Body', code: 50035 }) }) : route.fallback();
+  });
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /40 messages found/);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  assert(await text(page, '[data-role="readout-line"]') === "5 messages couldn't be purged", `verdict "${await text(page, '[data-role="readout-line"]')}"`);
+  const done = await statusParts(page);
+  assert(/^Done in \d+s · reasons in Logs$/.test(done.words) && done.tone === 'warn' && !done.flair, `footer ${JSON.stringify(done)}`);
+  assert((await srNow(page)).startsWith("5 couldn't be purged."), `heard ${await srNow(page)}`);
+  assert(await text(page, '[data-role="pct"]') === '35 of 40', `finish line ${await text(page, '[data-role="pct"]')}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T193 Stop says how many of yours are still here, and "stopped" at most twice', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001', { latencyMs: 30 });
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /40 messages found/);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 4);
+  await page.click('[data-act="stop"]');
+  await waitEnd(page, 5000);
+  const left = 40 - await count(page);
+  assert(await text(page, '[data-role="readout-line"]') === `Stopped~ ${left} of yours still here`, `verdict "${await text(page, '[data-role="readout-line"]')}"`);
+  const done = await statusParts(page);
+  assert(done.words === 'Purify picks up the rest~' && done.tone === 'calm', `footer ${JSON.stringify(done)}`);
+  assert(await srNow(page) === `${left} of yours still here. `, `heard ${await srNow(page)}`);
+  const seen = await seenText(page);
+  assert(times(seen, /stopped/gi) <= 2, `"stopped" ${times(seen, /stopped/gi)} times: ${seen}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T194 This chat on a channel Discord is still searching ends calmly, never "chat skipped"', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5002', { deepIndex: ['5002'] });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  assert(await text(page, '[data-role="readout-line"]') === 'Discord may find older ones later~', `verdict "${await text(page, '[data-role="readout-line"]')}"`);
+  const done = await statusParts(page);
+  assert(done.words === 'Purify again later to catch them~' && done.tone === 'calm', `footer ${JSON.stringify(done)}`);
+  assert(await text(page, '[data-role="mood"]') === 'almost there, princess~', `mood ${await text(page, '[data-role="mood"]')}`);
+  const seen = await seenText(page);
+  assert(!/chat skipped|fought back/i.test(seen), `said ${seen}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T195 a DM purged clean says the call notice stays, and the log names it', async () => {
+  const { page, pageErrors, context } = await boot('/channels/@me/3002');
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  assert(await text(page, '[data-role="readout-line"]') === "All clean~ only Discord's call notices stay ✨", `verdict "${await text(page, '[data-role="readout-line"]')}"`);
+  assert(/kept a call notice — Discord doesn't let anyone delete those/.test(await logText(page)), 'the log names what stayed');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// An ending from the engine, as the end handler receives it (only the fields it reads).
+const endAs = (page, p, runKey = 'c:5001') => page.evaluate(([p, key]) => {
+  window.__dp.state.runKey = key;
+  window.__dp.state.runMode = key === 'batch' ? 'batch' : 'current';
+  window.__dp.state.runTargets = key === 'batch' ? [] : [{ channelId: key.slice(2), name: '#general' }];
+  window.__dp.emit('end', { deleted: 3, failed: 0, gone: 0, total: 10, partial: false, skipped: 0, elapsedMs: 3000, failures: [], problems: [], shielded: [], ...p });
+}, [p, runKey]);
+
+await test('T196 in a short window every error ending keeps its next step on the strip\'s one line', async () => {
+  const { page, pageErrors, context } = await bootProbe('/channels/4001/5001', ['emit', 'state'], { viewport: { width: 1093, height: 500 } });
+  const endings = {
+    captcha: { error: 'Discord wants a human check — take a break before trying again', errorStatus: 400, errorCode: 'captcha' },
+    network: { error: 'Network unreachable', errorStatus: 0 },
+    'logged-out': { error: '401: Unauthorized', errorStatus: 401 },
+    server: { error: 'HTTP 502', errorStatus: 502 },
+    switched: { error: 'You switched Discord accounts mid-purge', errorStatus: 0 },
+    indexing: { problems: [{ target: { channelId: '5001', name: '#general' }, reason: 'Discord is still indexing older messages — run it again later' }] },
+  };
+  for (const [why, p] of Object.entries(endings)) {
+    await endAs(page, p);
+    await heroAt(page, 'done/count');
+    const sub = await page.evaluate(() => { const s = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="hero-sub"]'); return { text: s.textContent, fits: s.scrollWidth <= s.clientWidth, shown: s.checkVisibility() }; });
+    assert(sub.shown && sub.fits, `${why}: the strip cuts "${sub.text}"`);
+    assert(why === 'switched' || why === 'indexing' || /Purify/.test(sub.text), `${why}: no next step in "${sub.text}"`);
+  }
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T197 a run that finishes while another chat is open names its chat until you go back', async () => {
+  const { page, pageErrors, context } = await bootPaced('/channels/4001/5001', { deleteMs: 40 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await goTo(page, '/channels/4001/5002');
+  await nameIs(page, 'art-share');
+  await waitEnd(page, 20000);
+  const away = await statusParts(page);
+  assert(plainWords(away.words) === 'Done~ #general is all clean · 40 messages purged' && away.tone === 'success', `footer ${JSON.stringify(away)}`);
+  assert(await heroIs(page) !== 'done/count', 'art-share shows its own ring');
+  await goTo(page, '/channels/4001/5003');
+  await nameIs(page, 'announcements');
+  await page.waitForTimeout(300);
+  assert(plainWords((await statusParts(page)).words) === plainWords(away.words), `kept: ${(await statusParts(page)).words}`);
+  await goTo(page, '/channels/4001/5001');
+  await nameIs(page, 'general');
+  await heroAt(page, 'done/count');
+  await statusMatches(page, /^Done in \d+s ♡$/, 3000);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T198 no access is a calm fact: two crimson marks, the chat kind, and a truthful line', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5007');
+  await page.click('[data-act="purify"]');
+  await untilStatus(page, /^No access here$/);
+  const marks = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    return {
+      label: getComputedStyle(r.querySelector('[data-role="count-label"]')).color,
+      readout: getComputedStyle(r.querySelector('[data-role="readout-line"]')).color,
+      eyebrow: getComputedStyle(r.querySelector('[data-role="eyebrow"]')).color,
+      dot: getComputedStyle(r.querySelector('.status-dot')).backgroundColor,
+    };
+  });
+  const crimson = Object.values(marks).filter((c) => c === 'rgb(255, 128, 144)' || c === 'rgb(227, 32, 63)').length; // --crim-300, or the error dot's
+  assert(crimson === 2 && marks.label === 'rgb(255, 128, 144)', `crimson marks ${JSON.stringify(marks)}`);
+  assert(await text(page, '[data-role="eyebrow-text"]') === 'Server channel', `eyebrow ${await text(page, '[data-role="eyebrow-text"]')}`);
+  assert(/can't reach your messages/.test(await text(page, '[data-role="readout-line"]')), `readout ${await text(page, '[data-role="readout-line"]')}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T199 a batch that skips only a chat you can\'t read is a clean finish that names it calmly', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001');
+  await pickBatch(page, ['c:5007', 'c:5002']);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page, 15000);
+  assert(await text(page, '[data-role="hero-sub"]') === "Purged 10 messages~ skipped 1 chat you can't read ✨", `verdict "${await text(page, '[data-role="hero-sub"]')}"`);
+  const done = await statusParts(page);
+  assert(/^Done in \d+s · skipped #mod-only$/.test(plainWords(done.words)) && done.tone === 'success' && done.flair === ' ♡', `footer ${JSON.stringify(done)}`);
+  assert(await srNow(page) === "Purged 10 messages~ skipped 1 chat you can't read. ", `heard ${await srNow(page)}`);
+  assert(await text(page, '[data-role="mood"]') === 'one door stayed locked~', `mood ${await text(page, '[data-role="mood"]')}`);
+  assert(await page.locator('[data-role="readout"]').getAttribute('data-tone') === 'cheer', 'the rose verdict of a clean finish');
+  const log = await logText(page);
+  assert(/skipped \(no access\): #mod-only/.test(log) && !/NEEDS ANOTHER LOOK/.test(log), 'the log notes the locked chat calmly');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T200 Discord still searching: one plain phrase, a next step, and no alarm', async () => {
+  {
+    const { page, pageErrors, context } = await boot('/channels/4001/5001', { deepIndex: ['5001'] });
+    await page.click('[data-act="scan"]');
+    await heroAt(page, 'partial/count', 6000);
+    assert(await text(page, '[data-role="readout-line"]') === 'Discord may find older ones later~', `readout ${await text(page, '[data-role="readout-line"]')}`);
+    const st = await statusParts(page);
+    assert(st.words === 'Purify now, then once more later for the rest' && st.tone === 'info', `footer ${JSON.stringify(st)}`);
+    assert(await srNow(page) === '40 messages found so far. ', `heard ${await srNow(page)}`);
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    const { page, pageErrors, context } = await boot('/channels/4001/5004', { deepIndex: ['5004'], indexingOnce: ['5004'], viewport: { width: 1280, height: 600 } });
+    await page.click('[data-act="scan"]');
+    await heroAt(page, 'indexing/icon', 6000);
+    assert(await text(page, '[data-role="count-label"]') === 'still searching', `label ${await text(page, '[data-role="count-label"]')}`);
+    const st = await statusParts(page);
+    assert(st.words === 'Discord is still searching~ count again in a minute' && st.tone === 'calm', `footer ${JSON.stringify(st)}`);
+    const c = await ringClearance(page);
+    assert(c.label >= 5, `the label clears the arc ${JSON.stringify(c)}`);
+    assert(!/indexing/i.test(await seenText(page)), 'Discord\'s word stays in the log');
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+});
+
+await test('T201 the footer names the next step: numbers, "immune" and "paused" said at most twice', async () => {
+  {
+    const { page, pageErrors, context } = await bootPaced('/channels/4001/5001', { deleteMs: 150 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /40 messages found/);
+    assert(await srNow(page) === '40 messages found. ', `heard ${await srNow(page)}`);
+    assert((await statusParts(page)).words === "Counted~ press Purify when you're ready", `footer ${await status(page)}`);
+    const counted = await seenText(page);
+    assert(times(counted, /\b40\b/g) <= 2, `"40" ${times(counted, /\b40\b/g)} times: ${counted}`);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 2);
+    await page.click('[data-act="pause"]');
+    await untilStatus(page, /^Resume picks up right here~$/);
+    assert(await text(page, '[data-role="eyebrow-text"]') === 'Paused', `eyebrow ${await text(page, '[data-role="eyebrow-text"]')}`);
+    const paused = await seenText(page);
+    assert(times(paused, /paused/gi) <= 2, `"paused" ${times(paused, /paused/gi)} times: ${paused}`);
+    await page.click('[data-act="stop"]');
+    await waitEnd(page);
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    const { page, pageErrors, context } = await boot('/channels/@me/3001');
+    await untilStatus(page, /^Open another chat to purify~$/);
+    assert(await srNow(page) === '⁨Bardo⁩ is immune. ', `heard ${await srNow(page)}`);
+    assert(/Bardo & Dopa made the purifier/.test(await text(page, '[data-role="readout-line"]')), `readout ${await text(page, '[data-role="readout-line"]')}`);
+    assert(await text(page, '[data-role="eyebrow-text"]') === 'Direct message', `eyebrow ${await text(page, '[data-role="eyebrow-text"]')}`);
+    const immune = await seenText(page);
+    assert(times(immune, /immune/gi) <= 2, `"immune" ${times(immune, /immune/gi)} times: ${immune}`);
+    assert(await page.locator('.target .shield-btn').getAttribute('title') === 'Immune ♡ tap to remove the shield', 'the shield says tap, like the readout');
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+});
+
+await test('T202 error lines a person can act on: the login, a human check, a shield that didn\'t save', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5001', { badToken: true });
+    await untilStatus(page, /^Login not working$/, 6000);
+    assert(await text(page, '[data-role="readout-line"]') === "Couldn't use your Discord login~ reload Discord and try again", `readout ${await text(page, '[data-role="readout-line"]')}`);
+    await context.close();
+  }
+  {
+    const { page, pageErrors, context } = await bootProbe('/channels/4001/5001', ['emit', 'state']);
+    await endAs(page, { error: 'Discord wants a human check — take a break before trying again', errorStatus: 400, errorCode: 'captcha' });
+    await heroAt(page, 'done/count');
+    assert(await text(page, '[data-role="readout-line"]') === "Discord wants to check you're human~ take a break, then press Purify to finish", `readout ${await text(page, '[data-role="readout-line"]')}`);
+    assert(await text(page, '[data-role="mood"]') === 'taking a break, princess~', `mood ${await text(page, '[data-role="mood"]')}`);
+    assert((await statusParts(page)).words === 'Discord wants a human check', `footer ${await status(page)}`);
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    const { page, pageErrors, context } = await boot('/channels/@me/3002', { world: buildWorld({ names: 'long' }) });
+    // Discord's storage full to the brim: the shield can't be saved.
+    await page.evaluate(() => {
+      for (const size of [1e6, 1e5, 1e4, 1e3, 100, 10, 1]) {
+        try { for (let i = 0; ; i++) localStorage.setItem(`fill-${size}-${i}`, 'x'.repeat(size)); } catch {}
+      }
+    });
+    await page.click('.target .shield-btn');
+    await untilStatus(page, /^Couldn't save~/);
+    assert(plainWords(await status(page)) === "Couldn't save~ Alice the Magnificent Wanderer ✿ isn't immune yet", `footer ${await status(page)}`);
+    const fit = await page.evaluate(() => {
+      const t = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]');
+      return { whole: t.scrollHeight <= t.clientHeight + 1, lines: Math.round(t.clientHeight / 16) };
+    });
+    assert(fit.whole && fit.lines <= 2, `the line is cut short ${JSON.stringify(fit)}`);
+    await page.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('fill-')) localStorage.removeItem(k); });
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+});
+
+await test('T203 while purifying, the footer never shows a message, and comes back after a wait', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5002', { latencyMs: 20 });
+  let n = 0;
+  await page.route(/\/api\/v9\/channels\/5002\/messages\/\d+$/, (route) => (route.request().method() !== 'DELETE' || ++n !== 3 ? route.fallback()
+    : route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ message: 'You are being rate limited.', retry_after: 1, global: false }) })));
+  await noteLines(page);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilStatus(page, /^Taking a breather~/, 6000);
+  await untilStatus(page, /^Purifying~ you can minimise me/, 6000);
+  await waitEnd(page);
+  const lines = await linesSeen(page);
+  assert(lines.some((l) => /^Purifying~ you can minimise me/.test(l)), `lines ${JSON.stringify(lines)}`);
+  assert(!lines.some((l) => /Deleted|"|chatter|message #/.test(l)), `a message reached the footer: ${JSON.stringify(lines)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T204 in a batch a 100-character name never hides the progress', async () => {
+  const { page, pageErrors, context } = await bootPaced('/channels/@me', { deleteMs: 120, world: buildWorld({ names: 'long' }) });
+  await pickBatch(page, ['c:5001']);
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /^Counted~/, 8000);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.waitForFunction(() => / 4 of 40 /.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent.replace(/ /g, ' ')), null, { timeout: 10000 });
+  const r = await page.evaluate(() => {
+    const t = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]');
+    const node = t.firstChild;
+    const at = node.nodeValue.indexOf('of 40');
+    const range = document.createRange();
+    range.setStart(node, Math.max(0, at - 3));
+    range.setEnd(node, at + 5);
+    const a = range.getBoundingClientRect(), b = t.getBoundingClientRect();
+    return { text: node.nodeValue, inside: a.right <= b.right + 0.5 && a.left >= b.left - 0.5 && a.bottom <= b.bottom + 0.5 };
+  });
+  assert(r.inside && /^Chat 1 of 1 · \d+ of 40 · /.test(r.text.replace(/ /g, ' ')), `progress ${JSON.stringify(r)}`);
+  await page.click('[data-act="stop"]');
+  await waitEnd(page);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T205 This chat during a batch names the chat being purified, and the one on screen', async () => {
+  const { page, pageErrors, context } = await bootPaced('/channels/4001/5001', { deleteMs: 150 });
+  await pickBatch(page, ['c:3002', 'c:3004']);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.click('.tab[data-tab="current"]');
+  await page.waitForFunction(() => /^Purifying · chat 1 of 2$/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="eyebrow-text"]').textContent.replace(/ /g, ' ')), null, { timeout: 4000 });
+  const card = await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    const viewing = r.querySelector('[data-role="target-viewing"]');
+    return { name: r.querySelector('[data-role="target-name"]').textContent, viewing: viewing.hidden ? '' : viewing.textContent };
+  });
+  assert(card.name !== 'general' && /Alice|Carol|group/i.test(card.name), `the card names ${JSON.stringify(card)}`);
+  assert(card.viewing === 'viewing general', `viewing ${JSON.stringify(card)}`);
+  await page.click('[data-act="stop"]');
+  await waitEnd(page, 10000);
+  assert(await text(page, '[data-role="target-name"]') === 'general', 'after the run the card is the chat on screen again');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T263 people updating from 4.1 keep their shields and see what changed, once', async () => {
+  const blob = { x: 120, y: 90, open: true, muted: false, tab: 'current', welcomed: true, protectedIds: ['2002'], released: [] };
+  const { page, pageErrors, context } = await boot('/channels/@me/3003', { prefs: blob });
+  assert(await page.locator('[data-role="welcome"]').isHidden(), 'no welcome for someone updating');
+  const note = await statusParts(page);
+  assert(note.words === 'New look~ Purify counts first, then you hold to confirm' && note.flair === ' ♡', `note ${JSON.stringify(note)}`);
+  await goTo(page, '/channels/@me/3004');
+  await page.waitForFunction(() => /Ready to purify/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent), null, { timeout: 4000 });
+  await page.waitForTimeout(400); // the prefs save settles
+  await reboot(page);
+  assert(!/New look/.test(await status(page)), `shown again after a reload: ${await status(page)}`);
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"].row-immune');
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('dopa-purifier:prefs')));
+  assert(stored.protectedIds.includes('2002') && stored.x === 120 && typeof stored.seenVersion === 'string', `prefs ${JSON.stringify(stored)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T264 a batch where only a chat you can\'t read was picked purges nothing, and says so plainly', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001');
+  await pickBatch(page, ['c:5007']);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page, 15000);
+  assert(await text(page, '[data-role="hero-sub"]') === "Nothing purged~ 1 chat you can't read", `verdict "${await text(page, '[data-role="hero-sub"]')}"`);
+  assert(await text(page, '[data-role="mood"]') === 'one door stayed locked~', `mood ${await text(page, '[data-role="mood"]')}`);
+  assert((await statusParts(page)).tone === 'warn', 'nothing purged needs the person');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T265 Many chats says Purifying again~ on resume, and its numbers lead each line', async () => {
+  const { page, pageErrors, context } = await bootPaced('/channels/4001/5001', { deleteMs: 120 });
+  await pickBatch(page, ['c:3002']);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.waitForFunction(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent) >= 2);
+  await page.click('[data-act="pause"]');
+  await untilStatus(page, /^Resume picks up right here~$/);
+  await page.click('[data-act="resume"]');
+  const again = await statusParts(page);
+  assert(again.words === 'Purifying again~' && again.flair === ' ✨' && again.tone === 'info', `resumed ${JSON.stringify(again)}`);
+  await page.waitForFunction(() => /^Chat 1 of 1 · \d+ of \d+ · /.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent.replace(/ /g, ' ')), null, { timeout: 4000 });
+  await page.click('[data-act="stop"]');
+  await waitEnd(page);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T266 a group DM purged clean says Discord\'s own notices stay, and the log names the kind', async () => {
+  const { page, pageErrors, context } = await boot('/channels/@me/3004');
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  assert(await text(page, '[data-role="readout-line"]') === "All clean~ only Discord's own notices stay ✨", `verdict "${await text(page, '[data-role="readout-line"]')}"`);
+  assert(/kept a member-added notice — Discord doesn't let anyone delete those/.test(await logText(page)), 'the log names what stayed');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T267 a batch Discord is still searching ends calmly with when to come back', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001', { deepIndex: ['5002'] });
+  await pickBatch(page, ['c:5002']);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page, 15000);
+  assert(await text(page, '[data-role="hero-sub"]') === 'Discord may find older ones later~', `verdict "${await text(page, '[data-role="hero-sub"]')}"`);
+  const done = await statusParts(page);
+  assert(done.words === '1 chat needs another go later~ Discord is still searching' && done.tone === 'calm', `footer ${JSON.stringify(done)}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });
