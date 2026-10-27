@@ -66,7 +66,7 @@ async function hold(page, ms) {
   const { page, context } = await boot('/channels/4001/5001');
   await shot(page, '01-idle', await panelClip(page));
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(`/found/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`);
+  await page.waitForFunction(`/^Counted~/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`); // the number is in the .sr (D37)
   await page.waitForTimeout(500);
   await shot(page, '02-scanned', await panelClip(page));
   await page.click('[data-act="purify"]');

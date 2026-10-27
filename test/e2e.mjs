@@ -948,10 +948,10 @@ await test('T43 shields are disabled mid-purge, say why, and work again after', 
   await page.click('[data-act="pause"]');
   const row = page.locator('[data-key="c:3002"] .shield-btn');
   const card = page.locator('[data-role="target-tools"] .shield-btn');
-  for (const [what, btn] of [['row', row], ['card', card]]) {
-    assert(await btn.isDisabled(), `${what} shield disabled mid-purge`);
-    assert(/Stop purifying/.test(await btn.getAttribute('title')), `${what} title: ${await btn.getAttribute('title')}`);
-  }
+  assert(await row.isDisabled(), 'row shield disabled mid-purge');
+  assert(/Stop purifying/.test(await row.getAttribute('title')), `row title: ${await row.getAttribute('title')}`);
+  // During a run the card names the chat being purified (D39) and offers no shield at all.
+  assert(await card.count() === 0, 'no shield on the card mid-purge');
   await page.click('[data-act="resume"]');
   await waitEnd(page);
   assert(mine(world, '3002').length === 1, 'the confirmed DM was purged (only the call message stays)');
@@ -1380,7 +1380,8 @@ await test('T53 a skipped chat leaves progress honest: "N of 40", an ETA, no "+"
     await waitEnd(page);
     const end = await hero(page);
     assert(end.pct === '40 of 40', `end ${JSON.stringify(end)}`);
-    assert(/^Done in \d+s · skipped #mod-only ♡$/.test((await status(page)).replace(/[\u2068\u2069]/g, '')), `status ${await status(page)}`);
+    // D40 leaves #mod-only out before the run (the dialog lists it as skipped), so the finish is clean.
+    assert(/^Done in \d+s ♡$/.test((await status(page)).replace(/[\u2068\u2069]/g, '')), `status ${await status(page)}`);
     await context.close();
   }
   {
@@ -1576,8 +1577,8 @@ await test('T62 Batch lists that failed on the login page load once you log in',
     localStorage.setItem('dopa-purifier:prefs', JSON.stringify({ welcomed: true, tab: 'batch' }));
   });
   await injectUserscript(page, source);
-  await page.waitForFunction(() => /log in/.test(document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="server-list"]')?.textContent || ''));
-  assert(/log in/.test(await text(page, '[data-role="dm-list"]')), 'DM list says why it is empty');
+  await page.waitForFunction(() => /Discord login/.test(document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="server-list"]')?.textContent || '')); // D38's line
+  assert(/Discord login/.test(await text(page, '[data-role="dm-list"]')), 'DM list says why it is empty');
   await page.evaluate((t) => {
     localStorage.setItem('token', JSON.stringify(t));
     history.pushState({}, '', '/channels/4001/5001');
@@ -4418,6 +4419,7 @@ await test('T147 with no chat open, the one button left goes to Many chats, and 
   await page.click('.tab[data-tab="current"]');
   await page.click('a[href="/channels/4001/5001"]');
   await nameIs(page, 'general');
+  await page.waitForFunction(() => !document.querySelector('#dopa-purifier-host').shadowRoot.getAnimations().some((a) => a.effect.getTiming().iterations !== Infinity)); // the tab's glide (D50) has settled
   const pair = await footer();
   assert(pair.map((b) => b.act).join() === 'scan,purify' && pair.every((b) => b.y === none[0].y && b.h === 40), `Scan and Purify back in place ${JSON.stringify(pair)} vs ${JSON.stringify(none)}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
@@ -5342,7 +5344,7 @@ await test('T170 one word for each thing: Count, Purify and Pick, in every state
     await context.close();
   }
   for (const line of lines) sayOnlyNewWords(line, 'a footer line');
-  assert(lines.some((l) => /^Taking a breather~/.test(l)) && lines.some((l) => /^Counting 1 of 5/.test(l)) && lines.some((l) => /^Chat 1 of 5/.test(l)), `the footer lines seen: ${JSON.stringify([...new Set(lines)])}`);
+  assert(lines.some((l) => /^Taking a breather~/.test(l)) && lines.some((l) => /^Counting 1 of 5/.test(l)) && lines.some((l) => /^Chat 1 of 4/.test(l)), `the footer lines seen: ${JSON.stringify([...new Set(lines)])}`);
 });
 
 await test('T171 shared helpers: honest durations, Latin digits, a dot that never starts a line, an English panel, a spoken prefix', async () => {
@@ -7279,7 +7281,7 @@ await test('T218 the small ring in Many chats reads clean: no notches, a visible
   // The big ring in This chat keeps them.
   const env = await boot('/channels/4001/5002');
   await env.page.click('[data-act="scan"]');
-  await env.page.waitForFunction(() => /found/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
+  await env.page.waitForFunction(() => /^Counted~/.test(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status-text"]').textContent));
   assert(await env.page.locator('.dial.is-beaded').count() === 1, 'This chat keeps its notches');
   await env.context.close();
 });
