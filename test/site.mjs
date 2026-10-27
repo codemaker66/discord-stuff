@@ -105,6 +105,8 @@ await test('S3 with the script installed the page ticks itself off', async () =>
   for (const act of await page.locator('.step.is-done > .act').all()) assert(!(await act.isVisible()), 'a done step still shows its button');
   assert(await page.locator('[data-step="open"].is-next [data-role="open-link"].btn-primary').count() === 1, 'step 4 is next, its button primary');
   assert(await page.locator('.setup .btn-primary:visible').count() === 1, 'one primary button in the steps');
+  // The Install button is put away once installed, so the update answer cannot send people to it.
+  assert(!/click Install above again/.test(await page.locator('details', { hasText: 'How do updates work?' }).textContent()), 'the update answer names a button that is hidden');
   assert(await page.evaluate(() => !document.querySelector('#dopa-purifier-host')), 'no panel on the page');
   assert(errors.length === 0, errors.join('; '));
   await page.screenshot({ path: `${OUT}/installed.png` });
@@ -123,6 +125,8 @@ await test('S4 an older installed version is offered the update', async () => {
   assert(await link.isVisible() && (await link.textContent()) === 'Update now' && /btn-primary/.test(await link.getAttribute('class')), 'step 3 reads Update now, primary');
   assert((await page.locator('[data-role="install-help"]').textContent()) === `You have v4.0.0 — v${latest} is out. Press Update now ✨`, 'step 3 hint');
   assert(await page.locator('[data-step="open"].is-next').count() === 0, 'step 4 waits');
+  const faq = await page.locator('details', { hasText: 'How do updates work?' }).textContent();
+  assert(!/click Install above again/.test(faq) && /this page says so and shows Update now/.test(faq), 'the update answer names the button the page shows');
   await context.close();
 });
 
@@ -201,7 +205,7 @@ await test('S9 phones see "use your computer" first, not desktop steps', async (
     assert(!(await page.locator('.steps').isVisible()) && !(await page.locator('.picker').isVisible()), `${key}: computer steps tucked away`);
     await page.evaluate(() => { navigator.share = async (data) => { window.__shared = data; }; });
     await page.click('[data-act="send-link"]');
-    assert((await page.evaluate(() => window.__shared && window.__shared.url)) === HOME, `${key}: "Send me this link" shares the page`);
+    assert((await page.evaluate(() => window.__shared && window.__shared.url)) === HOME, `${key}: "Send it to my computer" in the note shares the page`);
     await page.click('[data-act="show-steps"]');
     assert(await page.locator('.steps').isVisible() && await page.locator('.picker').isVisible(), `${key}: steps on request`);
     assert(!(await page.locator('[data-act="show-steps"]').isVisible()), `${key}: button goes once used`);
@@ -525,12 +529,27 @@ await test('S24 phones: the first button sends the link to a computer', async ()
     await page.keyboard.press('Space');
     await page.waitForTimeout(200);
     assert((await page.evaluate(() => window.__shared && window.__shared.url)) === HOME, `${key}: Space presses it like a button`);
+    // Held Space is one press, like a button; and cancelling the share sheet says nothing.
+    await page.evaluate(() => { window.__calls = 0; navigator.share = async () => { window.__calls++; }; });
+    await cta.focus();
+    for (let i = 0; i < 5; i++) await page.keyboard.down('Space');
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(200);
+    assert((await page.evaluate(() => window.__calls)) === 1, `${key}: held Space shares once (${await page.evaluate(() => window.__calls)})`);
+    await page.evaluate(() => { document.querySelector('[data-role="toast"]').textContent = ''; navigator.share = async () => { throw new DOMException('cancelled', 'AbortError'); }; });
+    await cta.click();
+    await page.waitForTimeout(300);
+    assert((await page.locator('[data-role="toast"]').textContent()) === '', `${key}: cancelling the share sheet is not "Link copied"`);
     // No share sheet: copy the link and say where to open it.
     await page.evaluate(() => { navigator.share = undefined; });
     await cta.click();
     await page.waitForTimeout(300);
     assert((await page.evaluate(() => navigator.clipboard.readText())) === HOME, `${key}: copies without a share sheet`);
     assert((await page.locator('[data-role="toast"]').textContent()) === 'Link copied~ open it on your computer ♡', `${key}: toast`);
+    // Opening the computer steps keeps one pink button: the note's, since nothing in them can be done from a phone.
+    await page.click('[data-act="show-steps"]');
+    assert(await page.locator('.setup .btn-primary:visible').count() === 1, `${key}: one primary button in the setup`);
+    assert(await page.locator('[data-act="send-link"]').evaluate((el) => el.classList.contains('btn-primary')), `${key}: and it is "Send it to my computer"`);
     const android = page.locator('[data-role="android-only"]');
     assert((await android.isVisible()) === (key === 'android'), `${key}: Firefox-for-Android line ${key === 'android' ? 'shown' : 'hidden'}`);
     assert(errors.length === 0, errors.join('; '));
@@ -625,6 +644,20 @@ await test('S27 back from Install, step 4 comes into view (focus stays put)', as
   await plain.page.waitForTimeout(700);
   assert((await plain.page.evaluate(() => scrollY)) === 0, 'plain visit stays at the top');
   await plain.context.close();
+  // Updating from the banner at the top: it is still on screen on the way back, so the page stays there.
+  const top = await open({ ua: UA.chrome, viewport: { width: 1366, height: 768 } });
+  await withManager(top.page);
+  await top.page.evaluate(() => localStorage.setItem('test:tm', 'old'));
+  await top.page.reload();
+  await top.page.waitForSelector('.installed.is-update', { timeout: 3000 });
+  assert((await top.page.evaluate(() => scrollY)) === 0, 'outdated visit starts at the top');
+  await top.page.click('[data-role="installed-action"]');
+  await top.page.evaluate(() => localStorage.setItem('test:tm', 'latest'));
+  await comeBack(top.page);
+  await top.page.waitForSelector('[data-role="installed"]:not([hidden]):not(.is-update)', { timeout: 3000 });
+  await top.page.waitForTimeout(1200);
+  assert((await top.page.evaluate(() => scrollY)) === 0, `updating from the banner leaves the page where it is (scrollY ${await top.page.evaluate(() => scrollY)})`);
+  await top.context.close();
 });
 
 // Step numbers are measured where they are drawn: the rose circle's rows in a screenshot.
@@ -682,6 +715,21 @@ await test('S29 forced colours keep the chosen browser, every button edge and ev
     assert(parseFloat(await li.evaluate((e) => getComputedStyle(e, '::before').borderTopWidth)) >= 2, 'step circle has an edge');
   }
   await context.close();
+  // The chosen chip keeps its own fill, so its keyboard focus ring must stay visible on a light theme too.
+  for (const scheme of ['light', 'dark']) {
+    const fc = await open({ ua: UA.chrome });
+    await fc.page.emulateMedia({ forcedColors: 'active', colorScheme: scheme });
+    await bringUp(fc.page.locator('.picker'));
+    await fc.page.focus('.chip[data-browser="edge"]');
+    await fc.page.keyboard.press('Shift+Tab'); // back onto the pressed Chrome chip, by keyboard
+    const ring = await fc.page.evaluate(() => {
+      const el = document.activeElement; const s = getComputedStyle(el);
+      return { chip: el.dataset.browser, pressed: el.getAttribute('aria-pressed'), visible: el.matches(':focus-visible'), outline: s.outlineColor, width: parseFloat(s.outlineWidth), canvas: getComputedStyle(document.body).backgroundColor };
+    });
+    assert(ring.chip === 'chrome' && ring.pressed === 'true' && ring.visible, `${scheme}: focus is on the pressed chip: ${JSON.stringify(ring)}`);
+    assert(ring.width >= 2 && ring.outline !== 'rgb(239, 228, 255)' && ring.outline !== ring.canvas, `${scheme}: the focus ring shows against the page: ${JSON.stringify(ring)}`);
+    await fc.context.close();
+  }
 });
 
 // K1 (critic #2): two places at once means twice the pace Discord sees. The page says so plainly,
@@ -737,6 +785,34 @@ await test('S35 "keep chatting" comes with what makes it safe', async () => {
   await context.close();
   assert(/keep chatting while it works; messages you send after you confirm aren't touched/.test(answer), answer);
   assert(/Keep Discord open until it's done/.test(answer), 'keep Discord open');
+});
+
+// D58: the four feature cards stack in one column on a phone and sit two by two on a tablet.
+await test('S36 feature cards stack under 560px and pair up under 900px', async () => {
+  for (const [w, columns] of [[390, 1], [700, 2], [1440, 4]]) {
+    const { page, context } = await open({ ua: UA.chrome, viewport: { width: w, height: 900 } });
+    const lefts = await page.$$eval('.feature', (cards) => cards.map((c) => Math.round(c.getBoundingClientRect().left)));
+    assert(lefts.length === 4 && new Set(lefts).size === columns, `${w}px: expected ${columns} column(s) of feature cards, got ${new Set(lefts).size} (${lefts})`);
+    await context.close();
+  }
+});
+
+// D24: a live region speaks rarely. Coming back to the tab must not re-write "Installed ✓" for a screen reader to repeat.
+await test('S37 step 3 says "Installed ✓" once, not on every return to the tab', async () => {
+  const { page, context, errors } = await open({ ua: UA.chrome, withScript: userscript });
+  await page.waitForSelector('[data-role="installed"]:not([hidden])', { timeout: 3000 });
+  const help = page.locator('[data-role="install-help"]');
+  assert(/^Installed ✓/.test(await help.textContent()), 'said once');
+  await page.evaluate(() => {
+    window.__spoke = 0;
+    new MutationObserver((list) => { window.__spoke += list.length; }).observe(document.querySelector('[data-role="install-help"]'), { childList: true, characterData: true, subtree: true });
+  });
+  await comeBack(page);
+  await comeBack(page);
+  assert((await page.evaluate(() => window.__spoke)) === 0, `the live region was rewritten ${await page.evaluate(() => window.__spoke)} time(s) on tab returns`);
+  assert(/^Installed ✓/.test(await help.textContent()), 'and still says it');
+  assert(errors.length === 0, errors.join('; '));
+  await context.close();
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));

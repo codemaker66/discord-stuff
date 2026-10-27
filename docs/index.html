@@ -120,7 +120,8 @@
   .step { counter-increment: step; display: grid; grid-template-columns: 44px 1fr auto; gap: 18px; align-items: start; padding: 18px 20px; border-radius: 18px;
     scroll-margin: 24px 0; background: rgba(0, 0, 0, .22); box-shadow: inset 0 0 0 1px var(--hair); }
   .step > * { min-width: 0; }
-  .step::before { content: counter(step); width: 44px; height: 44px; margin-top: -11px; display: grid; place-items: center; border-radius: 50%; font: 800 18px/1 var(--font);
+  .step > div:not(.act) { padding-top: 11px; }
+  .step::before { content: counter(step); width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; font: 800 18px/1 var(--font);
     color: var(--rose-ink); background: var(--rose-300); box-shadow: 0 0 0 6px rgba(255, 122, 169, .1); }
   .step.is-done::before { content: '✓'; background: var(--ok); color: #082416; box-shadow: 0 0 0 6px rgba(158, 230, 192, .1); }
   .step > .act { align-self: center; }
@@ -200,7 +201,8 @@
     .setup { padding: 18px; }
     .features { grid-template-columns: 1fr; }
     .step { grid-template-columns: 36px 1fr; padding: 16px; gap: 14px; }
-    .step::before { width: 36px; height: 36px; margin-top: -7px; font-size: 16px; }
+    .step::before { width: 36px; height: 36px; font-size: 16px; }
+    .step > div:not(.act) { padding-top: 7px; }
     .step .ext { flex-direction: column; }
     .step > .act { grid-column: 1 / -1; }
     .step > .act .btn { width: 100%; }
@@ -214,6 +216,7 @@
   @media (forced-colors: active) {
     .btn, .chip, .copy { border: 1px solid ButtonText; }
     .chip[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+    .chip[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
     .step::before { border: 2px solid CanvasText; }
     .step.is-done::before { border-color: Highlight; }
   }
@@ -255,7 +258,7 @@
         <div>
           <p data-role="mobile-lead"><b>On your phone, princess? ♡</b> Discord's phone app can't wear the Purifier~ Open this page on your computer and it takes two minutes ✨</p>
           <div class="note-act">
-            <button class="btn btn-primary btn-sm" type="button" data-act="send-link">Send me this link</button>
+            <button class="btn btn-primary btn-sm" type="button" data-act="send-link">Send it to my computer</button>
             <button class="btn btn-quiet btn-sm" type="button" data-act="show-steps" aria-controls="browser-picker setup-steps" aria-expanded="true" hidden>Show the computer steps</button>
           </div>
           <p data-role="android-only" hidden>Firefox for Android works too: add Tampermonkey, then open discord.com in “Desktop site” mode.</p>
@@ -368,7 +371,7 @@
       <p><b>Many chats</b> lists every DM open in your sidebar, plus your friends. For anyone else, open the DM in Discord first (search their name, or their profile → <b>Message</b>), then use <b>This chat</b>.</p>
     </div></details>
     <details><summary>How do updates work?</summary><div>
-      <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Utilities</b> → <b>Check for userscript updates</b>, or just click Install above again.</p>
+      <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Utilities</b> → <b>Check for userscript updates</b>. When a newer version is out, this page says so and shows <b>Update now</b>.</p>
       <p>On BetterDiscord, the plugin checks each time Discord starts and asks before it updates.</p>
     </div></details>
     <details><summary>Nothing shows up in Discord — help!</summary><div>
@@ -430,15 +433,23 @@
     return 'chrome';
   }
 
+  // Phones read "use your computer" first. The computer steps wait behind a button,
+  // except on Firefox for Android, which really can run it. iPadOS Safari sends a Mac user agent,
+  // but no Mac has a touch screen, so a "Mac" with touch points is an iPad.
+  const TABLET = /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
+  const PHONE = /Android|iPhone|iPad|Mobile/.test(navigator.userAgent) || TABLET;
+  const SEND = PHONE && detect() !== 'firefox';
+
   let chosen = 'chrome';
   let installed = null; // null until the script says hello, then 'ok' or 'outdated'
 
   // One pink button at a time: step 1 until something is installed, never a paid purchase (Safari's
   // $2.99 app), and "Update now" when an older copy is found. Once it's up to date, step 4 takes over.
+  // On a phone none of the computer steps can be done, so the one pink button is "Send it to my computer".
   function paint() {
     const safari = chosen === 'safari';
-    $('[data-role="manager-link"]').className = `btn ${safari ? 'btn-quiet' : 'btn-primary'} btn-sm`;
-    $('[data-role="install-link"]').className = `btn ${safari || installed === 'outdated' ? 'btn-primary' : 'btn-quiet'} btn-sm`;
+    $('[data-role="manager-link"]').className = `btn ${safari || SEND ? 'btn-quiet' : 'btn-primary'} btn-sm`;
+    $('[data-role="install-link"]').className = `btn ${(safari && !SEND) || installed === 'outdated' ? 'btn-primary' : 'btn-quiet'} btn-sm`;
     $('[data-role="open-link"]').className = `btn ${installed === 'ok' ? 'btn-primary' : 'btn-quiet'} btn-sm`;
   }
 
@@ -460,12 +471,6 @@
   for (const chip of $$('.chip')) chip.addEventListener('click', () => choose(chip.dataset.browser));
   choose(detect());
 
-  // Phones read "use your computer" first. The computer steps wait behind a button,
-  // except on Firefox for Android, which really can run it. iPadOS Safari sends a Mac user agent,
-  // but no Mac has a touch screen, so a "Mac" with touch points is an iPad.
-  const TABLET = /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
-  const PHONE = /Android|iPhone|iPad|Mobile/.test(navigator.userAgent) || TABLET;
-  const SEND = PHONE && detect() !== 'firefox';
   const ICON = { get: 'M12 4v11M7 10l5 5 5-5M5 20h14', send: 'M12 15V3M7.5 7.5L12 3l4.5 4.5M5 12v7h14v-7', open: 'M7 17L17 7M9 7h8v8' };
   const stepsButton = $('[data-act="show-steps"]');
   const computerSteps = (show) => {
@@ -496,7 +501,7 @@
     share('Link copied~ open it on your computer ♡');
   });
   // A link only answers Enter; as a button it answers Space too.
-  cta.addEventListener('keydown', (e) => { if (cta.dataset.mode === 'send' && e.key === ' ') { e.preventDefault(); cta.click(); } });
+  cta.addEventListener('keydown', (e) => { if (cta.dataset.mode === 'send' && e.key === ' ') { e.preventDefault(); if (!e.repeat) cta.click(); } });
   // The button hides itself once used, so hand focus to what it opened (the chosen browser, else step 1)
   // instead of letting it fall to the top of the page.
   stepsButton.addEventListener('click', () => {
@@ -521,9 +526,11 @@
     if (!outdated) setAwaiting(null);
     installed = outdated ? 'outdated' : 'ok';
     const help = $('[data-role="install-help"]');
-    help.innerHTML = outdated
+    // Said once: a live region re-written with the same words would be read out again on every tab switch.
+    const said = outdated
       ? `You have v${version} — v${LATEST} is out. Press <b>Update now</b> ✨`
       : `Installed ✓ v${version} — you're all set, princess~`;
+    if (help.dataset.said !== said) { help.innerHTML = said; help.dataset.said = said; }
     help.classList.toggle('is-ok', !outdated);
     box.hidden = false;
     box.classList.toggle('is-update', outdated);
@@ -545,8 +552,12 @@
     cta.querySelector('path').setAttribute('d', outdated ? ICON.get : ICON.open);
     if (returning) {
       // After a reload the browser puts the old scroll position back during load, so scroll after it.
-      const reveal = () => requestAnimationFrame(() => $('[data-step="open"]').scrollIntoView({
-        block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
+      // Pressed from the banner up top? It is still on screen, so stay there.
+      const reveal = () => requestAnimationFrame(() => {
+        const r = box.getBoundingClientRect();
+        if (r.top >= 0 && r.bottom <= innerHeight) return;
+        $('[data-step="open"]').scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      });
       if (document.readyState === 'complete') reveal(); else window.addEventListener('load', reveal, { once: true });
     }
   }
@@ -561,7 +572,9 @@
   function setAwaiting(n) { try { if (n === null) sessionStorage.removeItem(AWAIT); else sessionStorage.setItem(AWAIT, String(n)); } catch {} }
   function notDetected() {
     if (document.documentElement.dataset.dopaPurifier) return; // an older copy: the update box already says so
-    $('[data-role="install-help"]').innerHTML = "Hmm, I can't see the Purifier yet~ ♡ Saw a page full of code? Add Tampermonkey first (step 1). "
+    const help = $('[data-role="install-help"]');
+    delete help.dataset.said;
+    help.innerHTML = "Hmm, I can't see the Purifier yet~ ♡ Saw a page full of code? Add Tampermonkey first (step 1). "
       + (BROWSERS[chosen].allow ? 'Already have it? Switch on <b>Allow User Scripts</b> (step 2)' : "Already have it? Make sure it's switched on")
       + ', then press <b>Install</b> again ✨';
   }
@@ -593,7 +606,8 @@
   async function share(copied = 'Link copied~ send it to a friend ♡') {
     const data = { title: "Dopa's Discord Purifier", text: 'Wipe your own Discord messages in a few clicks~ ✨', url: SHARE_URL };
     if (navigator.share && PHONE) {
-      try { await navigator.share(data); return; } catch { /* fall back to copying */ }
+      try { await navigator.share(data); return; }
+      catch (err) { if (err && err.name === 'AbortError') return; /* cancelled on purpose: say nothing; anything else falls back to copying */ }
     }
     try { await navigator.clipboard.writeText(SHARE_URL); toast(copied); }
     catch { toast(SHARE_URL); }
