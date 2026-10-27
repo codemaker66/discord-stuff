@@ -1,9 +1,9 @@
 # Dopa's Discord Purifier ✨
 
-Wipe every message *you* sent in a DM, group or server — gently, in a few clicks.
+Wipe *your* messages from any DM, group or server channel — gently, in a few clicks.
 Nothing else is touched.
 
-<p align="center"><img src="docs/img/purging.webp" alt="The purifier panel mid-purge next to its log window, inside Discord" width="720"></p>
+<p align="center"><img src="docs/img/purging.webp" alt="The Purifier panel at work next to its log window, inside Discord" width="720"></p>
 
 ## Get it
 
@@ -23,10 +23,10 @@ and asks before updating itself.
 
 ## What it does
 
-- **Count** any chat to see how many of your messages are in it and how long purifying takes.
+- **Purify** any chat: it counts your messages first and says how long it takes.
 - **Hold to purify** — no accidental clicks.
-- **Batch**: tick DMs, groups and server channels (threads and forum posts included), then purify them in one go.
-- **Shield** anyone and their chat is immune. Bardo is shielded from the start ♡
+- **Many chats**: pick DMs, groups and server channels (threads and forum posts included), then purify them in one go.
+- **Shield** anyone and your DM with them is immune. Bardo & Dopa are shielded from the start ♡
 - Paces itself to Discord's rate limits (about 40 messages a minute), pauses and resumes,
   and tells you honestly what was skipped.
 
@@ -44,7 +44,6 @@ npm run build   # src/ → dist/ (userscript + BetterDiscord plugin) and docs/
 npm run check   # fails if dist/ or docs/ are out of date with src/
 npm test        # end-to-end tests against a mock Discord (Playwright + Chromium)
 node test/site.mjs                                   # install-page tests
-node test/perf.mjs                                   # timing budgets, logged only (never fails)
 node test/shots.mjs dist/dopas-discord-purifier.user.js test/out/shots 2 --showcase   # every UI state, at the shipped pace
 python3 tools/marketing.py test/out/shots            # those shots → docs/img/*.webp and the og.png link preview
 ```
