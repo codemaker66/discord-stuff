@@ -1120,6 +1120,8 @@ await test('T48 a click no pointer went down for (Firefox assistive tech) confir
   assert(/Press again/.test(await label()) && await dialogOpen(page) && stats.deletes.length === 0,
     `first press only arms: ${await label()}, ${stats.deletes.length} deleted`);
   await geckoPress();
+  // The run starts a moment after the press, once this tab holds the run lock (D29).
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.run !== 'idle');
   await waitEnd(page);
   assert(stats.deletes.length === 10, `two presses purged ${stats.deletes.length}`);
   await context.close();
