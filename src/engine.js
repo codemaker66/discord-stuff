@@ -97,15 +97,20 @@
     constructor() { super('Stopped'); this.name = 'Stopped'; }
   }
 
-  function sleep(ms, signal) {
+  // wake: a window event that ends the wait early ('online': the connection is back).
+  function sleep(ms, signal, { wake } = {}) {
     return new Promise((resolve, reject) => {
       if (signal && signal.aborted) { reject(new Stopped()); return; }
-      const onAbort = () => { clearTimeout(timer); reject(new Stopped()); };
-      const timer = setTimeout(() => {
+      const done = () => {
+        clearTimeout(timer);
         if (signal) signal.removeEventListener('abort', onAbort);
-        resolve();
-      }, ms);
+        if (wake) window.removeEventListener(wake, onWake);
+      };
+      const onAbort = () => { done(); reject(new Stopped()); };
+      const onWake = () => { done(); resolve(); };
+      const timer = setTimeout(() => { done(); resolve(); }, ms);
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      if (wake) window.addEventListener(wake, onWake, { once: true });
     });
   }
 
@@ -134,19 +139,36 @@
     }
   }
 
-  // One request with Discord's retry rules: 429 → wait retry_after, 202 (search
-  // index still building) → wait and retry, 5xx/network/timeout → short backoff,
-  // 401 → re-read the token once. Returns the final Response.
-  async function request(path, { method = 'GET', body, signal, onWait, beforeRetry } = {}) {
+  // A run lasts hours, so its requests (persistent) sit out what hours bring: a dropped connection
+  // waits 2, 4 and 8 s, then every 30 s for as long as the run lasts, and Discord's outages get about
+  // 9 minutes before the run ends. Counts and lookups keep short retries and their Try again.
+  const NETWORK_WAITS = [2, 4, 8, 30]; // a run's last step repeats
+  const SERVER_WAITS = { persistent: [2, 4, 8, 30, 60, 120, 300], brief: [2, 4, 8] };
+
+  // One request with Discord's retry rules: 429 → wait retry_after, 202 (search index still building)
+  // → wait and retry, 5xx/network/timeout → backoff, 401 → re-read the token once. A run's own
+  // requests pass persistent. Returns the final Response.
+  async function request(path, { method = 'GET', body, signal, onWait, beforeRetry, persistent = false } = {}) {
     let authRetried = false;
     let networkFails = 0;
     let serverFails = 0;
     let indexWaits = 0;
+    let bareLimits = 0; // 429s in a row that name no wait: an edge-level block, so back off further
+    // Waits for the network or for Discord are left out of a run's pace, as a pause is.
+    const waitOut = async (seconds, wake) => {
+      const from = Date.now();
+      try {
+        await sleep(seconds * TIMING.waitUnitMs, signal, { wake });
+      } finally {
+        if (persistent && run.active) run.waitMs += Date.now() - from;
+      }
+    };
     for (let attempt = 0; ; attempt++) {
       if (signal && signal.aborted) throw new Stopped();
       if (attempt && beforeRetry) await beforeRetry();
       const token = run.active && run.token ? run.token : getToken();
       if (!token) throw new DiscordError(401, { message: 'No Discord login token found — are you logged in?' });
+      const lasting = persistent && run.active;
       let res;
       try {
         res = await boundedFetch(API + path, {
@@ -156,25 +178,31 @@
         }, signal);
       } catch {
         if (signal && signal.aborted) throw new Stopped();
-        if (++networkFails > 5) throw new DiscordError(0, { message: 'Network unreachable' });
-        const seconds = 2 ** networkFails;
-        if (onWait) onWait({ kind: 'network', seconds });
-        await sleep(seconds * 1000, signal);
+        networkFails++;
+        if (!lasting && networkFails > 5) throw new DiscordError(0, { message: 'Network unreachable' });
+        const seconds = lasting ? NETWORK_WAITS[Math.min(networkFails, NETWORK_WAITS.length) - 1] : 2 ** networkFails;
+        // A blip is a hiccup; from the third miss in a row, a browser that knows it is offline says so.
+        const offline = lasting && networkFails >= 3 && navigator.onLine === false;
+        if (onWait) onWait({ kind: offline ? 'offline' : 'network', seconds });
+        await waitOut(seconds, 'online');
         continue;
       }
       if (res.status === 429) {
         const data = await readJson(res);
-        const seconds = Number(data && data.retry_after) || Number(res.headers.get('retry-after')) || 5;
+        const asked = Number(data && data.retry_after) || Number(res.headers.get('retry-after'));
+        bareLimits = asked ? 0 : bareLimits + 1;
+        const seconds = asked || (bareLimits >= 3 ? Math.min(600, 10 * 2 ** (bareLimits - 3)) : 5);
         if (onWait) onWait({ kind: 'rate', seconds, method });
-        await sleep(seconds * 1000 + 150, signal);
+        await sleep(seconds * TIMING.waitUnitMs + 150, signal);
         continue;
       }
+      bareLimits = 0;
       if (res.status === 202) {
         const data = await readJson(res);
         if (++indexWaits > 8) throw new DiscordError(202, { message: 'Discord is still indexing this channel — try again in a minute' });
         const seconds = Number(data && data.retry_after) || 2;
         if (onWait) onWait({ kind: 'index', seconds });
-        await sleep(seconds * 1000, signal);
+        await sleep(seconds * TIMING.waitUnitMs, signal);
         continue;
       }
       if (res.status === 401 && !authRetried) {
@@ -191,13 +219,18 @@
       }
       if (res.status === 400) {
         const data = await readJson(res.clone());
-        if (data && data.captcha_key) throw new DiscordError(400, { message: 'Discord wants a captcha — finish it in the app, then try again', code: 'captcha' });
+        if (data && data.captcha_key) throw new DiscordError(400, { message: 'Discord wants a human check — take a break before trying again', code: 'captcha' });
       }
-      if (res.status >= 500 && ++serverFails <= 3) {
-        const seconds = 2 ** serverFails;
-        if (onWait) onWait({ kind: 'server', seconds });
-        await sleep(seconds * 1000, signal);
-        continue;
+      if (res.status >= 500) {
+        const steps = lasting ? SERVER_WAITS.persistent : SERVER_WAITS.brief;
+        if (serverFails < steps.length) {
+          const seconds = steps[serverFails++];
+          if (onWait) onWait({ kind: 'server', seconds });
+          await waitOut(seconds);
+          continue;
+        }
+        // Discord's trouble, not this message's: the run ends here rather than call it a failure.
+        if (lasting) throw new DiscordError(res.status, await readJson(res));
       }
       return res;
     }
@@ -247,8 +280,8 @@
       .map((c) => ({ ...c, categoryName: categories.has(c.parent_id) ? categories.get(c.parent_id).name : '' }));
   }
 
-  function routeTarget() {
-    const m = location.pathname.match(/^\/channels\/(@me|\d+)\/(\d+)/);
+  function routeTarget(path = location.pathname) {
+    const m = path.match(/^\/channels\/(@me|\d+)\/(\d+)/);
     if (!m) return null;
     return { guildId: m[1] === '@me' ? null : m[1], channelId: m[2] };
   }
@@ -296,6 +329,7 @@
       return {
         channelId: channel.id,
         guildId: null,
+        channelType: channel.type,
         partner: dmPartner(channel),
         kind: channel.type === 3 ? 'group' : 'dm',
         name: dmTitle(channel),
@@ -311,6 +345,7 @@
     return {
       channelId: channel.id,
       guildId: route.guildId,
+      channelType: channel.type, // Discord's own number: text, voice, forum… (the dialog names what's included)
       kind: 'guild',
       name: `#${channel.name || channel.id}`,
       context: guildName,
@@ -323,17 +358,19 @@
   const snowflake = (id) => BigInt(id);
   const oldestId = (messages) => messages.reduce((min, m) => (snowflake(m.id) < snowflake(min) ? m.id : min), messages[0].id);
 
-  async function searchPage(target, authorId, { maxId, signal, onWait } = {}) {
+  // A run's searches stop at its cut-off, so what you send after confirming is neither counted nor found.
+  async function searchPage(target, authorId, { maxId, signal, onWait, persistent } = {}) {
     const params = new URLSearchParams({ author_id: authorId, sort_by: 'timestamp', sort_order: 'desc' });
     if (target.guildId) {
       params.set('channel_id', target.channelId);
       params.set('include_nsfw', 'true');
     }
-    if (maxId) params.set('max_id', maxId);
+    const below = maxId || (run.active ? run.capId : null);
+    if (below) params.set('max_id', below);
     const path = target.guildId
       ? `/guilds/${target.guildId}/messages/search?${params}`
       : `/channels/${target.channelId}/messages/search?${params}`;
-    const data = await getJson(path, { signal, onWait });
+    const data = await getJson(path, { signal, onWait, persistent });
     const found = (data.messages || []).map((group) => group.find((m) => m.hit) || group[0]).filter(Boolean);
     return {
       total: Number(data.total_results) || 0,
@@ -343,19 +380,19 @@
     };
   }
 
-  async function historyPage(target, before, { signal, onWait } = {}) {
+  async function historyPage(target, before, { signal, onWait, persistent } = {}) {
     const query = before ? `?limit=100&before=${before}` : '?limit=100';
-    const page = await getJson(`/channels/${target.channelId}/messages${query}`, { signal, onWait });
+    const page = await getJson(`/channels/${target.channelId}/messages${query}`, { signal, onWait, persistent });
     return Array.isArray(page) ? page : [];
   }
 
   // Count my deletable messages in a target. Search answers in one request; DMs
   // whose search is unavailable fall back to walking the whole history.
-  async function countMine(target, { signal, onWait, onProgress, searchOnly = false } = {}) {
+  async function countMine(target, { signal, onWait, onProgress, searchOnly = false, persistent = false } = {}) {
     if (!run.active) syncAccount();
     const me = await whoAmI();
     try {
-      const { total, indexing } = await searchPage(target, me.id, { signal, onWait });
+      const { total, indexing } = await searchPage(target, me.id, { signal, onWait, persistent });
       if (signal && signal.aborted) throw new Stopped();
       if (indexing) partialCounts.add(target.channelId);
       else partialCounts.delete(target.channelId);
@@ -367,7 +404,7 @@
     let scanned = 0;
     let before = null;
     for (;;) {
-      const page = await historyPage(target, before, { signal, onWait });
+      const page = await historyPage(target, before, { signal, onWait, persistent });
       if (!page.length) {
         partialCounts.delete(target.channelId);
         return count;
@@ -409,8 +446,11 @@
     startedAt: 0,
     pausedMs: 0,
     pausedAt: 0,
+    waitMs: 0,         // time spent waiting out the network or a Discord outage: no more pace than a pause
     firstAt: 0,        // when the first message was handled: the pace is measured from there
     pausedAtFirst: 0,  // pausedMs at that moment, so pauses after it don't count as pace
+    waitAtFirst: 0,    // and waitMs then
+    capId: '0',        // the newest id a run may touch: what was sent before the person confirmed
     deleteDelay: TIMING.deleteDelayMs,
     calm: 0,
     seen: new Set(),
@@ -429,7 +469,7 @@
     const now = run.paused ? run.pausedAt : Date.now();
     const prior = run.deleteDelay + 250;
     const perMessage = done >= 3 && run.firstAt
-      ? Math.max(1, now - run.firstAt - (run.pausedMs - run.pausedAtFirst)) / (done - 1) : prior;
+      ? Math.max(1, now - run.firstAt - (run.pausedMs - run.pausedAtFirst) - (run.waitMs - run.waitAtFirst)) / (done - 1) : prior;
     const remaining = run.total ? Math.max(0, run.total - done) : 0;
     const honest = run.total > 0 && run.uncounted <= 0;
     return {
@@ -442,7 +482,7 @@
       etaSeconds: honest ? (remaining * perMessage) / 1000 : null,
       partial: run.uncounted > 0,
       rate: done >= 3 ? 1000 / perMessage : 0,
-      elapsedMs: Math.max(0, now - run.startedAt - run.pausedMs),
+      elapsedMs: Math.max(0, now - run.startedAt - run.pausedMs - run.waitMs),
     };
   }
 
@@ -450,6 +490,7 @@
     if (!run.firstAt && processed() >= 1) {
       run.firstAt = Date.now();
       run.pausedAtFirst = run.pausedMs;
+      run.waitAtFirst = run.waitMs;
     }
     emit('progress', progressSnapshot());
   }
@@ -479,8 +520,11 @@
   class Shielded extends Error {}
   const checkShield = (target) => { if (isProtectedUser(target.partner)) throw new Shielded(); };
 
+  // Sent after the person confirmed: not part of what they agreed to, so not touched or counted.
+  const afterCap = (msg) => snowflake(msg.id) > snowflake(run.capId);
+
   async function handleMessage(target, msg, signal) {
-    if (run.seen.has(msg.id)) return;
+    if (afterCap(msg) || run.seen.has(msg.id)) return;
     run.seen.add(msg.id);
     if (UNDELETABLE_TYPES.has(msg.type)) {
       run.skipped++;
@@ -499,7 +543,7 @@
       return;
     }
     const res = await request(`/channels/${where}/messages/${msg.id}`, {
-      method: 'DELETE', signal, onWait: onWaitFor(target), beforeRetry: async () => { await gate(signal); checkShield(target); },
+      method: 'DELETE', signal, persistent: true, onWait: onWaitFor(target), beforeRetry: async () => { await gate(signal); checkShield(target); },
     });
     const body = res.ok ? null : await readJson(res);
     if (res.status === 404 && body && body.code === 10008) {
@@ -547,8 +591,9 @@
       let fresh = 0;
       for (;;) {
         await gate(signal);
-        const page = await searchPage(target, me.id, { maxId, signal, onWait });
-        const { hits, cursor } = page;
+        const page = await searchPage(target, me.id, { maxId, signal, onWait, persistent: true });
+        const { cursor } = page;
+        const hits = page.hits.filter((m) => !afterCap(m));
         if (page.indexing) indexing = true;
         if (!cursor) {
           // An empty page can be a hiccup in Discord's index; believe it the second time.
@@ -567,9 +612,9 @@
       // One cheap look at the newest page catches anything the index added mid-run.
       if (!fresh) break;
       await gate(signal);
-      const top = await searchPage(target, me.id, { signal, onWait });
+      const top = await searchPage(target, me.id, { signal, onWait, persistent: true });
       if (top.indexing) indexing = true;
-      if (!top.hits.some((m) => !run.seen.has(m.id))) break;
+      if (!top.hits.some((m) => !afterCap(m) && !run.seen.has(m.id))) break;
       await sleep(TIMING.searchDelayMs, signal);
     }
     return { indexing };
@@ -581,7 +626,7 @@
     let before = null;
     for (;;) {
       await gate(signal);
-      const page = await historyPage(target, before, { signal, onWait });
+      const page = await historyPage(target, before, { signal, onWait, persistent: true });
       if (!page.length) return {};
       for (const msg of page) {
         if (msg.author && msg.author.id === me.id) await handleMessage(target, msg, signal);
@@ -601,7 +646,9 @@
     else counts.set(target.channelId, left);
   }
 
-  const fatalError = (err) => err.status === 401 || err.code === 'captcha';
+  // What ends a whole run rather than one chat: logged out, a captcha, or Discord out of reach for longer
+  // than a run waits (the next chat could only meet the same).
+  const fatalError = (err) => err.status === 401 || err.code === 'captcha' || err.status === 0 || err.status >= 500;
 
   // targets: [{ channelId, guildId, name, context, kind, protected, userId?, needsDM? }]
   async function startRun(targets) {
@@ -611,7 +658,9 @@
       active: true, paused: false, stopping: false, controller: new AbortController(),
       token: getToken(), accountSwitched: false,
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [], shielded: [],
-      startedAt: Date.now(), pausedMs: 0, pausedAt: 0, firstAt: 0, pausedAtFirst: 0,
+      startedAt: Date.now(), pausedMs: 0, pausedAt: 0, waitMs: 0, firstAt: 0, pausedAtFirst: 0, waitAtFirst: 0,
+      // Discord's ids begin with the time they were made: anything newer was sent after this confirm.
+      capId: String((BigInt(Date.now()) - 1420070400000n) << 22n),
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: 0,
       uncounted: 0,
@@ -641,7 +690,7 @@
     const { signal } = run.controller;
     emit('start', { targets });
     tick();
-    let fatal = switched ? new DiscordError(0, { message: 'You switched Discord accounts — scan again first' }) : null;
+    let fatal = switched ? new DiscordError(0, { message: 'You switched Discord accounts — count again first' }) : null;
     try {
       if (fatal) throw fatal;
       await whoAmI();
@@ -662,7 +711,7 @@
         const before = counts.get(target.channelId);
         try {
           if (target.needsDM) {
-            const dm = await openDM(target.userId, { signal, beforeRetry: async () => { await gate(signal); checkShield(target); } });
+            const dm = await openDM(target.userId, { signal, persistent: true, beforeRetry: async () => { await gate(signal); checkShield(target); } });
             const previousKey = target.key;
             target.channelId = dm.id;
             target.needsDM = false;
@@ -675,7 +724,7 @@
           if (target.uncounted && !counts.has(target.channelId)) {
             // A cheap search count only; history targets find their total as they go.
             try {
-              const n = await countMine(target, { signal, onWait: onWaitFor(target), searchOnly: true });
+              const n = await countMine(target, { signal, onWait: onWaitFor(target), searchOnly: true, persistent: true });
               counts.set(target.channelId, n);
               if (!partialCounts.has(target.channelId)) counted(target, n);
               tick();
@@ -720,8 +769,13 @@
           }
           // A skipped chat is settled too, or every later chat would show "N of M+" with no ETA.
           counted(target, done(target));
+          if (fatalError(err)) {
+            // The run ends here as a Stop would: the count says what is left, so Purify picks it up.
+            settleCount(target, before);
+            fatal = err;
+            break;
+          }
           counts.delete(target.channelId);
-          if (fatalError(err)) { fatal = err; break; }
           run.problems.push({ target, reason: err.message });
           emit('target-end', { target, index: i, ok: false, error: err.message });
           emit('log', { tone: 'error', text: `${target.name}: ${err.message} — skipping` });
@@ -740,7 +794,7 @@
       // the time is the run's own, pauses left out.
       emit('end', {
         stopped, error: fatal ? fatal.message : null, errorStatus: fatal ? fatal.status : null, errorCode: fatal ? fatal.code : null,
-        elapsedMs: Math.max(0, Date.now() - run.startedAt - run.pausedMs), ...progressSnapshot(),
+        elapsedMs: Math.max(0, Date.now() - run.startedAt - run.pausedMs - run.waitMs), ...progressSnapshot(),
         failures: run.failures.slice(), problems: run.problems.slice(), shielded: run.shielded.map((t) => t.name),
       });
       if (run.accountSwitched) syncAccount(); // now idle: adopt the new account and reset

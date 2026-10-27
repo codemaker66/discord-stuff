@@ -333,6 +333,9 @@
 .target[data-state="blocked"] .eyebrow { color: var(--crim-300); }
 /* The group glyph is ink like '#' and '@'; only an immune chat's shield is gold. */
 .target:not([data-state="immune"]) .target-ico .ico { color: inherit; }
+/* Between chats the last one dims for a moment and takes no clicks, until the new one is read. */
+.layer[data-switching][data-tab="current"] :is(.hero, .target) { opacity: .55; transition: opacity .12s ease-out; }
+.layer[data-switching][data-tab="current"] :is(.target, .foot .actions) { pointer-events: none; }
 
 /* ── batch lists ───────────────────────────────────────── */
 

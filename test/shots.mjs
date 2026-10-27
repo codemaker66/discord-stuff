@@ -26,8 +26,8 @@ async function boot(path, opts = {}) {
   // Presentation only: soften the mock chat behind the panel (its test strings contain literal tags).
   await env.page.addStyleTag({ content: '.chat .txt, .chat .who { color: transparent !important; text-shadow: 0 0 7px rgba(219,222,225,.55); } .chat .ts { display: none; }' });
   await env.page.addScriptTag({ content: source });
-  await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' });
-  await env.page.waitForFunction(`${sr}.querySelector('[data-role="target-name"]').textContent !== 'finding this chat…'`);
+  await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' }); // it boots once the page is idle
+  await env.page.waitForFunction(`${sr}.querySelector('[data-role="target-name"]').textContent !== 'finding this chat…' && ${sr}.querySelector('.panel').getAnimations().length === 0`);
   await env.page.waitForTimeout(700);
   return env;
 }

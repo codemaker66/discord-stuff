@@ -117,8 +117,8 @@
     } catch { return {}; }
   }
 
-  function loadPrefs() {
-    const saved = withStorage(readStored);
+  // saved: what boot read from storage (null when storage is blocked).
+  function loadPrefs(saved) {
     if (!saved) return;
     if (Number.isFinite(saved.x)) prefs.x = saved.x;
     if (Number.isFinite(saved.y)) prefs.y = saved.y;
@@ -154,9 +154,8 @@
     writePrefs();
   }
 
-  // Pull in shields set in any tab. Returns whether anything changed.
-  function syncProtection() {
-    const saved = withStorage(readStored);
+  // Pull in shields set in any tab (or the ones boot just read). Returns whether anything changed.
+  function syncProtection(saved = withStorage(readStored)) {
     if (!saved) return false; // storage blocked: keep this tab's own shields
     const ids = stringList(saved.protectedIds);
     const released = stringList(saved.released);
@@ -176,6 +175,29 @@
       ls.setItem(PREFS_KEY, JSON.stringify(stored));
       return true;
     }) === true;
+  }
+
+  // A run's journal lets a reload or a closed laptop keep its place: whose run it was, and which chats
+  // it still had to do, by id. No names, counts or message text, and it lapses after a day. It has its
+  // own key, so onStorage never mistakes it for a shield.
+  const JOURNAL_KEY = 'dopa-purifier:journal';
+  const JOURNAL_TTL_MS = 24 * 60 * 60 * 1000;
+
+  function readJournal(ls) {
+    try {
+      const j = JSON.parse(ls.getItem(JOURNAL_KEY));
+      if (!j || j.v !== 1 || typeof j.user !== 'string' || !['current', 'batch'].includes(j.mode) || !Number.isFinite(j.at)) return null;
+      return {
+        v: 1, user: j.user, mode: j.mode, at: j.at, state: j.state === 'stopped' ? 'stopped' : 'running',
+        chat: j.chat && typeof j.chat.id === 'string' ? { id: j.chat.id } : null,
+        keys: stringList(j.keys), guilds: stringList(j.guilds),
+      };
+    } catch { return null; }
+  }
+
+  // null removes it. A write that fails costs nothing: the journal only ever helps.
+  function storeJournal(j) {
+    withStorage((ls) => (j ? ls.setItem(JOURNAL_KEY, JSON.stringify(j)) : ls.removeItem(JOURNAL_KEY)));
   }
 
   // ── Sound ───────────────────────────────────────────────
@@ -247,6 +269,8 @@
     runTargets: [],
     batchRows: new Map(), // key → row
     selected: new Set(),  // row keys
+    runCounted: new Set(), // chat ids whose count a finished run wrote (the purge itself, not a Count)
+    leftSince: new Set(),  // chats left since the route was last read (the panel rests while minimised)
     guildsLoaded: false,
     dmsLoaded: false,
     guildsLoading: false,
@@ -875,31 +899,94 @@
   // until a Try again reads it.
   const blockedHere = (t) => (scanFailed(t) && state.scanError.blocking) || (!!t && describeFailed() && !!state.targetPlain && state.targetPlain.blocking);
 
+  // Lines the footer says once, when it next comes to rest: why a dialog went away, or what a run cut
+  // short last time left behind. resume: { mode, chatId, left, told }, from the journal.
+  const notes = { moved: false, resume: null };
+
+  // What the footer says when it comes to rest: a note waiting for this moment, else that it's ready.
+  // Returns setStatus's arguments.
+  function restingStatus() {
+    const live = routeTarget();
+    if (notes.moved) { notes.moved = false; return ['Moved chats~ nothing purged', 'calm']; }
+    const r = notes.resume;
+    if (r && r.mode === 'batch') {
+      notes.resume = null;
+      return [`${plural(r.left, 'chat')} left from last time~ Purify selected finishes them`, 'info'];
+    }
+    if (r && live && live.channelId === r.chatId) {
+      notes.resume = null;
+      return ['Cut short last time~ Purify picks up the rest', 'info'];
+    }
+    if (r && !r.told) {
+      r.told = true;
+      // The journal keeps ids only: the name comes from the lists, when they know it.
+      const row = state.batchRows.get(`c:${r.chatId}`);
+      return [`Cut short last time in ${row ? iso(row.name) : 'a chat'}~ open it and press Purify`, 'info'];
+    }
+    return [live ? 'Ready to purify~' : 'Ready when you are~', 'info', { flair: '✨' }];
+  }
+
+  // A run's verdict, and the count it wrote, last for the visit they were seen on: back on that chat,
+  // Purify counts again instead of resting on an "all clean" that new messages made untrue. Counts from
+  // Count stay, so visiting a chat never clears Many chats' "all clear ✓". Returns whether any went.
+  function forgetLeftChats() {
+    let forgot = false;
+    for (const id of state.leftSince) {
+      const ended = !!lastEnd && lastEnd.key === `c:${id}`;
+      if (ended) lastEnd = null;
+      if (ended || state.runCounted.has(id)) {
+        counts.delete(id);
+        state.runCounted.delete(id);
+        forgot = true;
+      }
+    }
+    state.leftSince.clear();
+    return forgot;
+  }
+
   let describeSeq = 0;
+  let switchTimer = 0;
   async function refreshRoute({ keepScan = false, keepStatus = false } = {}) {
     const route = routeTarget();
     const key = route ? route.channelId : '';
-    if (state.route && route && state.route.channelId === key && !describeFailed()) return;
+    // Leaving a chat mid-run isn't seeing its verdict: that waits for when you come back.
+    if (state.route && state.route.channelId !== key && !run.active) state.leftSince.add(state.route.channelId);
+    const forgot = forgetLeftChats();
+    if (state.route && route && state.route.channelId === key && !describeFailed()) { if (forgot) renderCurrent(); return; }
     if (!state.route && !route && state.target === null && state.targetError === 'none') return;
     if (state.scanning && state.scanKind === 'current' && !keepScan) cancelScan();
     cancelCount();
     // The footer may still be talking about the last chat (or the failed lookup); an account
     // switch re-reads the same chat and keeps its notice.
     const freshStatus = !keepStatus && (!state.target || state.target.channelId !== key || describeFailed());
+    // From one chat to another, the card dims for a moment rather than flashing "finding this chat…",
+    // which shows only if Discord takes longer than 250 ms to say what the new chat is. With no target,
+    // Purify, Count and the card do nothing meanwhile.
+    const switching = !!state.target && !!route && state.target.channelId !== key && !run.active;
     state.route = route;
     state.target = null;
     state.targetError = route ? null : 'none';
     state.targetPlain = null;
     state.scanError = null;
     const seq = ++describeSeq;
-    renderCurrent();
-    if (!route) { if (!run.active) setStatus('Ready when you are~', 'info', { flair: '✨' }); return; }
+    const layer = $('[data-role="layer"]');
+    clearTimeout(switchTimer);
+    if (switching) {
+      layer.dataset.switching = '';
+      switchTimer = setTimeout(renderCurrent, 250);
+    } else {
+      delete layer.dataset.switching;
+      renderCurrent();
+    }
+    if (!route) { if (!run.active) setStatus(...restingStatus()); return; }
     try {
       const target = await describeRoute(route);
       if (seq !== describeSeq) return; // user moved on while we were asking
       state.target = target;
-      if (target.protected && !run.active && !keepStatus) setStatus(`${target.name} is immune~`, 'immune');
-      else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~', 'info', { flair: '✨' });
+      if (target.protected && !run.active && !keepStatus) {
+        notes.moved = false;
+        setStatus(`${target.name} is immune~`, 'immune');
+      } else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus(...restingStatus());
     } catch (err) {
       if (seq !== describeSeq) return;
       // Unread, it has no name we can trust; the id would only confuse.
@@ -909,6 +996,8 @@
       addLog(`couldn't read this chat · ${err.message}`, 'error');
       setStatus(state.targetPlain.short, 'error');
     }
+    clearTimeout(switchTimer);
+    delete layer.dataset.switching;
     renderCurrent();
   }
 
@@ -1093,6 +1182,7 @@
         onProgress: ({ count, scanned }) => setStatus(`Checked ${fmt(scanned)}${SEP}${fmt(count)} of yours so far`, 'info', { quiet: true }),
       });
       counts.set(t.channelId, n);
+      state.runCounted.delete(t.channelId); // Count's own now
       if (lastEnd && lastEnd.key === `c:${t.channelId}`) lastEnd = null;
       // Measured against the address, so a chat being re-read (an account switch) still counts as here.
       const here = !state.route || state.route.channelId === t.channelId;
@@ -1141,6 +1231,7 @@
         try {
           const n = await countMine(row, { signal, onWait: showWait });
           counts.set(row.channelId, n);
+          state.runCounted.delete(row.channelId);
           grand += n;
           if (isPartialCount(row.channelId)) indexing++;
           setRowState(row, isPartialCount(row.channelId) ? 'indexing' : n ? 'ready' : 'clean');
@@ -1173,12 +1264,15 @@
     }
   }
 
-  // Short enough for the one line a running footer has, seconds included.
+  // Short enough for the one line a running footer has; a minute or more reads as minutes. Offline
+  // has no countdown: the run carries on the moment the browser is back.
   function waitText(w, s = Math.max(1, Math.ceil(w.seconds))) {
-    if (w.kind === 'rate') return `Taking a breather~ back in ${s}s`;
-    if (w.kind === 'index') return 'Discord is still indexing~ hang on…';
-    if (w.kind === 'network') return `Connection hiccup~ retrying in ${s}s`;
-    return `Discord is busy~ retrying in ${s}s`;
+    const t = s < 60 ? `${s}s` : `about ${formatDuration(s)}`;
+    if (w.kind === 'rate') return `Taking a breather~ back in ${t}`;
+    if (w.kind === 'index') return 'Discord is still searching~ hang on…';
+    if (w.kind === 'offline') return "Offline~ purifying carries on once you're back";
+    if (w.kind === 'network') return `Connection hiccup~ retrying in ${t}`;
+    return `Discord is busy~ retrying in ${t}`;
   }
 
   // Discord's own pacing, said calmly. The seconds count down here, once a second and with no
@@ -1188,7 +1282,7 @@
     const left = () => Math.max(1, Math.ceil((end - Date.now()) / 1000));
     const flair = w.kind === 'rate' ? '🦇' : '';
     setStatus(waitText(w, left()), 'calm', { flair });
-    if (w.kind === 'index' || left() <= 1) return;
+    if (w.kind === 'index' || w.kind === 'offline' || left() <= 1) return;
     waitTick = setInterval(() => {
       const s = left();
       paintStatus(waitText(w, s), 'calm', { quiet: true, flair });
@@ -1203,7 +1297,7 @@
   const PLAIN_ERRORS = [
     // First: the engine reports an account switch with status 0, like a dropped connection.
     { code: 'switched', when: (e) => /switched Discord accounts/.test(e.message), line: 'You switched Discord accounts~ stopped to be safe', short: 'Switched accounts' },
-    { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha/i.test(e.message), line: 'Discord wants a captcha~ solve it in Discord, then press Purify to finish', short: 'Discord wants a captcha' },
+    { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha|human check/i.test(e.message), line: 'Discord wants a captcha~ solve it in Discord, then press Purify to finish', short: 'Discord wants a captcha' },
     { code: 'logged-out', when: (e) => e.status === 401 || /login token/.test(e.message), line: "You're logged out of Discord~ log in, then press Try again", short: 'Logged out of Discord' },
     { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so there's nothing here to purify", short: 'No access here', blocking: true },
     { code: 'no-permission', when: (e) => e.code === 50013 || /Missing Permissions/.test(e.message), line: "Discord won't let you delete here", short: 'No permission here', blocking: true },
@@ -1265,6 +1359,7 @@
           searchOnly: true,
           onWait: (w) => { held = w; ctl.abort(); },
         }));
+        state.runCounted.delete(t.channelId);
       }
     } catch (err) {
       if (!(err instanceof Stopped)) {
@@ -1285,7 +1380,10 @@
       else if (!plain) addLog('count skipped · Discord took too long, so the purge counts as it goes', 'info');
     }
     renderCurrent();
-    const here = state.target && state.target.channelId === t.channelId && !state.target.protected;
+    // Still the chat on screen, by the address itself: a click away that the panel hasn't caught up
+    // with yet must not bring up a dialog for the chat left behind.
+    const live = routeTarget();
+    const here = !!live && live.channelId === t.channelId && !!state.target && state.target.channelId === t.channelId && !state.target.protected;
     if (!own || !here || run.active || modal || state.scanning) return { go: false };
     // A chat you can't read could only fail: say so instead of asking.
     if (plain && plain.blocking) { setStatus(plain.short, 'error'); return { go: false }; }
@@ -1298,8 +1396,11 @@
   }
 
   async function askPurgeCurrent() {
-    if (!state.target || state.target.protected || run.active || modal || state.counting || state.scanning) return;
+    if (!state.target || state.target.protected || run.active || starting || modal || state.counting || state.scanning) return;
     const t = state.target;
+    // Another tab is purifying: say so, rather than count or ask.
+    if (await runLockHeld()) { setStatus(ELSEWHERE, 'calm'); return; }
+    if (state.target !== t || run.active || starting || modal || state.counting || state.scanning) return;
     const blocked = state.scanError && state.scanError.channelId === t.channelId && state.scanError.blocking;
     if (blocked) { setStatus(state.scanError.short, 'error'); return; }
     let who;
@@ -1309,9 +1410,12 @@
       if (!counted.go) return;
       ({ who } = counted);
     }
-    // Re-read: an account switch may have reset everything meanwhile, or the person moved on.
+    // Re-read: an account switch may have reset everything meanwhile, or the person moved on (the
+    // address says so first, even before the panel has caught up).
     const now = state.target;
-    if (!now || now.channelId !== t.channelId || now.protected || run.active || modal || state.scanning || state.counting || state.tab !== 'current') return;
+    const live = routeTarget();
+    if (!now || now.channelId !== t.channelId || now.protected || run.active || starting || modal || state.scanning || state.counting || state.tab !== 'current'
+      || !live || live.channelId !== now.channelId) return;
     const n = isPartialCount(now.channelId) ? 0 : counts.get(now.channelId);
     const b = (k) => h('b', { text: fmt(k) });
     confirmDialog({
@@ -1319,6 +1423,7 @@
       lead: n === 1 ? ['This will delete your ', b(1), ' message in']
         : n ? ['This will delete all ', b(n), ' of your messages in'] : ['This will delete all your messages in'],
       pill: now,
+      channelId: now.channelId,
       who,
       confirmLabel: ['Hold to purify', '✨'],
       onConfirm: () => beginRun([{ ...now }], 'current', who),
@@ -1329,10 +1434,11 @@
   // counted yet, and that an index still being built may hold older ones. Chats Discord won't let you
   // into are listed as skipped, not counted as purged.
   async function askPurgeSelected() {
-    if (!selectedRows().length || run.active || modal) return;
+    if (!selectedRows().length || run.active || starting || modal) return;
+    if (await runLockHeld()) { setStatus(ELSEWHERE, 'calm'); return; }
     const who = await actingAs();
     const rows = selectedRows(); // re-read: an account switch clears the selection
-    if (!rows.length || run.active || modal || state.scanning) return;
+    if (!rows.length || run.active || starting || modal || state.scanning) return;
     const skipped = rows.filter(accessError);
     const counted = rows.filter((r) => !accessError(r) && r.channelId && counts.has(r.channelId));
     const known = counted.reduce((sum, r) => sum + counts.get(r.channelId), 0);
@@ -1361,8 +1467,68 @@
     });
   }
 
+  // One purge at a time in this browser: a run holds a Web Lock that every Discord tab here shares, and
+  // a tab that closes or crashes lets go of it at once. Without Web Locks, or if they fail, nothing is
+  // ever blocked. Counting stays free.
+  const RUN_LOCK = 'dopa-purifier:run';
+  const ELSEWHERE = 'Purifying in another Discord tab~ one at a time keeps your account safe';
+  let releaseRunLock = null;
+  let starting = false; // from the hold to the run's start, while the lock is asked for
+
+  async function runLockHeld() {
+    try {
+      const { held } = await navigator.locks.query();
+      return held.some((lock) => lock.name === RUN_LOCK);
+    } catch { return false; }
+  }
+
+  // Resolves true once this tab holds the lock (or there is none to hold), false if another tab has it.
+  function takeRunLock() {
+    return new Promise((resolve) => {
+      try {
+        navigator.locks.request(RUN_LOCK, { ifAvailable: true }, (lock) => {
+          if (!lock) { resolve(false); return null; }
+          resolve(true);
+          return new Promise((release) => { releaseRunLock = release; });
+        }).catch(() => resolve(true));
+      } catch { resolve(true); }
+    });
+  }
+
+  function freeRunLock() {
+    if (releaseRunLock) releaseRunLock();
+    releaseRunLock = null;
+  }
+
+  // The journal this tab knows of: its own run's, or the one boot found. Written when a run starts and
+  // as each chat finishes, never per kill.
+  let journal = null;
+  let destroying = false; // the panel going away (a plugin reload) cuts a run short; it isn't a Stop
+
+  function startJournal(targets, mode) {
+    const user = session.me && session.me.id;
+    journal = !user ? null : mode === 'current'
+      ? { v: 1, user, mode, at: Date.now(), state: 'running', chat: { id: targets[0].channelId } }
+      : {
+        v: 1, user, mode, at: Date.now(), state: 'running',
+        keys: targets.map((t) => t.key).slice(0, 500),
+        guilds: [...new Set(targets.map((t) => t.guildId).filter(Boolean))].slice(0, 500),
+      };
+    storeJournal(journal); // replaces any older one
+  }
+
   // `who` is the account the person confirmed as; the run is bound to it.
   async function beginRun(targets, mode, who) {
+    starting = true;
+    const ours = await takeRunLock();
+    starting = false;
+    if (!ours) {
+      // Another tab started first: nothing was sent, and focus goes back to Purify.
+      handFocus('[data-act="purify"]');
+      setStatus(ELSEWHERE, 'calm');
+      renderActions();
+      return;
+    }
     if (syncProtection()) protectionStale = true; // a shield from another tab; the engine honours it per chat
     state.runTargets = targets;
     state.runMode = mode;
@@ -1381,6 +1547,7 @@
       t.openedByUs = false;
       if (t.row) setRowState(t, 'queued');
     }
+    startJournal(targets, mode);
     await startRun(targets);
   }
 
@@ -1458,7 +1625,7 @@
     if (/system message/i.test(reason)) return 'system message';
     if (/archived/i.test(reason)) return 'archived thread';
     if (/Unknown Message/i.test(reason)) return 'already gone';
-    if (/captcha/i.test(reason)) return 'captcha';
+    if (/captcha|human check/i.test(reason)) return 'captcha';
     return plainError(reason).short;
   }
 
@@ -1684,6 +1851,16 @@
     return btn;
   }
 
+  // Servers holding chats a run left ticked last time open by themselves, so every tick is in view.
+  const restoredGuilds = new Set();
+  function openRestoredGuilds() {
+    for (const section of $$('.guild')) {
+      if (!restoredGuilds.delete(section.dataset.guildId)) continue;
+      const head = section.querySelector('.guild-head');
+      if (head.getAttribute('aria-expanded') !== 'true') head.click();
+    }
+  }
+
   async function loadServers({ refresh = false } = {}) {
     const list = $('[data-role="server-list"]');
     if (run.active || state.scanning) {
@@ -1700,6 +1877,7 @@
       list.replaceChildren(...(guilds.length ? guilds.map(buildGuild) : [h('div', { class: 'list-empty', text: "You're not in any servers~" })]));
       state.guildsLoaded = true;
       applyFilter();
+      openRestoredGuilds();
     } catch (err) {
       if (seq !== guildSeq) return;
       list.replaceChildren(h('div', { class: 'list-empty', text: listError('your servers', err) }));
@@ -1740,6 +1918,8 @@
           head.querySelector('[data-role="guild-meta"]').textContent = plural(rows.length, 'channel');
           applyFilter();
           syncGuildChecks();
+          // Picks restored from last time join the badge, the strip and Purify once their rows exist.
+          if (rows.some((r) => state.selected.has(r.key))) { renderHero(); renderActions(); }
         }, (err) => {
           loading = null;
           channelsEl.replaceChildren(h('div', { class: 'list-empty', text: listError(`${guild.name}'s channels`, err) }));
@@ -1825,6 +2005,11 @@
 
   function selectionChanged() {
     if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
+    // Every chat left from last time unticked: the journal has nothing more to keep.
+    if (journal && journal.keys && !run.active && !journal.keys.some((k) => state.selected.has(k))) {
+      journal = null;
+      storeJournal(null);
+    }
     syncGuildChecks();
     renderHero();
     renderActions();
@@ -1992,7 +2177,7 @@
   const ARMED_MS = 5000; // how long a first assistive press waits for the second
   const TAP_MS = 250; // a release sooner than this was a tap, not a change of mind
   const SLOP_PX = 12; // how far a finger or pen may drift off the button and still be holding it
-  let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed }
+  let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed, channelId }
   let dialogTimer = 0;
 
   // The hold button's words, each a [text, flair] pair (the line's one emoji, unspoken). The two long
@@ -2022,7 +2207,9 @@
       t.guildId && t.context ? [' ', h('span', { class: 'pill-context', text: `· ${t.context}` })] : null);
   }
 
-  function confirmDialog({ title, lead, pill, list, who, confirmLabel, onConfirm }) {
+  // channelId: the chat a This chat dialog asks about. Moving to another chat closes it (see navigated);
+  // a Many chats dialog has none and stays.
+  function confirmDialog({ title, lead, pill, list, who, confirmLabel, onConfirm, channelId = null }) {
     if (modal) return;
     const layer = $('.modal-layer');
     $('[data-role="modal-title"]').textContent = title;
@@ -2036,7 +2223,7 @@
       who && h('div', { class: 'modal-who', id: 'dp-modal-who' }, 'deleting as ', h('b', { text: `@${who}` })),
       h('div', { class: 'modal-warn', id: 'dp-modal-warn' }, h('span', {}, flaired("This can't be undone", '🩸'))),
     ].filter(Boolean));
-    modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0 };
+    modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0, channelId };
     hold.pointer = false;
     hold.sealed = false;
     clearTimeout(dialogTimer);
@@ -2586,6 +2773,12 @@
       shell.hidden = false;
       const home = homePosition();
       placeShell(home.x, home.y);
+      // Minimised, the panel rested: it reads the chat you're on now, and the lists you'd see.
+      if (routeStale && !initial) {
+        routeStale = false;
+        refreshRoute();
+        if (state.tab === 'batch') loadPendingLists();
+      }
       applyFocus();
     } else {
       cancelCount();
@@ -2709,6 +2902,7 @@
       // A run the switch stopped keeps its verdict on screen; anything else was the old account's.
       const keepVerdict = lastEnd && lastEnd.error;
       if (!keepVerdict) lastEnd = null;
+      state.runCounted.clear(); // the engine dropped every count
       state.selected.clear();
       state.batchRows.clear();
       state.dmsLoaded = false;
@@ -2833,6 +3027,32 @@
     });
     on('start', resetMilestones);
     on('progress', speakProgress);
+  }
+
+  // The journal follows the run: a chat that finished leaves it, a reopened DM keeps its new key, and
+  // the end decides what stays. A finished run keeps nothing; a deliberate Stop in Many chats keeps its
+  // ticks quietly (in This chat, nothing); an error, a crash or the panel going away reads as cut short.
+  function wireJournal() {
+    on('dm-opened', ({ target, previousKey }) => {
+      const at = journal && journal.keys ? journal.keys.indexOf(previousKey) : -1;
+      if (at >= 0) journal.keys[at] = rowKey(target);
+    });
+    on('target-end', ({ target, ok, immune, error }) => {
+      if (ok) state.runCounted.add(target.channelId); // the purge wrote this count, not a Count
+      if (!journal || !journal.keys) return;
+      if (immune || (ok && !target.failed) || (error && plainError(error).blocking)) {
+        journal.keys = journal.keys.filter((k) => k !== rowKey(target));
+        storeJournal(journal);
+      }
+    });
+    on('end', ({ stopped, error }) => {
+      freeRunLock();
+      if (!journal || destroying) return;
+      if (stopped && journal.mode === 'batch') journal.state = 'stopped';
+      else if (stopped || !error) journal = null;
+      if (journal && journal.keys && !journal.keys.length) journal = null;
+      storeJournal(journal);
+    });
   }
 
   function loadPendingLists() {
@@ -2978,15 +3198,89 @@
     });
     makeDraggable();
     wireRunEvents();
+    wireJournal();
   }
 
   // ── Init ────────────────────────────────────────────────
 
   let host = null;
 
+  // Following Discord from chat to chat: the Navigation API says so within a few milliseconds, and a
+  // poll (one string compare) backs it up, or does the job a little faster where there is no such API.
+  // Minimised, the panel only notes where you went, and reads it when it opens.
+  let lastPath = '';
+  let routeStale = false;
+
+  function navigated() {
+    const was = routeTarget(lastPath);
+    lastPath = location.pathname;
+    const now = routeTarget();
+    // A This chat dialog asks about one chat: moving to another closes it, as Never mind would.
+    if (modal && modal.channelId && (!now || now.channelId !== modal.channelId)) {
+      closeDialog(false);
+      notes.moved = true;
+      setStatus('Moved chats~ nothing purged', 'calm', { quiet: true }); // said aloud once the new chat is read
+    }
+    if (!prefs.open && !run.active) {
+      if (was) state.leftSince.add(was.channelId);
+      cancelCount();
+      if (state.scanning && state.scanKind === 'current') cancelScan();
+      routeStale = true;
+      return;
+    }
+    refreshRoute();
+    // Logging in on /login also arrives as an in-app navigation: lists that failed for want of a
+    // token get another go.
+    if (state.tab === 'batch') loadPendingLists();
+  }
+
+  function followRoute() {
+    lastPath = location.pathname;
+    const check = () => { if (location.pathname !== lastPath) navigated(); };
+    if (window.navigation) listen(window.navigation, 'navigatesuccess', check);
+    every(window.navigation ? 700 : 250, check);
+    listen(window, 'popstate', check);
+  }
+
+  // A run cut short last time (a reload, a closed laptop, a crash) keeps its place. Many chats ticks
+  // what it still had to do and says so; This chat says where to pick up. A deliberate Stop brings the
+  // ticks back without a word. Nothing starts by itself: Purify still counts first and asks. Nothing
+  // comes back for another account, after a day, or while another tab's run holds the lock (it may be
+  // that very run).
+  async function restoreJournal(saved, looked) {
+    if (Math.abs(Date.now() - saved.at) > JOURNAL_TTL_MS) { storeJournal(null); return; }
+    let me;
+    try { me = await whoAmI(); } catch { return; }
+    if (me.id !== saved.user) { storeJournal(null); return; }
+    if (await runLockHeld()) return;
+    await looked; // the chat on screen is known, so a note about it lands once
+    if (run.active || starting || journal) return; // a run began meanwhile: the journal is its own now
+    journal = saved;
+    if (saved.mode === 'batch') {
+      for (const key of saved.keys) {
+        state.selected.add(key);
+        const row = state.batchRows.get(key);
+        if (row && row.box) {
+          row.box.checked = true;
+          row.el.classList.add('is-selected');
+        }
+      }
+      for (const id of saved.guilds) restoredGuilds.add(id);
+      openRestoredGuilds();
+      if (saved.state === 'running' && saved.keys.length) notes.resume = { mode: 'batch', left: saved.keys.length };
+      selectionChanged();
+      loadPendingLists(); // the Many chats badge counts the ticks once their rows are drawn
+    } else if (saved.state === 'running' && saved.chat) {
+      notes.resume = { mode: 'current', chatId: saved.chat.id };
+    }
+    if (notes.resume && prefs.open && !run.active && !state.scanning && !state.counting && !modal) setStatus(...restingStatus());
+  }
+
   function boot() {
-    loadPrefs();
-    syncProtection();
+    // One look at storage: prefs, shields and any journal together.
+    const stored = withStorage((ls) => ({ prefs: readStored(ls), journal: readJournal(ls) }));
+    loadPrefs(stored && stored.prefs);
+    syncProtection(stored && stored.prefs);
     host = mount();
     wire();
     renderMute();
@@ -2996,20 +3290,21 @@
     const pos = homePosition();
     placeShell(pos.x, pos.y);
     setOpen(prefs.open, { initial: true });
+    // It arrives placed rather than dropped in: a short rise as it fades in (only the fade, reduced).
+    if (prefs.open) {
+      $('.panel').animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }]
+        : [{ opacity: 0, transform: 'translateY(6px) scale(.985)' }, { opacity: 1, transform: 'none' }],
+      { duration: 240, easing: 'cubic-bezier(.22,1,.36,1)' });
+    }
     renderProgress(progressSnapshot());
     if (!prefs.welcomed) showWelcome();
-    refreshRoute();
-    // Logging in on /login also arrives as an in-app navigation: lists that failed for want
-    // of a token get another go.
-    let lastPath = location.pathname;
-    const navigated = () => {
-      lastPath = location.pathname;
-      refreshRoute();
-      if (state.tab === 'batch') loadPendingLists();
-    };
-    every(700, () => { if (location.pathname !== lastPath) navigated(); });
-    listen(window, 'popstate', navigated);
+    // Minimised, it asks Discord nothing about the chat until it opens.
+    let looked = Promise.resolve();
+    if (prefs.open) looked = refreshRoute();
+    else routeStale = true;
+    followRoute();
     listen(window, 'storage', onStorage);
+    if (stored && stored.journal) restoreJournal(stored.journal, looked);
     console.log(`[Dopa Purifier] v${VERSION} ready~ ✨`);
   }
 
@@ -3022,13 +3317,29 @@
     disposers.push(() => obs.disconnect());
   }
 
+  // Discord is still starting up when this runs: boot waits for a quiet moment, so the panel never adds
+  // to Discord's own start (where there is no idle callback, the next task will do).
+  function start() {
+    whenAppReady(() => {
+      if ('requestIdleCallback' in window) {
+        const id = requestIdleCallback(boot, { timeout: 1500 });
+        disposers.push(() => cancelIdleCallback(id));
+      } else {
+        const id = setTimeout(boot, 0);
+        disposers.push(() => clearTimeout(id));
+      }
+    });
+  }
+
   // Undo everything: stop a running purge, drop listeners and timers, remove the UI.
   function destroy() {
+    destroying = true; // set first: a run ended this way reads as cut short in the journal, not as stopped
     if (run.active) {
       run.stopping = true;
       run.paused = false;
       run.controller.abort();
     }
+    freeRunLock();
     if (state.scanAbort) state.scanAbort.abort();
     clearInterval(waitTick);
     for (const undo of disposers.splice(0)) {
@@ -3037,10 +3348,17 @@
     cancelAnimationFrame(wob.raf);
     clearTimeout(hold.timer);
     clearTimeout(dialogTimer);
+    clearTimeout(switchTimer);
     flushPrefs();
     if (sound.ctx) sound.ctx.close().catch(() => {});
     if (host) host.remove();
     host = null;
   }
 
-  return { start: () => whenAppReady(boot), destroy };
+  // For the BetterDiscord plugin, whose updates wait for a purge to finish: busy() while one runs, and
+  // whenIdle() resolves when it ends.
+  const idleWaiters = [];
+  const whenIdle = () => (run.active ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
+  on('end', () => { for (const resolve of idleWaiters.splice(0)) resolve(); });
+
+  return { start, destroy, busy: () => run.active, whenIdle };

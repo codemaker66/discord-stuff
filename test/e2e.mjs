@@ -36,11 +36,17 @@ async function boot(path, opts = {}) {
   const env = await openDiscord(browser, path, opts);
   await injectUserscript(env.page, source, { fast: opts.fast !== false });
   await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' });
-  await env.page.waitForFunction(() => {
-    const el = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="target-name"]');
-    return el && el.textContent !== 'finding this chat…';
-  }, null, { timeout: 8000 });
+  await settled(env.page);
   return env;
+}
+
+// The chat is named and the panel's entrance (D33) has played.
+async function settled(page) {
+  await page.waitForFunction(() => {
+    const r = document.querySelector('#dopa-purifier-host')?.shadowRoot;
+    const el = r && r.querySelector('[data-role="target-name"]');
+    return el && el.textContent !== 'finding this chat…' && r.querySelector('.panel').getAnimations().length === 0;
+  }, null, { timeout: 8000 });
 }
 
 // A line joins its phrases with a no-break space before the dot (SEP); tests compare plain spaces.
@@ -1148,10 +1154,7 @@ async function holdRequests(page, pattern, { match = () => true, ms = 0, once = 
 async function bootWith(src, path, opts = {}) {
   const env = await openDiscord(browser, path, opts);
   await injectUserscript(env.page, src, { fast: false });
-  await env.page.waitForFunction(() => {
-    const el = document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]');
-    return el && el.textContent !== 'finding this chat…';
-  }, null, { timeout: 8000 });
+  await settled(env.page);
   return env;
 }
 
@@ -2031,15 +2034,12 @@ await test('T84 a chat shielded mid-run drops out of the run total', async () =>
 
 // The shared helpers every package builds on live inside the userscript's closure: this build also
 // hands the named ones to the page, so a test can call them directly.
+const HOOK = 'return { start, destroy, busy: () => run.active, whenIdle };';
 async function bootProbe(path, names, opts = {}) {
-  const hook = 'return { start: () => whenAppReady(boot), destroy };';
-  assert(source.includes(hook), 'the build still ends its closure the way the probe expects');
+  assert(source.includes(HOOK), 'the build still ends its closure the way the probe expects');
   const env = await openDiscord(browser, path, opts);
-  await injectUserscript(env.page, source.replace(hook, `window.__dp = { ${names.join(', ')} };\n  ${hook}`));
-  await env.page.waitForFunction(() => {
-    const el = document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]');
-    return el && el.textContent !== 'finding this chat…';
-  }, null, { timeout: 8000 });
+  await injectUserscript(env.page, source.replace(HOOK, `window.__dp = { ${names.join(', ')} };\n  ${HOOK}`));
+  await settled(env.page);
   return env;
 }
 
@@ -2729,10 +2729,10 @@ await test('T104 the ring moves only with real work: a sweep on the arc, nothing
 });
 
 // A build at a steadier pace, with the named closure bindings on window.__dp.
-async function bootPaced(path, { deleteMs, probe = [], ...opts }) {
-  const hook = 'return { start: () => whenAppReady(boot), destroy };';
-  const src = withTiming(source, { deleteDelayMs: deleteMs })
-    .replace(hook, `window.__dp = { ${probe.join(', ')} };\n  ${hook}`);
+// timing: more TIMING keys to set, e.g. { waitUnitMs: 10 } for Discord's waits and the backoff.
+async function bootPaced(path, { deleteMs, probe = [], timing = {}, ...opts }) {
+  const src = withTiming(source, { deleteDelayMs: deleteMs, ...timing })
+    .replace(HOOK, `window.__dp = { ${probe.join(', ')} };\n  ${HOOK}`);
   return bootWith(src, path, opts);
 }
 
@@ -3203,7 +3203,7 @@ await test('T124 leaving the chat, the tab or the panel while Purify counts open
     await page.click('[data-act="purify"]');
     for (let i = 0; !hold.held && i < 200; i++) await page.waitForTimeout(10);
     assert(hold.held, `${leave}: Purify counted first`);
-    if (leave === 'chat') await page.evaluate(() => { history.pushState({}, '', '/channels/4001/5001'); dispatchEvent(new PopStateEvent('popstate')); });
+    if (leave === 'chat') await page.evaluate(() => history.pushState({}, '', '/channels/4001/5001')); // as Discord does: no popstate
     if (leave === 'tab') await page.click('.tab[data-tab="batch"]');
     if (leave === 'panel') await page.click('[data-act="minimize"]');
     hold.release();
@@ -3645,9 +3645,8 @@ await test('T140 a chat Discord won\'t open says so plainly, keeps Purify off, a
 });
 
 await test('T141 a count that fails says why in plain words: still indexing, offline, Discord down', async () => {
-  // request()'s backoff waits seconds; here it waits milliseconds, so the cases take no time.
-  const quick = source.replace('const seconds = 2 ** networkFails;', 'const seconds = 0.01;').replace('const seconds = 2 ** serverFails;', 'const seconds = 0.01;');
-  assert(quick.split('const seconds = 0.01;').length === 3, 'the build still backs off the way this test expects');
+  // request()'s backoff waits seconds; here a second lasts 10 ms, so the cases take no time.
+  const quick = withTiming(source, { waitUnitMs: 10 });
   const json = (status, body) => (route) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   const cases = [
     ['still indexing', json(202, { message: 'Index not yet available. Try again later', code: 110000, retry_after: 0.01 }), 'Discord is still indexing'],
@@ -4965,7 +4964,7 @@ await test('T252 switches for the tests to come: Discord\'s light theme, offline
 
 await test('T253 tests skip Discord\'s long waits: a fake clock, and a timing patch that names its keys', async () => {
   const timed = withTiming(source, { requestTimeoutMs: 1500 });
-  assert(/const TIMING = \{ deleteDelayMs: 20, searchDelayMs: 10, requestTimeoutMs: 1500 \}/.test(timed), 'the patch sets each key it names');
+  assert(/const TIMING = \{ deleteDelayMs: 20, searchDelayMs: 10, requestTimeoutMs: 1500, waitUnitMs: 1000 \}/.test(timed), 'the patch sets each key it names');
   let missed = '';
   try { withTiming(source, { retryStepMs: 10 }); } catch (e) { missed = e.message; }
   assert(/no retryStepMs/.test(missed), `a key the build doesn't have is an error: ${missed}`);
@@ -5024,6 +5023,746 @@ await test('T254 a heavy account costs structure, not time: one request per list
     assert(await text(page, '[data-role="tab-badge"]') === String(i + 1), `after tick ${i + 1} the badge says ${await text(page, '[data-role="tab-badge"]')}`);
   }
   assert(stats.log.length === t1, `ticking asked Discord ${JSON.stringify(stats.log.slice(t1))}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// ── Run safety and lifecycle (WP-F): the dialog asks about the chat on screen, the panel follows you and
+// rests while minimised, one purge at a time, outages are waited out, a reload keeps its place, a
+// verdict lasts its visit, the panel boots at idle, and what you send after confirming is never touched ──
+
+const countNow = (page) => page.evaluate(() => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent.replace(/\D/g, '')) || 0);
+const untilCount = (page, n, timeout = 15000) => page.waitForFunction((k) => Number(document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="count"]').textContent.replace(/\D/g, '')) >= k, n, { timeout });
+const badge = (page) => inPanel(page, (r) => { const b = r.querySelector('[data-role="tab-badge"]'); return b.hidden ? '' : b.textContent; });
+const ticked = (page, keys) => inPanel(page, (r, ks) => ks.map((k) => !!r.querySelector(`[data-key="${k}"] .check`)?.checked), keys);
+const storedJournal = (page) => page.evaluate(() => {
+  const f = document.createElement('iframe');
+  document.body.appendChild(f);
+  try { return JSON.parse(f.contentWindow.localStorage.getItem('dopa-purifier:journal')); } finally { f.remove(); }
+});
+const plantJournal = (page, j) => page.evaluate((v) => localStorage.setItem('dopa-purifier:journal', JSON.stringify(v)), j);
+const HOUR = 3600 * 1000;
+
+// Reload the page and boot the same build again, as the userscript manager would.
+async function reboot(page, src = source, fast = true) {
+  await page.reload();
+  await injectUserscript(page, src, { fast });
+  await settled(page);
+}
+
+// Two Discord tabs in one browser profile: one storage, one set of Web Locks, one account.
+async function sharedProfile() {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await context.addInitScript((t) => {
+    if (window.top !== window || localStorage.getItem('token')) return;
+    localStorage.setItem('token', JSON.stringify(t));
+    localStorage.setItem('dopa-purifier:prefs', JSON.stringify({ welcomed: true }));
+  }, TOKEN);
+  const world = buildWorld();
+  const open = async (path, src = source) => {
+    const page = await context.newPage();
+    const mock = await installMockDiscord(page, { world, latencyMs: 20 });
+    await page.goto('https://discord.com' + path);
+    await injectUserscript(page, src, { fast: false });
+    await settled(page);
+    return { page, ...mock };
+  };
+  return { context, world, open };
+}
+
+// Lives through `away` ms of the page's time with Discord out of reach: each wait the run logs (matched
+// by `line`, whose first group is its seconds) is skipped with the clock, and `up` brings Discord back
+// during the last one.
+async function sitOut(page, { away, line, down, up }) {
+  const nth = (n) => page.waitForFunction(([k, src]) => {
+    const re = new RegExp(src);
+    const waits = [...document.querySelector('#dopa-purifier-host').shadowRoot.querySelectorAll('.term-body .line-msg')]
+      .map((l) => re.exec(l.textContent)).filter(Boolean);
+    return waits.length >= k && Number(waits[k - 1][1]);
+  }, [n, line.source], { timeout: 4000 }).then((h) => h.jsonValue());
+  down();
+  const said = [];
+  for (let gone = 0, n = 1; gone < away; n++) {
+    const s = await nth(n);
+    said.push(s);
+    gone += s * 1000;
+    if (gone >= away) up();
+    await page.clock.fastForward(s * 1000);
+  }
+  return said;
+}
+
+await test('T172 a click away while Purify counts never brings up a dialog for the chat left behind', async () => {
+  for (let i = 1; i <= 6; i++) {
+    const { page, stats, pageErrors, context } = await boot('/channels/4001/5001', { latencyMs: 250 });
+    await page.click('[data-act="purify"]');
+    await page.waitForTimeout(80);
+    await page.click('a[href="/channels/4001/5002"]'); // Discord's own pushState, no popstate
+    const opened = await page.evaluate(() => new Promise((resolve) => {
+      const layer = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.modal-layer');
+      const t0 = performance.now();
+      const look = () => (!layer.hidden ? resolve(true) : performance.now() - t0 > 2500 ? resolve(false) : requestAnimationFrame(look));
+      look();
+    }));
+    assert(!opened, `run ${i}: a dialog opened after the click away`);
+    assert(stats.deleteAttempts === 0, `run ${i}: ${stats.deleteAttempts} DELETEs`);
+    assert(await text(page, '[data-role="target-name"]') === 'art-share', `run ${i}: the card follows to art-share`);
+    assert(pageErrors.length === 0, `run ${i}: page errors ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+});
+
+await test('T173 moving to another chat closes This chat\'s dialog as Never mind would; Many chats\' stays', async () => {
+  {
+    const { page, stats, pageErrors, context } = await boot('/channels/4001/5001');
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    // Mid-hold, even: the hold is let go, and nothing goes.
+    const btn = await page.locator('[data-act="confirm"]').boundingBox();
+    await page.mouse.move(btn.x + btn.width / 2, btn.y + btn.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(300);
+    await goTo(page, '/channels/4001/5002');
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.modal-layer').dataset.open === 'false', null, { timeout: 1000 });
+    await page.waitForTimeout(900); // past the hold's 850 ms
+    await page.mouse.up();
+    await nameIs(page, 'art-share');
+    await untilStatus(page, /^Moved chats~ nothing purged$/);
+    assert(await tone(page) === 'calm', `tone ${await tone(page)}`);
+    await page.waitForTimeout(600);
+    assert(!(await isOpen(page)) && stats.deleteAttempts === 0, `dialog ${await isOpen(page)}, ${stats.deleteAttempts} DELETEs`);
+    assert(await focusedAct(page) === 'purify', `focus went back to Purify: ${await focusedAct(page)}`);
+    assert(await statusText(page) === 'Moved chats~ nothing purged', `the note stays once the new chat is read: ${await statusText(page)}`);
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    // Many chats' dialog lists its chats by name: it isn't about the chat on screen, so it stays.
+    const { page, stats, context } = await boot('/channels/4001/5001');
+    await pickBatch(page, ['c:3003']);
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    await goTo(page, '/channels/4001/5002');
+    await page.waitForTimeout(800);
+    assert(await isOpen(page), 'the Many chats dialog closed on a chat switch');
+    assert(stats.deleteAttempts === 0, 'nothing deleted');
+    await context.close();
+  }
+});
+
+await test('T174 a chat switch shows the new chat at once: a dim, never "finding this chat…", and no stray Purify', async () => {
+  const { page, stats, pageErrors, context } = await boot('/channels/4001/5001', { latencyMs: 100 });
+  await page.evaluate(() => {
+    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+    window.__seen = { lookup: 0, dimmed: 0, named: 0 };
+    const t0 = performance.now();
+    const look = () => {
+      if (r.querySelector('.hero').dataset.state === 'lookup' || r.querySelector('[data-role="target-name"]').textContent === 'finding this chat…') window.__seen.lookup++;
+      if (r.querySelector('[data-role="layer"]').hasAttribute('data-switching')) window.__seen.dimmed++;
+      if (!window.__seen.named && window.__clicked && r.querySelector('[data-role="target-name"]').textContent === 'art-share') window.__seen.named = performance.now() - window.__clicked;
+      if (performance.now() - t0 < 2500) requestAnimationFrame(look);
+    };
+    requestAnimationFrame(look);
+  });
+  const s0 = stats.searches;
+  const purify = await page.locator('[data-act="purify"]').boundingBox();
+  const link = await page.locator('a[href="/channels/4001/5002"]').boundingBox();
+  await page.mouse.move(link.x + 10, link.y + link.height / 2);
+  await page.evaluate(() => { window.__clicked = performance.now(); });
+  await page.mouse.click(link.x + 10, link.y + link.height / 2);
+  // A Purify click 50 ms into the switch lands on a card that isn't ready yet: it does nothing.
+  await page.waitForTimeout(50);
+  await page.mouse.click(purify.x + purify.width / 2, purify.y + purify.height / 2);
+  await page.waitForTimeout(2600);
+  const seen = await page.evaluate(() => window.__seen);
+  assert(seen.named > 0 && seen.named < 400, `the card named art-share after ${Math.round(seen.named)} ms`);
+  assert(seen.lookup === 0, `"finding this chat…" showed in ${seen.lookup} frames`);
+  assert(seen.dimmed > 0, 'the last chat never dimmed while the new one was read');
+  assert(!(await isOpen(page)) && stats.searches === s0, `the early click opened a dialog (${await isOpen(page)}) or searched (${stats.searches - s0})`);
+  assert(await inPanel(page, (r) => !r.querySelector('[data-role="layer"]').hasAttribute('data-switching')), 'the dim lifts once the chat is read');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T175 minimised, the panel asks Discord nothing as you move between chats, and catches up when it opens', async () => {
+  const { page, stats, pageErrors, context } = await boot('/channels/4001/5001');
+  await page.click('[data-act="minimize"]');
+  await page.locator('.orb').waitFor({ state: 'visible' });
+  await page.waitForTimeout(400);
+  const l0 = stats.log.length;
+  for (const p of ['/channels/4001/5002', '/channels/@me/3002', '/channels/4001/5003']) {
+    await goTo(page, p);
+    await page.waitForTimeout(400);
+  }
+  await page.waitForTimeout(800);
+  const asked = stats.log.slice(l0);
+  assert(asked.length === 0, `minimised, it asked ${JSON.stringify(asked)}`);
+  await page.click('.orb');
+  await nameIs(page, 'announcements');
+  const s0 = stats.searches;
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 4000 });
+  assert(await text(page, '.pill-name') === 'announcements' && /all 5 of your messages/.test(await text(page, '.modal-lead')), `the dialog asks about ${await text(page, '.pill-name')}: ${await text(page, '.modal-lead')}`);
+  assert(stats.searches - s0 === 1, `Purify counted with ${stats.searches - s0} searches`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T176 one purge at a time: another tab says so, asks Discord nothing, and still counts', async () => {
+  const paced = withTiming(source, { deleteDelayMs: 150 });
+  const { context, open } = await sharedProfile();
+  const a = await open('/channels/4001/5001', paced);
+  const b = await open('/channels/4001/5002', paced);
+  // B's dialog is up before A starts; A's run wins, and B's hold starts nothing.
+  await b.page.click('[data-act="purify"]');
+  await b.page.waitForSelector('.modal-layer[data-open="true"]');
+  await a.page.click('[data-act="purify"]');
+  await holdConfirm(a.page);
+  await untilCount(a.page, 2);
+  const b0 = { searches: b.stats.searches, deletes: b.stats.deleteAttempts };
+  await holdConfirm(b.page);
+  const line = 'Purifying in another Discord tab~ one at a time keeps your account safe';
+  await untilStatus(b.page, new RegExp(`^${line}$`));
+  assert(await tone(b.page) === 'calm' && await focusedAct(b.page) === 'purify', `B after its hold: ${await tone(b.page)}, focus ${await focusedAct(b.page)}`);
+  await b.page.waitForTimeout(500);
+  assert(b.stats.deleteAttempts === b0.deletes && await inPanel(b.page, (r) => r.querySelector('[data-role="layer"]').dataset.run) === 'idle', 'B started a run');
+  // Purify again in B: no count, no dialog, the same line.
+  await b.page.click('[data-act="scan"]'); // Count stays free: it is only a look
+  await untilStatus(b.page, /^10 messages found/);
+  const s1 = b.stats.searches;
+  await b.page.click('[data-act="purify"]');
+  await untilStatus(b.page, new RegExp(`^${line}$`));
+  await b.page.waitForTimeout(400);
+  assert(!(await isOpen(b.page)) && b.stats.searches === s1 && b.stats.deleteAttempts === b0.deletes, `B asked ${b.stats.searches - s1} searches or opened a dialog`);
+  // It claims only what it knows: another tab of this browser, nothing about other browsers or devices.
+  assert(!/browser|device|app|window|anywhere|computer/i.test(line), 'the line overclaims');
+  // Once A is done, B purifies.
+  await a.page.click('[data-act="stop"]');
+  await waitEnd(a.page, 5000);
+  await b.page.click('[data-act="purify"]');
+  await b.page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 3000 });
+  assert(/all 10 of your messages/.test(await text(b.page, '.modal-lead')), `B's dialog: ${await text(b.page, '.modal-lead')}`);
+  await context.close();
+});
+
+await test('T177 a BetterDiscord update waits for the purge to finish, then asks again', async () => {
+  const plugin = withTiming(fs.readFileSync(PLUGIN, 'utf8'), { deleteDelayMs: 120 });
+  const newer = plugin.replace(/(@version\s+)\S+/, (_, head) => `${head}99.0.0`);
+  const env = await openDiscord(browser, '/channels/4001/5002');
+  const { page, world } = env;
+  await page.evaluate(({ code, newer }) => {
+    const log = window.__bdLog = { modals: [], writes: [], toasts: [] };
+    const parts = (v) => v.split('.').map(Number);
+    window.BdApi = {
+      Net: { fetch: async () => new Response(newer, { status: 200 }) },
+      Utils: { semverCompare(current, remote) {
+        const [x, y] = [parts(current), parts(remote)];
+        for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i] > x[i] ? 1 : -1;
+        return 0;
+      } },
+      UI: {
+        showConfirmationModal(title, content, options) { log.modals.push(content); window.__bdConfirm = options.onConfirm; },
+        showToast(text) { log.toasts.push(text); },
+      },
+      Plugins: { folder: '/bd/plugins' },
+    };
+    window.__bdDisk = code;
+    const fsStub = { readFileSync: () => window.__bdDisk, writeFileSync(file, data) { log.writes.push(file); window.__bdDisk = data; } };
+    const require = (m) => ({ fs: fsStub, path: { join: (...p) => p.join('/') } })[m];
+    const module = { exports: {} };
+    new Function('require', 'module', 'exports', code)(require, module, module.exports);
+    window.__bd = new module.exports({ name: 'DopasPurifier', filename: 'DopasPurifier.plugin.js' });
+    window.__bd.start();
+  }, { code: plugin, newer });
+  await settled(page);
+  await page.waitForFunction(() => window.__bdLog.modals.length === 1);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilCount(page, 2);
+  await page.evaluate(() => window.__bdConfirm()); // Update, mid-purge
+  let log = await page.evaluate(() => window.__bdLog);
+  assert(log.writes.length === 0 && log.toasts.join() === 'Updating once purifying is done~ ♡' && log.modals.length === 1, `mid-purge: ${JSON.stringify(log)}`);
+  await waitEnd(page);
+  await page.waitForFunction(() => window.__bdLog.modals.length === 2, null, { timeout: 3000 });
+  log = await page.evaluate(() => window.__bdLog);
+  assert(log.modals[1] === 'All done purifying~ v99.0.0 is ready. Update now? ♡' && log.writes.length === 0, `after the purge: ${JSON.stringify(log.modals)}`);
+  assert(mine(world, '5002').length === 0 && /^All clean~/.test(await text(page, '[data-role="readout-line"]')), 'the purge finished and its verdict is on screen');
+  await page.evaluate(() => window.__bdConfirm()); // idle now: Update writes as it always has
+  log = await page.evaluate(() => window.__bdLog);
+  assert(log.writes.length === 1 && log.writes[0] === '/bd/plugins/DopasPurifier.plugin.js', `idle update wrote ${JSON.stringify(log.writes)}`);
+  assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
+  await env.context.close();
+});
+
+await test('T178 a 75 s drop mid-#general is waited out: all clean, nothing failed or skipped', async () => {
+  const { page, cfg, stats, world, pageErrors, context } = await boot('/channels/4001/5001', { clock: true });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilCount(page, 5);
+  const said = await sitOut(page, { away: 75000, line: /^Connection hiccup~ retrying in (\d+)s$/, down: () => { cfg.offline = true; }, up: () => { cfg.offline = false; } });
+  assert(said.join() === '2,4,8,30,30,30', `the run waited ${said.join(', ')} s`);
+  await waitEnd(page, 15000);
+  assert(stats.refused >= 6 && mine(world, '5001').length === 0, `${stats.refused} refused, ${mine(world, '5001').length} left`);
+  assert(/^All clean~/.test(await text(page, '[data-role="readout-line"]')), `verdict ${await text(page, '[data-role="readout-line"]')}`);
+  assert(await text(page, '[data-role="tf-failed"]') === '000' && !/skipped|wouldn't go/.test(await status(page)), `footer ${await status(page)}`);
+  const took = /^Done in (\d+)s/.exec(await status(page));
+  assert(took && Number(took[1]) < 60, `the time leaves the outage out: ${await status(page)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T179 Discord answering 502 for 30 s is waited out: nothing counts as failed', async () => {
+  const { page, cfg, world, pageErrors, context } = await boot('/channels/4001/5001', { clock: true });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilCount(page, 3);
+  const said = await sitOut(page, { away: 30000, line: /^Discord is busy~ retrying in (\d+)s$/, down: () => { cfg.serverError = 502; }, up: () => { cfg.serverError = 0; } });
+  assert(said.join() === '2,4,8,30', `the run waited ${said.join(', ')} s`);
+  await waitEnd(page, 15000);
+  assert(mine(world, '5001').length === 0 && await text(page, '[data-role="tf-failed"]') === '000', `${mine(world, '5001').length} left, failed ${await text(page, '[data-role="tf-failed"]')}`);
+  assert(/^All clean~/.test(await text(page, '[data-role="readout-line"]')) && !/FAILED/.test(await logText(page)), 'no crimson failures for Discord\'s outage');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T180 back online, the run carries on at once; offline it says so calmly, with no countdown', async () => {
+  const { page, cfg, world, pageErrors, context } = await boot('/channels/4001/5001', { clock: true });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilCount(page, 5);
+  const offlineLines = () => inPanel(page, (r) => [...r.querySelectorAll('.term-body .line-msg')].filter((l) => /^Offline~/.test(l.textContent)).length);
+  cfg.offline = true;
+  await context.setOffline(true);
+  await untilStatus(page, /^Connection hiccup~ retrying in 2s$/, 4000); // a blip first
+  await page.clock.fastForward(2000);
+  await untilStatus(page, /^Connection hiccup~ retrying in 4s$/, 4000);
+  await page.clock.fastForward(4000);
+  await untilStatus(page, /^Offline~ purifying carries on once you're back$/, 4000); // the third miss: the browser knows
+  assert(await tone(page) === 'calm', `offline tone ${await tone(page)}`);
+  await page.waitForTimeout(1200);
+  assert(await statusText(page) === "Offline~ purifying carries on once you're back", `no countdown: ${await statusText(page)}`);
+  await page.clock.fastForward(9000); // 15 s gone: into the 30 s wait
+  for (let i = 0; i < 40 && (await offlineLines()) < 2; i++) await page.waitForTimeout(50);
+  assert(await offlineLines() >= 2, 'the run is sitting in its 30 s wait');
+  const t0 = Date.now();
+  cfg.offline = false;
+  await context.setOffline(false); // the browser says "online": the wait ends there
+  await waitEnd(page, 3000).catch(() => { throw new Error('the run waited out its 30 s instead of carrying on when the browser came back'); });
+  assert(Date.now() - t0 < 3000 && mine(world, '5001').length === 0, `finished ${Date.now() - t0} ms after online, ${mine(world, '5001').length} left`);
+  assert(/^All clean~/.test(await text(page, '[data-role="readout-line"]')), `verdict ${await text(page, '[data-role="readout-line"]')}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T181 a batch offline for 75 s in chat 2 skips nothing: chats 2 and 3 finish', async () => {
+  const { page, cfg, world, pageErrors, context } = await bootPaced('/channels/4001/5001', { deleteMs: 120, clock: true });
+  await pickBatch(page, ['c:3004', 'c:3003', 'c:5002']);
+  await inPanel(page, (r) => {
+    window.__crossed = 0;
+    new MutationObserver(() => { if (r.querySelector('.run-pill-error')) window.__crossed++; }).observe(r.querySelector('.body'), { subtree: true, childList: true });
+  });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilStatus(page, /^Chat 2 of 3/, 10000);
+  await untilCount(page, 5);
+  await sitOut(page, { away: 75000, line: /^Connection hiccup~ retrying in (\d+)s$/, down: () => { cfg.offline = true; }, up: () => { cfg.offline = false; } });
+  await waitEnd(page, 20000);
+  const pills = await inPanel(page, (r) => ['c:3004', 'c:3003', 'c:5002'].map((k) => r.querySelector(`[data-key="${k}"]`).dataset.state));
+  assert(pills.join() === 'done,done,done', `rows ${pills}`);
+  assert(await page.evaluate(() => window.__crossed) === 0, 'a chat was marked ✗ while offline');
+  assert(mine(world, '3003').length === 0 && mine(world, '5002').length === 0, 'chats 2 and 3 purged');
+  assert(!/skipped/.test(await status(page)), `footer ${await status(page)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T182 a DELETE Discord keeps failing ends the run, not the chat, and a later Purify finishes it', async () => {
+  const { page, cfg, stats, world, pageErrors, context } = await bootPaced('/channels/4001/5001', { deleteMs: 20, timing: { waitUnitMs: 2 } });
+  await pickBatch(page, ['c:5002', 'c:3003']);
+  cfg.serverError = 500;
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page, 10000);
+  assert(stats.refused === 8, `one message tried ${stats.refused} times (once, then after each of the 7 waits)`);
+  assert(!stats.log.some((l) => /\/channels\/3003\//.test(l)), 'the run went on to the next chat');
+  assert(await status(page) === 'Discord is having a moment' && await tone(page) === 'error', `footer ${await status(page)} (${await tone(page)})`);
+  assert(await text(page, '[data-role="hero-sub"]') === 'Discord is having a moment~ try again in a minute', `verdict ${await text(page, '[data-role="hero-sub"]')}`);
+  assert(await text(page, '[data-role="tf-failed"]') === '000' && /STOPPED · Discord is having a moment/.test(await logText(page)), 'Discord\'s trouble is no failure of yours');
+  const rows = await inPanel(page, (r) => ['c:5002', 'c:3003'].map((k) => r.querySelector(`[data-key="${k}"]`).dataset.state));
+  assert(rows.join() === 'stopped,stopped' && (await ticked(page, ['c:5002', 'c:3003'])).every(Boolean), `rows ${rows}, both still ticked`);
+  cfg.serverError = 0;
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  await holdConfirm(page);
+  await waitEnd(page, 15000);
+  assert(mine(world, '5002').length === 0 && mine(world, '3003').length === 0, 'the next Purify finished both');
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T183 waits read as minutes past a minute; offline and searching have no countdown', async () => {
+  const { page, pageErrors, context } = await bootProbe('/channels/4001/5001', ['waitText', 'showWait']);
+  const said = await page.evaluate(() => [
+    { kind: 'rate', seconds: 120 }, { kind: 'rate', seconds: 59 }, { kind: 'rate', seconds: 60 }, { kind: 'network', seconds: 30 },
+    { kind: 'server', seconds: 300 }, { kind: 'index', seconds: 2 }, { kind: 'offline', seconds: 30 },
+  ].map((w) => window.__dp.waitText(w)));
+  assert(JSON.stringify(said) === JSON.stringify([
+    'Taking a breather~ back in about 2 min', 'Taking a breather~ back in 59s', 'Taking a breather~ back in about 1 min', 'Connection hiccup~ retrying in 30s',
+    'Discord is busy~ retrying in about 5 min', 'Discord is still searching~ hang on…', "Offline~ purifying carries on once you're back",
+  ]), JSON.stringify(said));
+  await page.evaluate(() => window.__dp.showWait({ kind: 'rate', seconds: 120 }));
+  const shown = await statusParts(page);
+  assert(shown.words === 'Taking a breather~ back in about 2 min' && shown.flair === ' 🦇' && shown.tone === 'calm', JSON.stringify(shown));
+  await page.evaluate(() => window.__dp.showWait({ kind: 'offline', seconds: 30 }));
+  await page.waitForTimeout(1300);
+  const off = await statusParts(page);
+  assert(off.words === "Offline~ purifying carries on once you're back" && !off.flair && off.tone === 'calm', `offline ${JSON.stringify(off)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T184 a reload during "Chat 2 of 3" keeps the place: chats 2 and 3 stay ticked, and nothing starts', async () => {
+  const paced = withTiming(source, { deleteDelayMs: 150 });
+  const { page, stats, world, pageErrors, context } = await bootWith(paced, '/channels/4001/5001');
+  await pickBatch(page, ['c:3004', 'c:3002', 'c:3003']);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilStatus(page, /^Chat 2 of 3/, 10000);
+  await untilCount(page, 5);
+  // The journal holds ids, never a name or a message.
+  const j = await storedJournal(page);
+  assert(j && j.mode === 'batch' && j.state === 'running' && j.user === '1000' && JSON.stringify(j.keys) === '["c:3002","c:3003"]', `journal ${JSON.stringify(j)}`);
+  assert(Object.keys(j).sort().join() === 'at,guilds,keys,mode,state,user,v' && !/Alice|Carol|mallory|message/i.test(JSON.stringify(j)), `journal keeps more than ids: ${JSON.stringify(j)}`);
+  await reboot(page, paced, false);
+  const l0 = stats.log.length;
+  const d0 = stats.deleteAttempts;
+  await untilStatus(page, /^2 chats left from last time~ Purify selected finishes them$/, 5000);
+  assert(await tone(page) === 'info', `tone ${await tone(page)}`);
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="tab-badge"]').textContent === '2', null, { timeout: 5000 });
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3003"]');
+  const picks = await ticked(page, ['c:3004', 'c:3002', 'c:3003']);
+  assert(picks.join() === 'false,true,true', `ticks after the reload ${picks}`);
+  assert(mine(world, '3004').every((m) => m.type !== 0), 'chat 1 finished before the reload (its system message stays)');
+  await page.waitForTimeout(500);
+  const asked = stats.log.slice(l0).filter((l) => /messages\/search|^DELETE/.test(l));
+  assert(!asked.length && stats.deleteAttempts === d0, `before any press it sent ${JSON.stringify(asked)}`);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  assert(await text(page, '[data-role="modal-title"]') === 'Purify 2 chats?' && await page.locator('.modal-item').count() === 2, `dialog ${await text(page, '[data-role="modal-title"]')}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T185 a journal from another account restores nothing, and goes', async () => {
+  const env = await openDiscord(browser, '/channels/4001/5001');
+  await plantJournal(env.page, { v: 1, user: '1001', mode: 'batch', at: Date.now() - HOUR, state: 'running', keys: ['c:3002', 'c:3003'], guilds: [] });
+  await injectUserscript(env.page, source);
+  await settled(env.page);
+  await env.page.waitForTimeout(800);
+  assert(await statusText(env.page) === 'Ready to purify~ ✨' && await badge(env.page) === '', `footer ${await statusText(env.page)}, badge ${await badge(env.page)}`);
+  assert(await storedJournal(env.page) === null, 'the other account\'s journal is still there');
+  assert(!env.stats.log.some((l) => /relationships|\/users\/@me\/channels/.test(l)), 'lists loaded for nothing');
+  await env.context.close();
+});
+
+await test('T186 a journal over a day old restores nothing', async () => {
+  for (const age of [8 * 24 * HOUR, 25 * HOUR]) {
+    const env = await openDiscord(browser, '/channels/4001/5001');
+    await plantJournal(env.page, { v: 1, user: '1000', mode: 'batch', at: Date.now() - age, state: 'running', keys: ['c:3002', 'c:3003'], guilds: [] });
+    await injectUserscript(env.page, source);
+    await settled(env.page);
+    await env.page.waitForTimeout(800);
+    assert(await statusText(env.page) === 'Ready to purify~ ✨' && await badge(env.page) === '', `${age / HOUR} h: footer ${await statusText(env.page)}, badge ${await badge(env.page)}`);
+    assert(await storedJournal(env.page) === null, `${age / HOUR} h: the old journal stayed`);
+    await env.context.close();
+  }
+});
+
+await test('T187 a tab opened while another purges shows nothing left from last time', async () => {
+  const paced = withTiming(source, { deleteDelayMs: 150 });
+  for (const mode of ['batch', 'current']) {
+    const { context, open } = await sharedProfile();
+    const a = await open('/channels/4001/5001', paced);
+    if (mode === 'batch') await pickBatch(a.page, ['c:3002', 'c:3003']);
+    await a.page.click('[data-act="purify"]');
+    await holdConfirm(a.page);
+    await untilCount(a.page, 2);
+    const b = await open(mode === 'batch' ? '/channels/4001/5002' : '/channels/4001/5001', paced);
+    await b.page.waitForTimeout(1000);
+    assert(await statusText(b.page) === 'Ready to purify~ ✨' && await badge(b.page) === '', `${mode}: B says ${await statusText(b.page)}, badge ${await badge(b.page)}`);
+    assert((await storedJournal(b.page))?.state === 'running', `${mode}: A's journal was touched`);
+    await a.page.click('[data-act="stop"]');
+    await waitEnd(a.page, 5000);
+    await context.close();
+  }
+});
+
+await test('T188 a reload mid-#general says where to pick up, and Purify counts what is left first', async () => {
+  const paced = withTiming(source, { deleteDelayMs: 150 });
+  {
+    // No index lag, so the count after the reload is exactly what is left.
+    const { page, stats, world, pageErrors, context } = await bootWith(paced, '/channels/4001/5001', { indexLag: 0 });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await untilCount(page, 5);
+    const j = await storedJournal(page);
+    assert(j && j.mode === 'current' && j.chat.id === '5001' && Object.keys(j).sort().join() === 'at,chat,mode,state,user,v', `journal ${JSON.stringify(j)}`);
+    await reboot(page, paced, false);
+    await untilStatus(page, /^Cut short last time~ Purify picks up the rest$/, 5000);
+    assert(await tone(page) === 'info' && await heroIs(page) === 'unscanned/icon', `${await tone(page)}, ring ${await heroIs(page)}`);
+    const left = mine(world, '5001').length;
+    const s0 = stats.searches;
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    assert(await text(page, '.modal-lead') === `This will delete all ${left} of your messages in` && stats.searches - s0 === 1, `counted first: ${await text(page, '.modal-lead')}`);
+    await page.click('[data-act="cancel"]');
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    // Opened on another chat: the note says where, and says it again on arriving there.
+    const env = await openDiscord(browser, '/channels/4001/5002');
+    await plantJournal(env.page, { v: 1, user: '1000', mode: 'current', at: Date.now() - HOUR, state: 'running', chat: { id: '5001' } });
+    await injectUserscript(env.page, source);
+    await settled(env.page);
+    await untilStatus(env.page, /^Cut short last time in a chat~ open it and press Purify$/, 5000);
+    await goTo(env.page, '/channels/4001/5001');
+    await nameIs(env.page, 'general');
+    await untilStatus(env.page, /^Cut short last time~ Purify picks up the rest$/);
+    await goTo(env.page, '/channels/4001/5002');
+    await nameIs(env.page, 'art-share');
+    await untilStatus(env.page, /^Ready to purify~/);
+    await env.context.close();
+  }
+});
+
+await test('T189 back on a chat purged clean, new messages show: it counts again instead of resting on "all clean"', async () => {
+  const { page, world, pageErrors, context } = await boot('/channels/4001/5002');
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  assert(/^All clean~/.test(await text(page, '[data-role="readout-line"]')) && await page.locator('[data-act="purify"]').isDisabled(), 'a clean finish rests');
+  addMine(world, '5002', 3);
+  await goTo(page, '/channels/4001/5001');
+  await nameIs(page, 'general');
+  await goTo(page, '/channels/4001/5002');
+  await nameIs(page, 'art-share');
+  await page.waitForTimeout(200);
+  assert(await heroIs(page) === 'unscanned/icon', `the ring after coming back: ${await heroIs(page)}`);
+  assert(await page.locator('[data-act="purify"]').isEnabled() && await statusText(page) === 'Ready to purify~ ✨', `Purify ${await page.locator('[data-act="purify"]').isEnabled()}, footer ${await statusText(page)}`);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  assert(await text(page, '.modal-lead') === 'This will delete all 3 of your messages in', `dialog ${await text(page, '.modal-lead')}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+await test('T190 the panel boots once Discord is idle, reads storage once, and fades in placed', async () => {
+  for (const motion of ['no-preference', 'reduce']) {
+    const env = await openDiscord(browser, '/channels/4001/5001', { reducedMotion: motion });
+    const { page } = env;
+    await page.evaluate(() => {
+      window.__frames = [];
+      window.__iframes = 0;
+      const add = Node.prototype.appendChild;
+      Node.prototype.appendChild = function (n) { if (n && n.tagName === 'IFRAME' && !window.__booted) window.__iframes++; return add.call(this, n); };
+      const log = console.log;
+      console.log = (...a) => { if (/ready~/.test(String(a[0]))) window.__booted = true; return log.apply(console, a); };
+      new MutationObserver((list, obs) => {
+        const host = document.querySelector('#dopa-purifier-host');
+        if (!host) return;
+        obs.disconnect();
+        requestAnimationFrame(() => {
+          const panel = host.shadowRoot.querySelector('.panel');
+          const a = panel.getAnimations()[0];
+          window.__frames.push({ opacity: Number(getComputedStyle(panel).opacity), moves: !!a && a.effect.getKeyframes().some((k) => k.transform && k.transform !== 'none') });
+        });
+      }).observe(document.body, { childList: true });
+    });
+    // The script returns before the panel exists: boot waits for an idle moment.
+    const early = await page.evaluate((src) => { (0, eval)(src); return !!document.querySelector('#dopa-purifier-host'); }, withTiming(source));
+    assert(!early, `${motion}: the panel booted inside the script's own task`);
+    await page.waitForSelector('#dopa-purifier-host', { state: 'attached', timeout: 5000 });
+    await settled(page);
+    const seen = await page.evaluate(() => ({ frames: window.__frames, iframes: window.__iframes }));
+    assert(seen.frames.length === 1 && seen.frames[0].opacity < 1, `${motion}: first frame ${JSON.stringify(seen.frames)}`);
+    assert(seen.frames[0].moves === (motion === 'no-preference'), `${motion}: the entrance ${seen.frames[0].moves ? 'moves' : 'only fades'}`);
+    assert(seen.iframes === 2, `${motion}: boot opened ${seen.iframes} storage frames (prefs, shields and journal in one; the login token in the other)`);
+    assert(env.pageErrors.length === 0, `${motion}: page errors: ${env.pageErrors.join('; ')}`);
+    await env.context.close();
+  }
+  // A BetterDiscord stop() right after start() leaves nothing behind, and never boots later.
+  const env = await openDiscord(browser, '/channels/4001/5001');
+  const plugin = fs.readFileSync(PLUGIN, 'utf8');
+  await env.page.evaluate((code) => {
+    const module = { exports: {} };
+    new Function('module', 'exports', code)(module, module.exports);
+    const bd = new module.exports();
+    bd.start();
+    bd.stop();
+  }, plugin);
+  await env.page.waitForTimeout(1600);
+  assert(await env.page.evaluate(() => !document.querySelector('#dopa-purifier-host') && !window.__dopaPurifier), 'a stopped plugin still booted');
+  assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
+  await env.context.close();
+});
+
+await test('T255 a purge never touches what you send after you confirm', async () => {
+  {
+    const { page, stats, world, pageErrors, context } = await bootPaced('/channels/4001/5001', { deleteMs: 60 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /^40 messages found/);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await untilCount(page, 3);
+    const [sent] = addMine(world, '5001', 1, { content: () => 'sent while purifying' });
+    await waitEnd(page);
+    assert(world.messages['5001'].some((m) => m.id === sent.id) && !stats.deletes.includes(sent.id), 'the message sent mid-run was deleted');
+    assert(await text(page, '[data-role="pct"]') === '40 of 40' && await countNow(page) === 40, `finish ${await text(page, '[data-role="pct"]')}`);
+    assert(mine(world, '5001').length === 1 && /SUMMARY: 40 purged, 0 failed(?!, )/.test(await logText(page)), 'the summary counts it as neither gone nor skipped');
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    // A DM's history walk sees the new message too, and leaves it.
+    const { page, stats, world, context } = await bootPaced('/channels/4001/5001', { deleteMs: 60 });
+    await pickBatch(page, ['c:3003']);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await untilCount(page, 2);
+    const [sent] = addMine(world, '3003', 1);
+    await waitEnd(page);
+    assert(!stats.deletes.includes(sent.id) && mine(world, '3003').length === 1, 'the new DM message was deleted');
+    assert(await text(page, '[data-key="c:3003"] .run-pill') === 'purged 7', `row ${await text(page, '[data-key="c:3003"] .run-pill')}`);
+    await context.close();
+  }
+});
+
+await test('T256 a deliberate Stop brings back only the ticks; the panel going away reads as cut short', async () => {
+  const paced = withTiming(source, { deleteDelayMs: 150 });
+  {
+    const { page, context } = await bootWith(paced, '/channels/4001/5001');
+    await pickBatch(page, ['c:3002', 'c:3003']);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await untilCount(page, 3);
+    await page.click('[data-act="stop"]');
+    await waitEnd(page, 5000);
+    assert((await storedJournal(page))?.state === 'stopped', `journal after Stop ${JSON.stringify(await storedJournal(page))}`);
+    await reboot(page, paced, false);
+    await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="tab-badge"]').textContent === '2', null, { timeout: 5000 });
+    await page.waitForTimeout(300);
+    assert(await statusText(page) === 'Ready to purify~ ✨', `a Stop nudges: ${await statusText(page)}`);
+    // Unticking them all lets the journal go.
+    await page.click('.tab[data-tab="batch"]');
+    await page.click('[data-act="dm-none"]');
+    assert(await storedJournal(page) === null, 'the journal outlived every restored tick');
+    await context.close();
+  }
+  {
+    const { page, context } = await bootWith(paced, '/channels/4001/5001');
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await untilCount(page, 3);
+    await page.click('[data-act="stop"]');
+    await waitEnd(page, 5000);
+    assert(await storedJournal(page) === null, 'This chat\'s Stop left a journal');
+    await reboot(page, paced, false);
+    await page.waitForTimeout(800);
+    assert(await statusText(page) === 'Ready to purify~ ✨', `This chat after a Stop: ${await statusText(page)}`);
+    await context.close();
+  }
+  {
+    // BetterDiscord reloading the plugin mid-purge (an update, a disable) is not a Stop.
+    const plugin = withTiming(fs.readFileSync(PLUGIN, 'utf8'), { deleteDelayMs: 150 });
+    const env = await openDiscord(browser, '/channels/4001/5001');
+    const { page } = env;
+    await page.evaluate((code) => {
+      const module = { exports: {} };
+      new Function('module', 'exports', code)(module, module.exports);
+      window.__bd = new module.exports();
+      window.__bd.start();
+    }, plugin);
+    await settled(page);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await untilCount(page, 3);
+    await page.evaluate(() => window.__bd.stop());
+    await page.waitForTimeout(500);
+    assert((await storedJournal(page))?.state === 'running', `journal after the plugin went: ${JSON.stringify(await storedJournal(page))}`);
+    await page.evaluate(() => window.__bd.start());
+    await settled(page);
+    await untilStatus(page, /^Cut short last time~ Purify picks up the rest$/, 5000);
+    assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
+    await env.context.close();
+  }
+});
+
+await test('T257 the journal keeps ids only and lasts a day', async () => {
+  const env = await openDiscord(browser, '/channels/4001/5001');
+  await plantJournal(env.page, { v: 1, user: '1000', mode: 'batch', at: Date.now() - 23 * HOUR, state: 'running', keys: ['c:3002', 'c:5002'], guilds: ['4001'] });
+  await injectUserscript(env.page, source);
+  await settled(env.page);
+  await untilStatus(env.page, /^2 chats left from last time~ Purify selected finishes them$/, 5000);
+  // The server holding a restored channel opens by itself, so that tick is in view.
+  await env.page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="tab-badge"]').textContent === '2', null, { timeout: 5000 });
+  await env.page.click('.tab[data-tab="batch"]');
+  assert((await ticked(env.page, ['c:3002', 'c:5002'])).every(Boolean), 'restored ticks');
+  assert(await env.page.locator('.guild[data-guild-id="4001"] .guild-head[aria-expanded="true"]').count() === 1, 'the server with a restored channel is open');
+  await env.context.close();
+});
+
+await test('T258 a verdict lasts its visit even when you move while minimised, and Count\'s "all clear" stays', async () => {
+  {
+    const { page, pageErrors, context } = await boot('/channels/4001/5002');
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    await page.click('[data-act="minimize"]');
+    await page.locator('.orb').waitFor({ state: 'visible' });
+    await goTo(page, '/channels/4001/5001');
+    await page.waitForTimeout(300);
+    await goTo(page, '/channels/4001/5002');
+    await page.waitForTimeout(300);
+    await page.click('.orb');
+    await page.waitForTimeout(600);
+    assert(await heroIs(page) === 'unscanned/icon' && await page.locator('[data-act="purify"]').isEnabled(), `back on art-share: ${await heroIs(page)}`);
+    assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+    await context.close();
+  }
+  {
+    // Count's own "all clear" isn't a verdict a visit can stale: browsing past it keeps it.
+    const { page, context } = await boot('/channels/4001/5001');
+    await pickBatch(page, ['c:5004']);
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /^All clear~/);
+    assert(await heroIs(page) === 'clear/count', `after Count ${await heroIs(page)}`);
+    await goTo(page, '/channels/4001/5004');
+    await page.waitForTimeout(500);
+    await goTo(page, '/channels/4001/5001');
+    await page.waitForTimeout(500);
+    assert(await heroIs(page) === 'clear/count' && /all clear/.test(await text(page, '[data-key="c:5004"] .row-meta')), `after visiting it: ${await heroIs(page)}`);
+    await context.close();
+  }
+});
+
+await test('T259 a 429 that names no wait backs off further from the third, up to 10 minutes, and resets', async () => {
+  const { page, pageErrors, context } = await bootPaced('/channels/4001/5002', { deleteMs: 20, timing: { waitUnitMs: 1 }, probe: ['on'] });
+  let n = 0;
+  await page.route(/\/api\/v9\/channels\/5002\/messages\/\d+$/, (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    n++;
+    // Ten bare 429s for the first message, then one more for the third.
+    if (n <= 10 || n === 13) return route.fulfill({ status: 429, contentType: 'text/html', body: '<html>slow down</html>' });
+    return route.fallback();
+  });
+  await page.evaluate(() => { window.__waits = []; window.__dp.on('wait', (w) => window.__waits.push(w.seconds)); });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page, 20000);
+  const waits = await page.evaluate(() => window.__waits);
+  assert(waits.join() === '5,5,10,20,40,80,160,320,600,600,5', `waits ${waits.join(', ')}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });

@@ -517,7 +517,9 @@ export function withTiming(source, fast = true) {
   return source.replace(timing[0], () => `const TIMING = {${body}}`);
 }
 
-// Inject a userscript, at a quick pace unless fast is false (see withTiming).
+// Inject a userscript, at a quick pace unless fast is false (see withTiming). The panel boots once the
+// page is idle (D33), so this waits for it to mount.
 export async function injectUserscript(page, source, { fast = true } = {}) {
   await page.addScriptTag({ content: withTiming(source, fast) });
+  await page.waitForSelector('#dopa-purifier-host', { state: 'attached', timeout: 5000 });
 }
