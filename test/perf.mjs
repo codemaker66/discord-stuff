@@ -120,10 +120,13 @@ await measure('T220 the hold on 8 fresh pages', async () => {
       const r = eval(sr);
       new MutationObserver(() => { if (r.querySelector('.modal-layer').dataset.open === 'true' && !window.__opened) window.__opened = performance.now(); })
         .observe(r.querySelector('.modal-layer'), { attributes: true });
-      document.addEventListener('pointerdown', () => { window.__down = performance.now(); }, true);
+      // The hold's own press (Purify's click is a pointerdown too, and comes first).
+      r.querySelector('[data-act="confirm"]').addEventListener('pointerdown', () => { window.__down = performance.now(); });
     }, SR);
     await page.click('[data-act="purify"]');
     await page.waitForSelector('.modal-layer[data-open="true"]');
+    // A person reads the dialog before holding: the sound is primed meanwhile (200 ms after it opens).
+    await page.waitForTimeout(700);
     await hold(page);
     await page.waitForTimeout(800);
     const seen = await page.evaluate(() => ({ long: window.__long, opened: window.__opened, down: window.__down }));

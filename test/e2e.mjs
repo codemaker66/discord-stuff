@@ -2634,7 +2634,8 @@ await test('T104 the ring moves only with real work: a sweep on the arc, nothing
     const search = await holdRequests(page, /\/messages\/search/);
     await page.click('[data-act="scan"]');
     await heldBy(search);
-    assert((await looping(page)).join() === 'dp-breathe@hero-face,dp-sweep@g-sweep', `counting: ${await looping(page)}`);
+    // Counting has one busy signal: the sweep (the face no longer breathes, D49).
+    assert((await looping(page)).join() === 'dp-turn@sweep', `counting: ${await looping(page)}`);
     search.release();
     await untilStatus(page, /found/);
     assert((await looping(page)).length === 0, `after the count: ${await looping(page)}`);
@@ -2663,20 +2664,27 @@ await test('T104 the ring moves only with real work: a sweep on the arc, nothing
     confirming = true;
     await holdConfirm(page);
     await heldBy(search);
-    assert((await looping(page)).join() === 'dp-sweep@g-sweep', `unknown total: ${await looping(page)}`);
-    // The sweep's path is the arc itself, so it never crosses the open bottom where "3 of 31+" sits.
-    const offArc = await page.evaluate(() => {
-      const p = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.g-sweep');
-      const len = p.getTotalLength();
-      const out = [];
-      for (let i = 0; i <= 100; i++) {
-        const pt = p.getPointAtLength((len * i) / 100);
-        const deg = (Math.atan2(pt.y - 100, pt.x - 100) * 180) / Math.PI;
-        if (Math.abs(Math.hypot(pt.x - 100, pt.y - 100) - 84) > 0.5 || (deg > 45.5 && deg < 134.5)) out.push([pt.x.toFixed(1), pt.y.toFixed(1)]);
-      }
-      return out;
+    assert((await looping(page)).join() === 'dp-turn@sweep', `unknown total: ${await looping(page)}`);
+    // The sweep is a 40° dash on the ring's own circle, starting at the arc's left end (135°) and turned
+    // at most 230° about the ring's centre, so its far end stops at 405°, the arc's right end: it never
+    // crosses the open bottom where "3 of 31+" sits.
+    const geo = await page.evaluate(() => {
+      const r = document.querySelector('#dopa-purifier-host').shadowRoot;
+      const sweep = r.querySelector('.sweep');
+      const c = sweep.querySelector('circle');
+      const a = sweep.getAnimations().find((x) => x.animationName === 'dp-turn');
+      const frames = a.effect.getKeyframes().map((k) => k.transform).filter(Boolean);
+      const turns = frames.map((t) => Number(/rotate\((-?[\d.]+)deg\)/.exec(t)[1]));
+      return {
+        circle: [c.getAttribute('cx'), c.getAttribute('cy'), c.getAttribute('r'), c.getAttribute('pathLength'), c.getAttribute('transform')].join(),
+        dash: c.getAttribute('stroke-dasharray'), turns, origin: getComputedStyle(sweep).transformOrigin,
+        under: getComputedStyle(sweep).zIndex,
+      };
     });
-    assert(offArc.length === 0, `sweep leaves the arc at ${JSON.stringify(offArc)}`);
+    const dash = Number(geo.dash.split(' ')[0]);
+    assert(geo.circle === '100,100,84,360,rotate(135 100 100)' && dash === 40, `the sweep's dash ${JSON.stringify(geo)}`);
+    assert(Math.min(...geo.turns) >= 0 && 135 + dash + Math.max(...geo.turns) <= 405, `the sweep turns past the arc ${JSON.stringify(geo.turns)}`);
+    assert(/^98px 98px/.test(geo.origin) && geo.under === '-1', `the sweep turns about the ring's centre, under its notches ${JSON.stringify(geo)}`);
     search.release();
     await waitEnd(page);
     await context.close();
@@ -2695,7 +2703,7 @@ await test('T104 the ring moves only with real work: a sweep on the arc, nothing
       return { dial: r.querySelector('.dial').getAttribute('class'), head: getComputedStyle(r.querySelector('.g-head')).visibility, eta: r.querySelector('[data-role="stat-eta"] b').textContent };
     });
     assert(/is-verifying/.test(last.dial) && last.head === 'hidden' && last.eta === 'double-checking…', `last look ${JSON.stringify(last)}`);
-    assert((await looping(page)).join() === 'dp-sweep@g-sweep', `last look: ${await looping(page)}`);
+    assert((await looping(page)).join() === 'dp-turn@sweep', `last look: ${await looping(page)}`);
     look.release();
     await waitEnd(page);
     await context.close();
@@ -2719,7 +2727,7 @@ await test('T104 the ring moves only with real work: a sweep on the arc, nothing
     await heldBy(search);
     const rm = await page.evaluate(() => {
       const r = document.querySelector('#dopa-purifier-host').shadowRoot;
-      return { sweep: getComputedStyle(r.querySelector('.g-sweep')).display, track: getComputedStyle(r.querySelector('.g-track')).animationName };
+      return { sweep: getComputedStyle(r.querySelector('.sweep')).display, track: getComputedStyle(r.querySelector('.g-track')).animationName };
     });
     assert(rm.sweep === 'none' && rm.track === 'dp-breathe', `reduced motion ${JSON.stringify(rm)}`);
     search.release();
@@ -3094,7 +3102,7 @@ await test('T120 Purify counts an uncounted chat first, with one search, and the
     }
     await page.click('[data-act="purify"]');
     await page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 3000 });
-    assert(await text(page, '.modal-lead') === 'This will delete all 10 of your messages in', `${flow}: lead ${await text(page, '.modal-lead')}`);
+    assert(await text(page, '.modal-lead') === 'This will delete all 10 of your messages, threads included, in', `${flow}: lead ${await text(page, '.modal-lead')}`);
     assert(stats.searches - s0 === 1, `${flow}: ${stats.searches - s0} searches before the hold`);
     assert(await text(page, '.modal-who') === 'deleting as @princess.dopa', `${flow}: ${await text(page, '.modal-who')}`);
     await holdConfirm(page);
@@ -3157,7 +3165,7 @@ await test('T122 a count Discord holds up is given up: the dialog says "all your
     await page.click('[data-act="purify"]');
     await page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 4000 });
     const took = Date.now() - t0;
-    assert(await text(page, '.modal-lead') === 'This will delete all your messages in', `${kind}: lead ${await text(page, '.modal-lead')}`);
+    assert(await text(page, '.modal-lead') === 'This will delete all your messages, threads included, in', `${kind}: lead ${await text(page, '.modal-lead')}`);
     assert(searches === 1, `${kind}: ${searches} searches`);
     assert(kind === 'slow' ? took >= 1100 && took < 2200 : took < 1000, `${kind}: the dialog took ${took}ms`);
     assert(/count skipped/.test(await text(page, '[data-role="term-body"]')), `${kind}: the log says why there's no number`);
@@ -3179,7 +3187,7 @@ await test('T122 a count Discord holds up is given up: the dialog says "all your
   await env.page.route('https://discord.com/api/v9/guilds/*/messages/search*', later(500));
   await env.page.click('[data-act="purify"]');
   await env.page.waitForSelector('.modal-layer[data-open="true"]', { timeout: 4000 });
-  assert(await text(env.page, '.modal-lead') === 'This will delete all 10 of your messages in', `slow who-are-you: ${await text(env.page, '.modal-lead')}`);
+  assert(await text(env.page, '.modal-lead') === 'This will delete all 10 of your messages, threads included, in', `slow who-are-you: ${await text(env.page, '.modal-lead')}`);
   await env.context.close();
 });
 
@@ -3450,7 +3458,7 @@ await test('T130 screen readers: nothing behind the dialog, the armed press is s
     return nodes.filter((n) => !n.ignored);
   };
   {
-    const { page, context } = await boot('/channels/4001/5002');
+    const { page, context } = await boot('/channels/4001/5002', { clock: true });
     await page.click('[data-act="purify"]');
     await page.waitForSelector('.modal-layer[data-open="true"]');
     const nodes = await ax(context, page);
@@ -3458,14 +3466,17 @@ await test('T130 screen readers: nothing behind the dialog, the armed press is s
     assert(JSON.stringify(buttons) === JSON.stringify(['Never mind~', 'Hold to purify']), `reachable buttons ${JSON.stringify(buttons)}`);
     const dialog = nodes.find((n) => n.role && n.role.value === 'alertdialog');
     const said = dialog.description ? dialog.description.value : '';
-    assert(/^This will delete all 10 of your messages in art-share · ✿ Cozy Corner deleting as @princess\.dopa This can't be undone$/.test(said.replace(/\s+/g, ' ').trim()), `described as ${JSON.stringify(said)}`);
+    assert(/^This will delete all 10 of your messages, threads included, in art-share · ✿ Cozy Corner deleting as @princess\.dopa This can't be undone$/.test(said.replace(/\s+/g, ' ').trim()), `described as ${JSON.stringify(said)}`);
     const live = page.locator('[data-role="modal-live"]');
     assert(await live.getAttribute('aria-live') === 'assertive', 'an assertive region');
     const press = () => page.locator('[data-act="confirm"]').evaluate((el) => el.click());
     await page.waitForTimeout(400);
     await press();
-    assert(await live.textContent() === 'Armed — press again within 5 seconds to purify, or Esc to cancel.', `armed: ${await live.textContent()}`);
-    await page.waitForTimeout(5300);
+    assert(await live.textContent() === 'Armed — press again within 15 seconds to purify, or Esc to cancel.', `armed: ${await live.textContent()}`);
+    // A switch user stepping Never mind → Hold at 2-3 s a step still makes it (D47); past 15 s it lapses.
+    await page.clock.fastForward(14000);
+    assert(/^Armed/.test(await live.textContent()), `still armed at 14 s: ${await live.textContent()}`);
+    await page.clock.fastForward(1300);
     assert(await live.textContent() === 'Disarmed. Nothing was purged.', `lapsed: ${await live.textContent()}`);
     await page.keyboard.press('Escape');
     assert(await live.textContent() === '' && !(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="shell"]').inert)), 'closing clears the region and frees the panel');
@@ -5515,7 +5526,7 @@ await test('T188 a reload mid-#general says where to pick up, and Purify counts 
     const s0 = stats.searches;
     await page.click('[data-act="purify"]');
     await page.waitForSelector('.modal-layer[data-open="true"]');
-    assert(await text(page, '.modal-lead') === `This will delete all ${left} of your messages in` && stats.searches - s0 === 1, `counted first: ${await text(page, '.modal-lead')}`);
+    assert(await text(page, '.modal-lead') === `This will delete all ${left} of your messages, threads included, in` && stats.searches - s0 === 1, `counted first: ${await text(page, '.modal-lead')}`);
     await page.click('[data-act="cancel"]');
     assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
     await context.close();
@@ -5553,7 +5564,7 @@ await test('T189 back on a chat purged clean, new messages show: it counts again
   assert(await page.locator('[data-act="purify"]').isEnabled() && await statusText(page) === 'Ready to purify~ ✨', `Purify ${await page.locator('[data-act="purify"]').isEnabled()}, footer ${await statusText(page)}`);
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
-  assert(await text(page, '.modal-lead') === 'This will delete all 3 of your messages in', `dialog ${await text(page, '.modal-lead')}`);
+  assert(await text(page, '.modal-lead') === 'This will delete all 3 of your messages, threads included, in', `dialog ${await text(page, '.modal-lead')}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });
@@ -5765,6 +5776,552 @@ await test('T259 a 429 that names no wait backs off further from the third, up t
   assert(waits.join() === '5,5,10,20,40,80,160,320,600,600,5', `waits ${waits.join(', ')}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
+});
+
+// ---- WP-I (4.2) ----
+// Confirm, sound and motion (D45-D50, amendments I1-I2).
+
+const R = "document.querySelector('#dopa-purifier-host').shadowRoot";
+
+// The page's audio, instrumented: every context that decodes, every decode, every source started and
+// ended, every gain and every ramp. short: play only the last `short` seconds of each source, so a test
+// sees the sound end without waiting out its 6.6 s (the file is untouched; this only seeks into it).
+const instrumentAudio = (page, { short = 0 } = {}) => page.evaluate((cut) => {
+  const a = { made: [], decodes: [], starts: [], ended: 0, ramps: [], gains: [], short: cut };
+  window.__audio = a;
+  const proto = BaseAudioContext.prototype;
+  const decode = proto.decodeAudioData;
+  proto.decodeAudioData = function (...args) { a.decodes.push(performance.now()); if (!a.made.includes(this)) a.made.push(this); return decode.apply(this, args); };
+  const gain = proto.createGain;
+  proto.createGain = function (...args) { const g = gain.apply(this, args); a.gains.push(g); return g; };
+  const start = AudioBufferSourceNode.prototype.start;
+  AudioBufferSourceNode.prototype.start = function (when = 0) {
+    a.starts.push({ at: performance.now(), state: this.context.state });
+    this.addEventListener('ended', () => { a.ended++; });
+    return a.short ? start.call(this, when, Math.max(0, this.buffer.duration - a.short)) : start.call(this, when);
+  };
+  const ramp = AudioParam.prototype.linearRampToValueAtTime;
+  AudioParam.prototype.linearRampToValueAtTime = function (value, end) {
+    a.ramps.push({ value, from: a.made[0] ? a.made[0].currentTime : 0, end });
+    return ramp.call(this, value, end);
+  };
+}, short);
+const audio = (page) => page.evaluate(() => {
+  const a = window.__audio;
+  return { contexts: a.made.length, state: a.made[0] ? a.made[0].state : 'none', decodes: a.decodes, starts: a.starts, ended: a.ended, ramps: a.ramps,
+    gain: a.gains.length ? a.gains[a.gains.length - 1].gain.value : null };
+});
+const pressAt = (page) => page.evaluate((src) => new Promise((done) => {
+  eval(src).querySelector('[data-act="confirm"]').addEventListener('pointerdown', () => done(performance.now()), { once: true });
+}), R);
+const beatsOn = (page, sel) => inPanel(page, (r, s) => r.querySelector(s).getAnimations().map((a) => a.effect.getTiming().delay), sel);
+const confettiCount = (page) => inPanel(page, (r) => r.querySelectorAll('.confetti').length);
+const setHidden = (page, hidden) => page.evaluate((v) => {
+  if (!window.__hiddenPatched) {
+    window.__hiddenPatched = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => !!window.__hidden });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (window.__hidden ? 'hidden' : 'visible') });
+  }
+  window.__hidden = v;
+  document.dispatchEvent(new Event('visibilitychange'));
+}, hidden);
+// The shipped pace (about 1.45 s a message), so the dialog's estimate is the real one.
+const realPace = () => withTiming(source, { deleteDelayMs: 1200 });
+
+await test('T219 a long purge says how long it takes and to keep Discord open, at the moment you commit', async () => {
+  const { page, context } = await bootWith(realPace(), '/channels/4001/5001', { world: buildWorld({ bulk: { 5001: 3000 } }) });
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/, 8000);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const line = await text(page, '.modal-time');
+  assert(line === "About 1h 14m · keep Discord open~ messages you send now aren't touched", `the line: ${line}`);
+  const order = await inPanel(page, (r) => [...r.querySelector('[data-role="modal-text"]').children].map((el) => el.className.split(' ')[0]).join());
+  assert(order === 'modal-lead,pill,modal-who,modal-time,modal-warn', `where it sits: ${order}`);
+  const described = await page.locator('.modal').getAttribute('aria-describedby');
+  assert(described === 'dp-modal-lead dp-modal-pill dp-modal-who dp-modal-time dp-modal-warn', `described by ${described}`);
+  await page.click('[data-act="cancel"]');
+  // A short purge (#art-share's 10, under 2 minutes) has no such line, and isn't described by one.
+  await goTo(page, '/channels/4001/5002');
+  await nameIs(page, 'art-share');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  assert(await page.locator('.modal-time').count() === 0 && !/dp-modal-time/.test(await page.locator('.modal').getAttribute('aria-describedby')), 'a short purge says nothing of time');
+  await page.click('[data-act="cancel"]');
+  // Many chats: a friend with no DM yet can't be counted first, so the time is a floor.
+  await pickBatch(page, ['c:5001', 'u:2004']);
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /Counted~/, 15000);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  assert(/^About 1h 14m\+ · keep Discord open~/.test(await text(page, '.modal-time')), `Many chats: ${await text(page, '.modal-time')}`);
+  await context.close();
+  // At 200 % zoom on a laptop every part of the longest dialog stays on screen (D5).
+  for (const viewport of [{ width: 683, height: 384 }, { width: 640, height: 360 }]) {
+    const env = await bootWith(realPace(), '/channels/4001/5001', { world: buildWorld({ bulk: { 5001: 3000 } }), viewport });
+    await env.page.click('[data-act="scan"]');
+    await untilStatus(env.page, /found/, 8000);
+    await env.page.click('[data-act="purify"]');
+    await env.page.waitForSelector('.modal-layer[data-open="true"]');
+    await env.page.waitForTimeout(400);
+    for (const sel of ['.modal-title', '.modal-time', '[data-act="cancel"]', '[data-act="confirm"]', '#dp-modal-hint']) {
+      const b = await env.page.locator(sel).boundingBox();
+      assert(b.y >= 0 && b.y + b.height <= viewport.height && b.x >= 0 && b.x + b.width <= viewport.width, `${viewport.width}×${viewport.height}: ${sel} at ${JSON.stringify(b)}`);
+    }
+    await env.context.close();
+  }
+});
+
+await test('T220 the sound is primed while the dialog is read: the commit only starts it, and Never mind leaves it asleep', async () => {
+  const { page, context } = await boot('/channels/4001/5002');
+  await instrumentAudio(page);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const opened = await page.evaluate(() => performance.now());
+  await page.waitForFunction(() => window.__audio.made.length && window.__audio.made[0].state === 'suspended', null, { timeout: 3000 });
+  let a = await audio(page);
+  assert(a.contexts === 1 && a.decodes.length === 1 && a.decodes[0] - opened < 400 && !a.starts.length, `primed and asleep before the hold ${JSON.stringify({ ...a, opened })}`);
+  // Never mind: still asleep, nothing played.
+  await page.click('[data-act="cancel"]');
+  await page.waitForTimeout(300);
+  a = await audio(page);
+  assert(a.state === 'suspended' && !a.starts.length, `after Never mind ${JSON.stringify(a)}`);
+  // The hold's commit makes no context and decodes nothing: it only starts the primed sound.
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const pressed = pressAt(page);
+  await holdConfirm(page);
+  await page.waitForFunction(() => window.__audio.starts.length === 1, null, { timeout: 3000 });
+  a = await audio(page);
+  const down = await pressed;
+  assert(a.contexts === 1 && a.decodes.length === 1 && a.decodes[0] < down, `the commit did audio work ${JSON.stringify(a)}`);
+  assert(a.starts[0].at - down >= 850 && a.state === 'running', `the sound starts at the commit, awake ${JSON.stringify(a.starts)} ${a.state}`);
+  await waitEnd(page);
+  // Muted, the dialog primes nothing.
+  await page.click('[data-act="mute"]');
+  await goTo(page, '/channels/4001/5001');
+  await nameIs(page, 'general');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  await page.waitForTimeout(400);
+  assert((await audio(page)).decodes.length === 1, 'muted, the dialog decoded again');
+  await page.click('[data-act="cancel"]');
+  await context.close();
+});
+
+await test('T221 the audio engine sleeps once the sound ends, and a second Purify plays its sound in full', async () => {
+  {
+    const { page, context } = await boot('/channels/4001/5002');
+    await instrumentAudio(page, { short: 0.3 });
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => window.__audio.ended === 1, null, { timeout: 5000 });
+    await page.waitForFunction(() => window.__audio.made[0].state === 'suspended', null, { timeout: 2000 });
+    await waitEnd(page);
+    assert((await audio(page)).state === 'suspended', 'the engine woke again by itself');
+    await context.close();
+  }
+  {
+    // The whole 6.6 s sound: a second purge within it takes over, and is heard from its start.
+    const { page, context } = await boot('/channels/4001/5002');
+    await instrumentAudio(page);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    await goTo(page, '/channels/4001/5001');
+    await nameIs(page, 'general');
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => window.__audio.starts.length === 2, null, { timeout: 5000 });
+    let a = await audio(page);
+    assert(a.starts[1].at - a.starts[0].at < 6000 && a.state === 'running', `the second sound ${JSON.stringify(a.starts)} ${a.state}`);
+    await page.waitForTimeout(300);
+    a = await audio(page);
+    assert(a.ended === 1 && a.state === 'running', `the first gave way and the second plays ${JSON.stringify(a)}`);
+    await page.waitForTimeout(800);
+    assert((await audio(page)).ended === 1, 'the second sound was cut short');
+    await waitEnd(page);
+    await context.close();
+  }
+});
+
+await test('T222 Mute or Stop during the sound hushes it at once, with a fade of 30 ms or less', async () => {
+  for (const act of ['mute', 'stop']) {
+    const { page, context } = await bootPaced('/channels/4001/5001', { deleteMs: 150 });
+    await instrumentAudio(page);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await page.waitForFunction(() => window.__audio.starts.length === 1, null, { timeout: 5000 });
+    await page.waitForTimeout(300);
+    assert((await audio(page)).gain > 0.5, `${act}: playing at 0.6`);
+    await page.click(`[data-act="${act}"]`);
+    await page.waitForTimeout(300);
+    const a = await audio(page);
+    assert(a.ended === 1 && a.gain < 0.02, `${act}: still sounding 300 ms later ${JSON.stringify(a)}`);
+    const fade = a.ramps.find((r) => r.value === 0);
+    assert(fade && fade.end - fade.from <= 0.031, `${act}: the fade ${JSON.stringify(a.ramps)}`);
+    await page.waitForFunction(() => window.__audio.made[0].state === 'suspended', null, { timeout: 2000 });
+    if (act === 'mute') await page.click('[data-act="stop"]');
+    await waitEnd(page);
+    await context.close();
+  }
+});
+
+await test('T223 a quick tap reads as a tap: "Keep holding~" waits until it is a hold', async () => {
+  const { page, stats, context } = await boot('/channels/4001/5002');
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  await page.waitForTimeout(400);
+  await page.evaluate((src) => {
+    window.__labels = [];
+    const label = eval(src).querySelector('[data-role="confirm-label"]');
+    new MutationObserver(() => window.__labels.push(label.textContent)).observe(label, { childList: true, subtree: true, characterData: true });
+  }, R);
+  const c = await page.locator('[data-act="confirm"]').boundingBox();
+  await page.mouse.move(c.x + c.width / 2, c.y + c.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(90);
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  // What a person sees change (a press rewrites the resting words as they were, which isn't a change).
+  const changes = (said) => said.filter((t, i) => t !== (i ? said[i - 1] : 'Hold to purify ✨'));
+  const seen = changes(await page.evaluate(() => window.__labels));
+  assert(JSON.stringify(seen) === JSON.stringify(['Hold it down~ ♡']), `a 90 ms tap showed ${JSON.stringify(seen)}`);
+  await page.waitForTimeout(1500);
+  // A real hold says so from a quarter second on, while the fill has moved since the press.
+  await page.evaluate(() => { window.__labels = []; });
+  await holdConfirm(page);
+  const held = changes(await page.evaluate(() => window.__labels));
+  assert(held[0] === 'Keep holding~' && held.includes('Purifying~ ♡'), `a hold showed ${JSON.stringify(held)}`);
+  await waitEnd(page);
+  assert(stats.deletes.length === 10, 'the hold purged');
+  await context.close();
+});
+
+await test('T224 a name with stacked marks stays inside its pill, clear of "deleting as"', async () => {
+  const { page, context } = await boot('/channels/@me/3003', { world: buildWorld({ names: 'zalgo' }) });
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const pill = await inPanel(page, (r) => {
+    const p = r.querySelector('.pill').getBoundingClientRect();
+    const w = r.querySelector('.modal-who').getBoundingClientRect();
+    const cs = getComputedStyle(r.querySelector('.pill'));
+    return { overlap: p.bottom > w.top && p.top < w.bottom, overflow: cs.overflow, margin: cs.overflowClipMargin, name: r.querySelector('.pill-name').textContent.length };
+  });
+  assert(!pill.overlap && pill.overflow === 'clip' && pill.margin === '2px' && pill.name > 20, `pill ${JSON.stringify(pill)}`);
+  await context.close();
+});
+
+await test('T225 the This chat lead names the reach: threads in a channel, posts in a forum, nothing more in a DM', async () => {
+  const world = buildWorld();
+  world.channels['5002'].type = 15; // a forum
+  const { page, context } = await boot('/channels/4001/5003', { world });
+  const lead = async (where, name) => {
+    await goTo(page, where);
+    await nameIs(page, name);
+    await page.click('[data-act="purify"]');
+    await page.waitForSelector('.modal-layer[data-open="true"]');
+    const said = await text(page, '.modal-lead');
+    await page.click('[data-act="cancel"]');
+    return said;
+  };
+  let said = await lead('/channels/4001/5003', 'announcements');
+  assert(said === 'This will delete all 5 of your messages, threads included, in', `an announcement channel: ${said}`);
+  said = await lead('/channels/4001/5002', 'art-share');
+  assert(said === 'This will delete all 10 of your messages, posts included, in', `a forum: ${said}`);
+  said = await lead('/channels/@me/3002', 'Alice ✿');
+  assert(said === 'This will delete all 31 of your messages in', `a DM: ${said}`);
+  await context.close();
+});
+
+await test('T226 a run that ends while minimised plays its finish when you open it: verdict, sticker and confetti', async () => {
+  const { page, context } = await bootPaced('/channels/4001/5002', { deleteMs: 120 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.click('[data-act="minimize"]');
+  await waitEnd(page);
+  await page.waitForTimeout(200);
+  assert(await confettiCount(page) === 0 && (await beatsOn(page, '[data-role="sticker"]')).length === 0, 'the beats played unseen');
+  await page.click('.orb');
+  await page.waitForFunction((src) => eval(src).querySelector('[data-role="sticker"]').getAnimations().length > 0, R, { timeout: 2000 });
+  const beats = { line: await beatsOn(page, '[data-role="readout-line"]'), sticker: await beatsOn(page, '[data-role="sticker"]'), confetti: await confettiCount(page),
+    unfolding: await inPanel(page, (r) => r.querySelector('.panel').getAnimations().length) };
+  assert(beats.line.join() === '60' && beats.sticker.join() === '380' && beats.confetti > 0 && beats.unfolding === 0, `after the unfold ${JSON.stringify(beats)}`);
+  await context.close();
+});
+
+await test('T227 a run that ends in a hidden tab plays its finish once, when you come back', async () => {
+  const { page, context } = await bootPaced('/channels/4001/5002', { deleteMs: 120 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await setHidden(page, true);
+  await waitEnd(page);
+  await page.waitForTimeout(200);
+  assert(await confettiCount(page) === 0 && (await beatsOn(page, '[data-role="readout-line"]')).length === 0, 'the beats played in a hidden tab');
+  await setHidden(page, false);
+  const first = { line: await beatsOn(page, '[data-role="readout-line"]'), confetti: await confettiCount(page) };
+  assert(first.line.join() === '60' && first.confetti > 0, `on coming back ${JSON.stringify(first)}`);
+  await setHidden(page, true);
+  await setHidden(page, false);
+  assert((await beatsOn(page, '[data-role="readout-line"]')).length === 1, 'the beats played twice');
+  await context.close();
+});
+
+await test('T228 a Many chats finish throws nothing into hidden places: no confetti, no drops, no squash; its line fades in once', async () => {
+  const { page, context } = await bootPaced('/channels/4001/5001', { deleteMs: 60 });
+  await pickBatch(page, ['c:5002']);
+  await page.evaluate((src) => {
+    const r = eval(src);
+    window.__fx = { drops: 0, confetti: 0, squash: 0 };
+    new MutationObserver((list) => {
+      for (const m of list) for (const n of m.addedNodes) {
+        if (n.classList && n.classList.contains('drop')) window.__fx.drops++;
+        if (n.classList && n.classList.contains('confetti')) window.__fx.confetti++;
+      }
+    }).observe(r, { childList: true, subtree: true });
+    const w = r.querySelector('[data-role="wobble"]');
+    const look = () => { if (w.style.transform) window.__fx.squash++; if (!window.__fx.stop) requestAnimationFrame(look); };
+    look();
+  }, R);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await waitEnd(page);
+  await page.waitForTimeout(150);
+  const fx = await page.evaluate(() => { window.__fx.stop = true; return window.__fx; });
+  const sub = await beatsOn(page, '[data-role="hero-sub"]');
+  assert(fx.drops === 0 && fx.confetti === 0 && fx.squash === 0, `Many chats' finish ${JSON.stringify(fx)}`);
+  assert(sub.join() === '60', `the strip's line ${JSON.stringify(sub)}`);
+  await context.close();
+});
+
+await test('T229 a This chat finish belongs to its chat: nothing over another chat, the beats once you are back', async () => {
+  const { page, context } = await bootPaced('/channels/4001/5002', { deleteMs: 120 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await goTo(page, '/channels/4001/5001');
+  await nameIs(page, 'general');
+  await waitEnd(page);
+  await page.waitForTimeout(200);
+  assert(await confettiCount(page) === 0, 'confetti over #general');
+  await goTo(page, '/channels/4001/5002');
+  await nameIs(page, 'art-share');
+  await page.waitForFunction((src) => eval(src).querySelector('[data-role="layer"]').dataset.hero === 'done', R, { timeout: 3000 });
+  const beats = { line: await beatsOn(page, '[data-role="readout-line"]'), confetti: await confettiCount(page) };
+  assert(beats.line.join() === '60' && beats.confetti > 0, `back on #art-share ${JSON.stringify(beats)}`);
+  await context.close();
+});
+
+await test('T230 a kill animates only what the compositor plays, and This chat\'s footer holds still', async () => {
+  const { page, context } = await bootPaced('/channels/4001/5001', { deleteMs: 60 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilCount(page, 3);
+  const seen = await page.evaluate((src) => new Promise((done) => {
+    const r = eval(src);
+    const props = new Set();
+    let footer = 0;
+    let dot = 0;
+    const t0 = performance.now();
+    const look = () => {
+      for (const a of r.getAnimations()) {
+        for (const k of a.effect.getKeyframes()) for (const p of Object.keys(k)) if (!['offset', 'computedOffset', 'easing', 'composite'].includes(p)) props.add(p);
+        if (a.effect.target === r.querySelector('[data-role="status-text"]')) footer++;
+        if (a.effect.pseudoElement === '::after' && a.effect.target.classList.contains('live-dot')) dot++;
+      }
+      if (performance.now() - t0 < 900) requestAnimationFrame(look); else done({ props: [...props].sort(), footer, dot });
+    };
+    look();
+  }), R);
+  assert(seen.props.every((p) => p === 'transform' || p === 'opacity'), `a kill animates ${seen.props}`);
+  assert(seen.footer === 0 && seen.dot > 0, `footer ${seen.footer}, live dot pings ${seen.dot}`);
+  await waitEnd(page);
+  await context.close();
+});
+
+await test('T231 a pause is still: the sweep fades out where it stands and nothing loops; Resume brings it back', async () => {
+  const { page, context } = await bootPaced('/channels/4001/5001', { deleteMs: 120 });
+  await pickBatch(page, ['c:5002', 'c:3002']);
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilCount(page, 2);
+  assert(await inPanel(page, (r) => r.querySelector('.dial').classList.contains('is-spinning')), 'a run with no known end spins');
+  await page.click('[data-act="pause"]');
+  await page.waitForTimeout(300);
+  const paused = await inPanel(page, (r) => ({
+    opacity: getComputedStyle(r.querySelector('.sweep circle')).opacity,
+    loops: r.getAnimations().filter((a) => a.effect.getTiming().iterations === Infinity && a.playState === 'running').map((a) => `${a.animationName || 'waapi'}@${a.effect.target.getAttribute('class')}`),
+  }));
+  assert(paused.opacity === '0' && paused.loops.length === 0, `paused ${JSON.stringify(paused)}`);
+  await page.click('[data-act="resume"]');
+  await page.waitForTimeout(300);
+  const back = await inPanel(page, (r) => ({ opacity: getComputedStyle(r.querySelector('.sweep circle')).opacity, sweep: r.querySelector('.sweep').getAnimations().map((a) => a.playState).join() }));
+  assert(back.opacity === '1' && back.sweep === 'running', `resumed ${JSON.stringify(back)}`);
+  await page.click('[data-act="stop"]');
+  await waitEnd(page);
+  await context.close();
+});
+
+await test('T232 Many chats at rest keeps nothing on a loop: Bardo\'s sheen plays twice and rests', async () => {
+  const { page, context } = await boot('/channels/4001/5001');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.waitForTimeout(400);
+  const loops = await inPanel(page, (r) => r.getAnimations().filter((a) => a.effect.getComputedTiming().endTime === Infinity).map((a) => `${a.animationName || 'waapi'}@${a.effect.target.getAttribute('class')}`));
+  const sheen = await inPanel(page, (r) => r.getAnimations().filter((a) => a.animationName === 'dp-sheen').map((a) => a.effect.getTiming().iterations));
+  assert(loops.length === 0, `at rest ${JSON.stringify(loops)}`);
+  assert(sheen.length > 0 && sheen.every((n) => n === 2), `the sheen ${JSON.stringify(sheen)}`);
+  await context.close();
+});
+
+await test('T233 a drag held still levels out gently while still held, with no jump', async () => {
+  const { page, context } = await boot('/channels/4001/5002');
+  const head = await page.locator('.titles').boundingBox();
+  await page.mouse.move(head.x + 40, head.y + 8);
+  await page.mouse.down();
+  for (let i = 1; i <= 6; i++) { await page.mouse.move(head.x + 40 - i * 60, head.y + 8 + i * 4); await page.waitForTimeout(16); }
+  const turns = await wobbleTurn(page, 500); // the hand holds still for half a second
+  await page.mouse.up();
+  const peak = Math.max(...turns.map(Math.abs));
+  const jumps = turns.slice(1).map((t, i) => Math.abs(t - turns[i]));
+  assert(peak > 0.3, `the drag tilted ${peak}`);
+  assert(turns.slice(-3).every((t) => Math.abs(t) < 0.05), `still tilted while held: ${turns.slice(-5).map((t) => t.toFixed(2))}`);
+  assert(Math.max(...jumps) <= 0.5, `a jump of ${Math.max(...jumps).toFixed(2)}° in ${turns.map((t) => t.toFixed(2))}`);
+  await context.close();
+});
+
+await test('T234 confetti stays above the verdict', async () => {
+  const { page, context } = await boot('/channels/4001/5002');
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  await page.click('[data-act="purify"]');
+  const watch = page.evaluate((src) => new Promise((done) => {
+    const r = eval(src);
+    let pieces = 0;
+    let over = 0;
+    let t0 = 0;
+    const look = () => {
+      const bits = r.querySelectorAll('.confetti');
+      if (bits.length && !t0) t0 = performance.now();
+      if (t0) {
+        // What shows of each piece: its box inside the burst's clip.
+        const clip = r.querySelector('[data-role="burst"]').getBoundingClientRect();
+        const line = r.querySelector('[data-role="readout-line"]').getBoundingClientRect();
+        for (const c of bits) {
+          const b = c.getBoundingClientRect();
+          const top = Math.max(b.top, clip.top);
+          const bottom = Math.min(b.bottom, clip.bottom);
+          const left = Math.max(b.left, clip.left);
+          const right = Math.min(b.right, clip.right);
+          pieces++;
+          if (bottom > top && right > left && bottom > line.top && top < line.bottom && right > line.left && left < line.right) over++;
+        }
+      }
+      if (!t0 || performance.now() - t0 < 1500) requestAnimationFrame(look); else done({ pieces, over });
+    };
+    look();
+    setTimeout(() => done({ pieces, over, timeout: true }), 15000);
+  }), R);
+  await holdConfirm(page);
+  const seen = await watch;
+  assert(seen.pieces > 0 && seen.over === 0, `confetti over the verdict ${JSON.stringify(seen)}`);
+  await context.close();
+});
+
+await test('T235 a count lands gently: the number and the arc fade up once', async () => {
+  const { page, context } = await boot('/channels/4001/5002', { latencyMs: 30 });
+  await page.evaluate((src) => {
+    const r = eval(src);
+    window.__landed = [];
+    for (const sel of ['.hero-core', '.g-track']) {
+      const el = r.querySelector(sel);
+      const own = el.animate.bind(el);
+      el.animate = (frames, opts) => { window.__landed.push({ sel, frames: frames.map((f) => Object.keys(f).join()).join('|'), ms: opts.duration }); return own(frames, opts); };
+    }
+  }, R);
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/);
+  const landed = await page.evaluate(() => window.__landed);
+  assert(JSON.stringify(landed) === JSON.stringify([{ sel: '.hero-core', frames: 'opacity|opacity', ms: 220 }, { sel: '.g-track', frames: 'opacity|opacity', ms: 320 }]), `landing ${JSON.stringify(landed)}`);
+  await context.close();
+});
+
+await test('T236 a poke mid-run leaves Pause and Stop where they are; Dopa still squashes', async () => {
+  const { page, context } = await bootPaced('/channels/4001/5001', { deleteMs: 120 });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await untilCount(page, 2);
+  const moved = await page.evaluate((src) => new Promise((done) => {
+    const r = eval(src);
+    const stop = r.querySelector('[data-act="stop"]');
+    const at = stop.getBoundingClientRect();
+    let worst = 0;
+    r.querySelector('[data-act="poke"]').click();
+    const squash = r.querySelector('.avatar img').getAnimations().length;
+    const t0 = performance.now();
+    const look = () => {
+      const b = stop.getBoundingClientRect();
+      worst = Math.max(worst, Math.abs(b.left - at.left), Math.abs(b.top - at.top));
+      if (performance.now() - t0 < 600) requestAnimationFrame(look); else done({ worst, squash });
+    };
+    look();
+  }), R);
+  assert(moved.worst <= 0.5 && moved.squash === 1, `a poke mid-run ${JSON.stringify(moved)}`);
+  await page.click('[data-act="stop"]');
+  await waitEnd(page);
+  await context.close();
+});
+
+await test('T237 a tab switch glides the panel\'s height: the footer moves one way over many frames', async () => {
+  const { page, context } = await boot('/channels/4001/5002');
+  for (const to of ['batch', 'current']) {
+    const tops = await page.evaluate(([src, tab]) => new Promise((done) => {
+      const r = eval(src);
+      const out = [];
+      r.querySelector(`.tab[data-tab="${tab}"]`).click();
+      const t0 = performance.now();
+      const look = () => { out.push(r.querySelector('.foot').getBoundingClientRect().top); if (performance.now() - t0 < 400) requestAnimationFrame(look); else done(out); };
+      look();
+    }), [R, to]);
+    const steps = tops.slice(1).map((t, i) => t - tops[i]).filter((d) => Math.abs(d) > 0.01);
+    const oneWay = steps.every((d) => Math.sign(d) === Math.sign(steps[0]));
+    assert(steps.length >= 8 && oneWay, `to ${to}: ${steps.length} steps, one way ${oneWay}: ${tops.map((t) => t.toFixed(0))}`);
+    await page.waitForTimeout(300);
+  }
+  await context.close();
+  // A heavy account's list (1,006 rows) is too much to lay out every frame: opening it cuts, closing it glides.
+  const heavy = await boot('/channels/4001/5001', { world: buildWorld({ crowd: 'nodes' }) });
+  await heavy.page.click('.tab[data-tab="batch"]');
+  await heavy.page.waitForFunction((src) => eval(src).querySelectorAll('[data-role="dm-list"] .row').length >= 1006, R, { timeout: 60000 });
+  await heavy.page.click('.tab[data-tab="current"]');
+  await heavy.page.waitForTimeout(400);
+  const glides = (tab) => inPanel(heavy.page, (r, t) => { r.querySelector(`.tab[data-tab="${t}"]`).click(); return r.querySelector('.panel').getAnimations().length; }, tab);
+  const opening = await glides('batch');
+  await heavy.page.waitForTimeout(400);
+  const closing = await glides('current');
+  assert(opening === 0 && closing === 1, `1,006 rows: opening glides ${opening}, closing ${closing}`);
+  await heavy.context.close();
+});
+
+await test('T275 the commitment line tells the truth about what you send meanwhile, within the voice\'s limits (I2)', async () => {
+  const { page, context } = await bootWith(realPace(), '/channels/4001/5001', { world: buildWorld({ bulk: { 5001: 3000 } }) });
+  await page.click('[data-act="scan"]');
+  await untilStatus(page, /found/, 8000);
+  await page.click('[data-act="purify"]');
+  await page.waitForSelector('.modal-layer[data-open="true"]');
+  const words = await inPanel(page, (r) => r.querySelector('.modal').innerText);
+  assert(/messages you send now aren't touched/.test(words), 'the line names what a run leaves alone');
+  const tildes = (words.match(/~/g) || []).length;
+  const hearts = (words.match(/♡/g) || []).length;
+  const princess = (words.match(/princess/gi) || []).length;
+  assert(tildes <= 3 && hearts <= 2 && princess <= 1, `the dialog says ${tildes} tildes, ${hearts} hearts, ${princess} princesses`);
+  await context.close();
+});
+
+await test('T276 the start sound ships byte for byte as assets/delete.mp3 (I1)', async () => {
+  const asset = fs.readFileSync(path.join(here, '../assets/delete.mp3'));
+  const m = /DELETE_SOUND = 'data:audio\/mpeg;base64,([A-Za-z0-9+/=]+)'/.exec(source);
+  assert(m, 'the build embeds the sound');
+  assert(Buffer.from(m[1], 'base64').equals(asset), 'the embedded sound differs from assets/delete.mp3');
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));

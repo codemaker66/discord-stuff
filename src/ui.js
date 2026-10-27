@@ -202,33 +202,87 @@
 
   // ── Sound ───────────────────────────────────────────────
 
-  const sound = { ctx: null, buffer: null, loading: null };
+  // One lifecycle: the dialog primes the sound (the audio engine and the decode) while you read it,
+  // so the hold's commit only starts a source. Stop and Mute hush it with a short fade, and the
+  // engine sleeps whenever nothing is playing. The file itself plays exactly as it is.
+  const sound = { ctx: null, buffer: null, loading: null, source: null, gain: null, playing: false, primeTimer: 0 };
+  const HUSH_S = 0.03; // the fade on Stop or Mute: short enough to be a stop, long enough not to click
+
+  function sleepSound() {
+    if (sound.ctx && sound.ctx.state === 'running') sound.ctx.suspend().catch(() => {});
+  }
+
+  function primeSound() {
+    if (prefs.muted || sound.loading) return;
+    try {
+      if (!sound.ctx) sound.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const { ctx } = sound;
+      // Decode from the embedded base64 directly: fetch() on a data: URL
+      // would trip Discord's connect-src CSP.
+      const bin = atob(DELETE_SOUND.slice(DELETE_SOUND.indexOf(',') + 1));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      sound.loading = ctx.decodeAudioData(bytes.buffer).then((b) => {
+        sound.buffer = b;
+        if (!sound.playing) sleepSound();
+        return b;
+      }, (err) => {
+        sound.loading = null;
+        console.debug('[Dopa Purifier] sound unavailable:', err);
+        return null;
+      });
+    } catch (err) {
+      sound.loading = null;
+      console.debug('[Dopa Purifier] sound unavailable:', err);
+    }
+  }
 
   async function playDeleteSound() {
     if (prefs.muted) return;
+    sound.playing = true;
     try {
-      if (!sound.ctx) sound.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      if (sound.ctx.state === 'suspended') await sound.ctx.resume();
-      if (!sound.buffer) {
-        // Decode from the embedded base64 directly: fetch() on a data: URL
-        // would trip Discord's connect-src CSP.
-        if (!sound.loading) {
-          const bin = atob(DELETE_SOUND.slice(DELETE_SOUND.indexOf(',') + 1));
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          sound.loading = sound.ctx.decodeAudioData(bytes.buffer);
-        }
-        sound.buffer = await sound.loading;
+      if (!sound.buffer) primeSound();
+      const buffer = sound.buffer || await sound.loading;
+      const { ctx } = sound;
+      if (!prefs.muted && buffer && ctx && ctx.state !== 'running') await ctx.resume();
+      if (prefs.muted || !buffer || !ctx) {
+        sound.playing = !!sound.source;
+        if (!sound.playing) sleepSound();
+        return;
       }
-      const source = sound.ctx.createBufferSource();
-      const gain = sound.ctx.createGain();
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
       gain.gain.value = 0.6;
-      source.buffer = sound.buffer;
-      source.connect(gain).connect(sound.ctx.destination);
+      source.buffer = buffer;
+      source.connect(gain).connect(ctx.destination);
+      source.onended = () => {
+        if (sound.source !== source) return;
+        sound.source = null;
+        sound.gain = null;
+        sound.playing = false;
+        sleepSound();
+      };
+      hushSound(); // a second Purify's sound takes over from the first's
+      sound.source = source;
+      sound.gain = gain;
       source.start(0);
     } catch (err) {
+      sound.playing = !!sound.source;
       console.debug('[Dopa Purifier] sound unavailable:', err);
     }
+  }
+
+  // A gain ramp of HUSH_S, then the source stops; its onended lets the engine sleep.
+  function hushSound() {
+    const { source, gain, ctx } = sound;
+    if (!source || !ctx) return;
+    try {
+      const t = ctx.currentTime;
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setValueAtTime(gain.gain.value, t);
+      gain.gain.linearRampToValueAtTime(0, t + HUSH_S);
+      source.stop(t + HUSH_S + 0.005);
+    } catch { /* already stopped */ }
   }
 
   // ── Springs ─────────────────────────────────────────────
@@ -345,10 +399,12 @@
         svg('g', { class: 'g-glow' },
           svg('circle', { ...ARC, class: 'g-ok', stroke: ROSE_STROKE }),
           svg('circle', { ...ARC, class: 'g-head' })),
-        // The sweep for work with no end in sight yet. It runs along the arc only, so it never
-        // crosses the "3 of 31+" under the ring, and sits under the failure notches.
-        svg('path', { class: 'g-sweep', d: 'M40.6 159.4 A84 84 0 1 1 159.4 159.4', pathLength: '100', fill: 'none', stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': '16 116' }),
         svg('circle', { ...ARC, class: 'g-fail' })),
+      // The sweep for work with no end in sight yet: a 40° dash that turns 230° on the compositor, so
+      // it starts at the arc's left end and stops at its right end, never crossing the "3 of 31+" under
+      // the ring. It sits under the track and the failure notches (styles: .sweep).
+      svg('svg', { class: 'sweep', viewBox: '0 0 200 200', 'aria-hidden': 'true' },
+        svg('circle', { ...ARC, pathLength: '360', stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': '40 320' })),
       h('div', { class: 'blood' }),
       h('div', { class: 'sticker', 'data-role': 'sticker', hidden: true }),
       h('div', { class: 'gauge-pct', 'data-role': 'pct' }));
@@ -739,11 +795,13 @@
     layer.dataset.hero = mode;
     const hero = $('.hero');
     const name = heroState(mode);
+    const prevState = hero.dataset.state;
     hero.dataset.state = name;
     hero.dataset.face = heroFace(name);
     const idle = mode === 'preview' ? previewFor(name) : null;
-    // The finish plays its beats once, when its verdict first shows.
-    const finishing = mode === 'done' && lastEnd !== beaten;
+    // The finish plays its beats once, when they can be seen: a finish that lands while the tab is
+    // hidden, the panel minimised or mid-unfold is owed, and plays when you look.
+    const finishing = mode === 'done' && lastEnd !== beaten && fxVisible() && !fold;
     if (finishing) beaten = lastEnd;
     // While some chats are still uncounted the total is a floor, not a promise.
     const known = p.total > 0 && !p.partial;
@@ -813,10 +871,19 @@
       line.replaceChildren(...idle.line);
       readout.dataset.tone = idle.tone;
     }
-    // The verdict settles in just after the count's last pop.
+    // The verdict settles in just after the count's last pop: the readout's line, or a strip's sub-line,
+    // whichever is drawn. Confetti is This chat's, and only lands on the chat it belongs to.
     if (finishing) {
-      line.animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }],
+      const verdict = [line, $('[data-role="hero-sub"]')].find((el) => el.getClientRects().length) || line;
+      verdict.animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }],
         { duration: reducedMotion() ? 200 : 220, delay: 60, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+      if (lastEnd.confetti && state.tab === 'current') celebrate();
+    }
+    // A count lands gently: the number and the arc fade up as it arrives (opacity only, so reduced
+    // motion keeps it).
+    if (prevState === 'counting' && ['ready', 'partial', 'clear'].includes(name)) {
+      $('.hero-core').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: 'cubic-bezier(.22,1,.36,1)' });
+      $('.g-track').animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 320, easing: 'cubic-bezier(.22,1,.36,1)' });
     }
 
     // A strip has one line under the count: the run's facts, the verdict, or what the ring would say.
@@ -864,14 +931,15 @@
     if (stickerText !== sticker.textContent || sticker.hidden === !!stickerText) {
       sticker.textContent = stickerText;
       sticker.hidden = !stickerText;
-      if (stickerText && finishing && reducedMotion()) sticker.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, delay: 200, fill: 'backwards' });
-      else if (stickerText && finishing) {
-        sticker.animate([
-          { transform: 'rotate(4deg) scale(1.6)', opacity: 0 },
-          { transform: 'rotate(10deg) scale(.94)', opacity: 1, offset: 0.6 },
-          { transform: 'rotate(9deg) scale(1)' },
-        ], { duration: 340, delay: 380, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
-      }
+    }
+    // Stamped with the finish's beats, even when they were owed (the text was written unseen).
+    if (stickerText && finishing && reducedMotion()) sticker.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, delay: 200, fill: 'backwards' });
+    else if (stickerText && finishing) {
+      sticker.animate([
+        { transform: 'rotate(4deg) scale(1.6)', opacity: 0 },
+        { transform: 'rotate(10deg) scale(.94)', opacity: 1, offset: 0.6 },
+        { transform: 'rotate(9deg) scale(1)' },
+      ], { duration: 340, delay: 380, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
     }
 
     $('[data-role="tf-purged"]').textContent = String(p.deleted).padStart(3, '0');
@@ -1418,13 +1486,16 @@
       || !live || live.channelId !== now.channelId) return;
     const n = isPartialCount(now.channelId) ? 0 : counts.get(now.channelId);
     const b = (k) => h('b', { text: fmt(k) });
+    // A server channel's search reaches its threads (a forum's or media channel's, its posts) too.
+    const reach = !now.guildId ? '' : [0, 2, 5, 13].includes(now.channelType) ? ', threads included,' : [15, 16].includes(now.channelType) ? ', posts included,' : '';
     confirmDialog({
       title: 'Ready to purify?',
-      lead: n === 1 ? ['This will delete your ', b(1), ' message in']
-        : n ? ['This will delete all ', b(n), ' of your messages in'] : ['This will delete all your messages in'],
+      lead: n === 1 ? ['This will delete your ', b(1), ` message${reach} in`]
+        : n ? ['This will delete all ', b(n), ` of your messages${reach} in`] : [`This will delete all your messages${reach} in`],
       pill: now,
       channelId: now.channelId,
       who,
+      time: longPurge(n),
       confirmLabel: ['Hold to purify', '✨'],
       onConfirm: () => beginRun([{ ...now }], 'current', who),
     });
@@ -1462,6 +1533,7 @@
         return k === undefined ? { label: r.label, meta: 'not counted', tone: 'unknown' } : { label: r.label, meta: plural(k, 'message') };
       }),
       who,
+      time: longPurge(known, uncounted > 0 || partial),
       confirmLabel: ['Hold to purify all', '✨'],
       onConfirm: () => beginRun(rows, 'batch', who),
     });
@@ -2148,9 +2220,20 @@
 
   // ── Tabs ────────────────────────────────────────────────
 
+  // A tab switch glides the panel's height instead of cutting it (Arrow, Home and End can switch twice
+  // in one glide, so a glide still running hands over from where it is). Opening a list too long to
+  // lay out every frame (a heavy account's) cuts instead: a glide that drops frames is worse than none.
+  let tabGlide = null;
+  const GLIDE_ROWS = 300;
+
   function switchTab(tab, { initial = false } = {}) {
     const changed = tab !== state.tab;
     if (changed) cancelCount();
+    const panel = $('.panel');
+    const glide = !initial && changed && !reducedMotion() && !$('[data-role="layer"]').dataset.dragging && !panel.closest('[hidden]')
+      && !(tab === 'batch' && state.batchRows.size > GLIDE_ROWS);
+    const from = glide ? panel.offsetHeight : 0;
+    if (tabGlide) { tabGlide.cancel(); tabGlide = null; }
     state.tab = tab;
     prefs.tab = tab;
     if (!initial) savePrefs('tab');
@@ -2166,15 +2249,21 @@
       if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
       if (!state.guildsLoaded && !state.guildsLoading) loadServers();
     }
-    if (!initial && changed) $('[data-role="body"]').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
+    if (!initial && changed) $('[data-role="body"]').animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 200, easing: 'ease-out' });
     renderCurrent();
     layoutPanel();
+    const to = glide ? panel.offsetHeight : 0;
+    if (glide && Math.abs(to - from) > 1) {
+      tabGlide = panel.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: 240, easing: 'cubic-bezier(.22,1,.36,1)' });
+      const done = tabGlide;
+      done.finished.then(() => { if (tabGlide === done) tabGlide = null; }, () => {});
+    }
   }
 
   // ── Confirm dialog (hold to confirm) ────────────────────
 
   const HOLD_MS = 850;
-  const ARMED_MS = 5000; // how long a first assistive press waits for the second
+  const ARMED_MS = 15000; // how long a first assistive press waits for the second (a switch user needs time)
   const TAP_MS = 250; // a release sooner than this was a tap, not a change of mind
   const SLOP_PX = 12; // how far a finger or pen may drift off the button and still be holding it
   let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed, channelId }
@@ -2207,9 +2296,17 @@
       t.guildId && t.context ? [' ', h('span', { class: 'pill-context', text: `· ${t.context}` })] : null);
   }
 
+  // A purge that takes a while says so at the moment you commit to it: how long, and that Discord has
+  // to stay open. What you send meanwhile is safe, since a run never touches messages newer than the
+  // moment you confirmed (run.capId).
+  const LONG_PURGE_S = 120;
+  const KEEP_OPEN = "keep Discord open~ messages you send now aren't touched";
+  const longPurge = (n, more = false) => (n > 0 && estimateSeconds(n) >= LONG_PURGE_S ? { seconds: estimateSeconds(n), more } : null);
+
   // channelId: the chat a This chat dialog asks about. Moving to another chat closes it (see navigated);
   // a Many chats dialog has none and stays.
-  function confirmDialog({ title, lead, pill, list, who, confirmLabel, onConfirm, channelId = null }) {
+  // time: { seconds, more } for a long purge (see longPurge), said between who and the warning.
+  function confirmDialog({ title, lead, pill, list, who, time = null, confirmLabel, onConfirm, channelId = null }) {
     if (modal) return;
     const layer = $('.modal-layer');
     $('[data-role="modal-title"]').textContent = title;
@@ -2221,8 +2318,13 @@
           h('span', { class: 'modal-item-name', title: item.label, text: item.label }),
           h('span', { class: `modal-item-meta${item.tone ? ` is-${item.tone}` : ''}`, text: item.meta })))),
       who && h('div', { class: 'modal-who', id: 'dp-modal-who' }, 'deleting as ', h('b', { text: `@${who}` })),
+      time && h('div', { class: 'modal-time', id: 'dp-modal-time' }, `About ${formatDuration(time.seconds)}${time.more ? '+' : ''}${SEP}${KEEP_OPEN}`),
       h('div', { class: 'modal-warn', id: 'dp-modal-warn' }, h('span', {}, flaired("This can't be undone", '🩸'))),
     ].filter(Boolean));
+    const modalEl = $('.modal');
+    const described = (modalEl.getAttribute('aria-describedby') || '').split(/\s+/).filter((id) => id && id !== 'dp-modal-time');
+    if (time) described.splice(Math.max(0, described.indexOf('dp-modal-warn')), 0, 'dp-modal-time');
+    modalEl.setAttribute('aria-describedby', described.join(' '));
     modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0, channelId };
     hold.pointer = false;
     hold.sealed = false;
@@ -2235,6 +2337,10 @@
     resetHold();
     for (const el of behindDialog()) el.inert = true;
     $('[data-act="cancel"]').focus();
+    // Once the dialog has faded in (160 ms), while it is read and long before the earliest commit
+    // (HOLD_MS after a press): the commit then only plays.
+    clearTimeout(sound.primeTimer);
+    sound.primeTimer = setTimeout(primeSound, 240);
   }
 
   function closeDialog(confirmed) {
@@ -2266,10 +2372,11 @@
   }
 
   // key: the key (Space or Enter) holding the button down, until it is released.
-  const hold = { start: 0, timer: 0, active: false, sealed: false, nudge: 0, pointer: false, anim: null, key: null };
+  const hold = { start: 0, timer: 0, words: 0, active: false, sealed: false, nudge: 0, pointer: false, anim: null, key: null };
 
   function resetHold() {
     clearTimeout(hold.timer);
+    clearTimeout(hold.words);
     clearTimeout(hold.nudge);
     hold.active = false;
     if (hold.anim) { hold.anim.cancel(); hold.anim = null; }
@@ -2287,7 +2394,9 @@
     hold.start = performance.now();
     const btn = $('[data-act="confirm"]');
     btn.classList.add('is-holding');
-    holdLabel(HOLD_WORDS.holding);
+    // The fill moves from the first frame; the words change only once it's a hold, so a tap reads as
+    // one change ('Hold it down~'), never three.
+    hold.words = setTimeout(() => { if (hold.active) holdLabel(HOLD_WORDS.holding); }, TAP_MS);
     hold.anim = $('.hold-fill').animate([{ transform: 'translateX(-100%)' }, { transform: 'translateX(0)' }],
       { duration: HOLD_MS, easing: 'linear', fill: 'forwards' });
     const commit = () => {
@@ -2507,7 +2616,9 @@
       wob.raf = requestAnimationFrame(animateWobble);
     } else {
       wob.rot.settle(); wob.sx.settle(); wob.sy.settle();
-      el.style.transform = '';
+      // Settled on a tilt (a drag held still mid-way) it stays there; only true rest clears it.
+      const rest = wob.rot.target === 0 && wob.sx.target === 1 && wob.sy.target === 1;
+      el.style.transform = rest ? '' : `rotate(${wob.rot.value.toFixed(3)}deg)`;
       wob.raf = 0;
     }
   }
@@ -2523,26 +2634,30 @@
     }
   }
 
-  // Kills are the panel's only clock: each one pops the count, pings the live dot and brings the
-  // footer's new line in. Nothing else keeps time, so a wait or a stall is visibly still.
+  // Kills are the panel's only clock: each one pops the count and pings the live dot (and in Many
+  // chats, where the footer's line changes per kill, brings it in). Nothing else keeps time, so a wait
+  // or a stall is visibly still. Every beat is a transform or an opacity, so the compositor plays it
+  // and a long purge costs the page next to nothing.
   function popCount() {
     if (!fxVisible()) return;
-    if (!run.paused && !run.stopping) $('[data-role="status-text"]').animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
     if (reducedMotion()) return;
-    $('[data-role="count"]').animate([
-      { transform: 'scale(1.04)', color: 'var(--rose-300)', textShadow: '0 0 22px rgba(255, 122, 169, .8)' },
-      { transform: 'none' },
-    ], { duration: 300, easing: 'cubic-bezier(.22,1,.36,1)' });
-    $('.live-dot').animate([{ boxShadow: '0 0 0 0 rgba(255, 122, 169, .6)' }, { boxShadow: '0 0 0 6px rgba(255, 122, 169, 0)' }],
-      { duration: 600, easing: 'cubic-bezier(.22,1,.36,1)' });
+    if (!run.paused && !run.stopping && state.runMode === 'batch') {
+      $('[data-role="status-text"]').animate([{ opacity: 0.7 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
+    }
+    $('[data-role="count"]').animate([{ transform: 'scale(1.06)' }, { transform: 'none' }], { duration: 300, easing: 'cubic-bezier(.22,1,.36,1)' });
+    const dot = $('.live-dot');
+    if (dot.getClientRects().length) {
+      dot.animate([{ transform: 'scale(1)', opacity: 0.6 }, { transform: 'scale(3)', opacity: 0 }],
+        { duration: 600, easing: 'cubic-bezier(.22,1,.36,1)', pseudoElement: '::after' });
+    }
   }
 
   // A couple of drops fall from just outside the ring's leading edge, clear of the number.
   const fxVisible = () => !document.hidden && !$('[data-role="shell"]').hidden;
 
   function bleed() {
-    if (reducedMotion() || !fxVisible()) return;
     const zone = $('.blood');
+    if (reducedMotion() || !fxVisible() || !zone.getClientRects().length) return; // not drawn: Many chats, a strip
     while (zone.childElementCount > 9) zone.firstElementChild.remove();
     const { x, y, angle } = ringHead(lastSnapshot ? lastSnapshot.total : 0);
     const ox = Math.cos(angle) * 12;
@@ -2566,9 +2681,10 @@
 
   // Confetti bursts outward from the ring's rim, so it frames the number instead of covering it.
   function celebrate() {
-    kick({ squash: 0.35 }); // an exhale, not a jolt
-    if (reducedMotion() || !fxVisible()) return;
     const fx = $('[data-role="burst"]');
+    if (!fxVisible() || !fx.getClientRects().length) return; // nowhere to see it: no exhale either
+    kick({ squash: 0.35 }); // an exhale, not a jolt
+    if (reducedMotion()) return;
     const box = fx.getBoundingClientRect();
     const g = $('.gauge').getBoundingClientRect();
     const cx = g.left + g.width / 2 - box.left;
@@ -2693,10 +2809,14 @@
         wob.rot.target = clamp(drag.vx * 0.25, -3.5, 3.5);
         kick();
       }
+      // A hand that holds still levels the panel out gently, rather than at the next twitch.
+      clearTimeout(drag.still);
+      drag.still = setTimeout(() => { if (drag && drag.moved) { wob.rot.target = 0; kick(); } }, 80);
     });
     const end = (e) => {
       if (!drag || e.pointerId !== drag.id) return;
       const { moved, vx } = drag;
+      clearTimeout(drag.still);
       drag = null;
       if (!moved) return;
       wob.rot.target = 0;
@@ -2767,6 +2887,7 @@
       orb.hidden = now;
       layer.dataset.open = String(now);
       applyFocus();
+      if (now) renderHero(); // a finish that landed while minimised plays its beats now
     };
     if (open) {
       state.orbDone = null;
@@ -2999,11 +3120,11 @@
       } else if (p.failed) {
         setStatus(`Done~ ${fmt(p.failed)} wouldn't go${SEP}reasons in Logs`, 'warn');
         lastEnd = { key, text: `Purged ${fmt(p.deleted)}${SEP}${fmt(p.failed)} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
-        if (p.deleted > 0) celebrate();
+        if (p.deleted > 0) lastEnd.confetti = true; // thrown with the finish's beats (renderHero)
       } else if (p.deleted) {
         setStatus(`Done in ${formatDuration(p.elapsedMs / 1000)}${SEP}0 failed`, 'success', { flair: '♡' });
         lastEnd = { key, text: 'All clean~ nothing left of you here', flair: '✨', tone: 'cheer', sticker: 'flawless~' };
-        celebrate();
+        lastEnd.confetti = true; // thrown with the finish's beats (renderHero)
       } else {
         setStatus('Done~ nothing of yours was here', 'success');
         lastEnd = { key, text: 'All clear~ nothing of yours here', flair: '✨', tone: 'clear' };
@@ -3071,7 +3192,7 @@
     // Focus follows the work: the control that takes over from the one that goes gets focus.
     pause: () => { handFocus('[data-act="resume"]'); pauseRun(); },
     resume: () => { handFocus('[data-act="pause"]'); resumeRun(); },
-    stop: stopRun,
+    stop: () => { hushSound(); stopRun(); },
     logs: () => toggleLog(),
     'close-log': () => { handFocus('[data-act="logs"]'); toggleLog(false); },
     'copy-log': copyLog,
@@ -3081,9 +3202,10 @@
     'welcome-batch': () => { switchTab('batch'); hideWelcome(); },
     'go-batch': () => { handFocus('.tab[data-tab="batch"]'); switchTab('batch'); },
     restore: () => { handFocus('[data-act="minimize"]'); setOpen(true); },
-    mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); },
+    mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); if (prefs.muted) hushSound(); },
     poke: () => {
-      kick({ spin: (Math.random() - 0.5) * 26, squash: 0.7 });
+      // Mid-run the panel holds still, so Pause and Stop never move under the pointer; Dopa still squashes.
+      if (!run.active) kick({ spin: (Math.random() - 0.5) * 26, squash: 0.7 });
       const img = $('.avatar img');
       if (!reducedMotion()) img.animate([{ transform: 'scale(0.86, 1.12)' }, { transform: 'scale(1.08, 0.94)', offset: 0.45 }, { transform: 'none' }], { duration: 480, easing: 'cubic-bezier(.2,1.4,.4,1)' });
     },
@@ -3158,7 +3280,11 @@
     });
     confirmBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(e); });
     confirmBtn.addEventListener('blur', endHold);
-    listen(document, 'visibilitychange', () => { if (document.hidden) endHold(); });
+    // Coming back to the tab plays a finish's beats that landed while it was hidden.
+    listen(document, 'visibilitychange', () => {
+      if (document.hidden) endHold();
+      else if (lastEnd && lastEnd !== beaten) renderHero();
+    });
     // A key still held when the dialog goes (a finished hold, or Esc) belongs to that hold: its
     // repeats and its release must not press whatever focus moved to (Pause, or Purify again).
     for (const type of ['keydown', 'keypress', 'keyup']) {
@@ -3350,6 +3476,7 @@
     clearTimeout(dialogTimer);
     clearTimeout(switchTimer);
     flushPrefs();
+    clearTimeout(sound.primeTimer);
     if (sound.ctx) sound.ctx.close().catch(() => {});
     if (host) host.remove();
     host = null;
