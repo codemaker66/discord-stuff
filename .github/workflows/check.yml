@@ -24,3 +24,25 @@ jobs:
         continue-on-error: true
       - name: install page
         run: node test/site.mjs
+  # A quick look in the other engines: the panel mounts, counts, confirms by hold and follows chats.
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, webkit]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: build
+        run: npm run build
+      - name: smoke on ${{ matrix.browser }}
+        run: npm test
+        env:
+          BROWSER: ${{ matrix.browser }}
+          ONLY: T1,T13,T120,T125,T174
