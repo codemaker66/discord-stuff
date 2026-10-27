@@ -872,7 +872,7 @@ await test('T40 sliding off the hold button cancels the purge, mouse and touch',
 
 // Screen readers, voice control and switches activate with a bare click (detail 0) and can't hold.
 await test('T41 assistive tech confirms with two presses; mouse clicks and keys still need the hold', async () => {
-  const { page, stats, context } = await boot('/channels/4001/5002');
+  const { page, stats, context } = await boot('/channels/4001/5002', { clock: true });
   await page.click('[data-act="purify"]');
   await page.waitForSelector('.modal-layer[data-open="true"]');
   const cdp = await context.newCDPSession(page);
@@ -899,7 +899,7 @@ await test('T41 assistive tech confirms with two presses; mouse clicks and keys 
   assert(!/again/.test(await label()), `not armed by clicks or keys: ${await label()}`);
   await press();
   assert(/Press again/.test(await label()) && await dialogOpen(page), `first press arms: ${await label()}`);
-  await page.waitForTimeout(5300);
+  await page.clock.fastForward(15300); // a first press waits 15 s for the second (D47)
   assert(/^Hold to purify/.test(await label()), `the first press expires: ${await label()}`);
   await press();
   assert(await dialogOpen(page) && stats.deletes.length === 0, 'one press after expiry only arms again');

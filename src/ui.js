@@ -33,6 +33,9 @@
     disposers.push(() => clearInterval(id));
   }
 
+  // What a person's news is keyed on (prefs.seenVersion): major.minor, so a patch release shows nothing.
+  const shortVersion = VERSION.split('.').slice(0, 2).join('.');
+
   // ── DOM helpers ─────────────────────────────────────────
   // Everything Discord hands us (names, message text) goes in as text nodes —
   // never through innerHTML.
