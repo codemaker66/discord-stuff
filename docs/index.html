@@ -84,6 +84,8 @@
   .meta { margin: 18px 0 0; font-size: 14px; color: var(--t3); }
   .meta b { color: var(--t2); font-weight: 600; }
   .meta .nb { white-space: nowrap; }
+  .meta .trust { display: block; margin-bottom: 6px; color: var(--t2); }
+  .meta .trust svg { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; color: var(--ember-300); }
   .shot { position: relative; }
   .shot img { display: block; width: 100%; height: auto; border-radius: 22px; box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 208, 226, .06); }
   .shot::after { content: ''; position: absolute; inset: -40px -16px; z-index: -1; background: radial-gradient(closest-side, rgba(255, 122, 169, .22), transparent); }
@@ -113,17 +115,25 @@
   .chip:hover { color: var(--t1); }
   .chip[aria-pressed="true"] { color: var(--rose-ink); background: var(--rose-300); box-shadow: none; }
   .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; counter-reset: step; }
-  .step { counter-increment: step; display: grid; grid-template-columns: 44px 1fr auto; gap: 18px; align-items: center; padding: 18px 20px; border-radius: 18px;
-    background: rgba(0, 0, 0, .22); box-shadow: inset 0 0 0 1px var(--hair); }
-  .step::before { content: counter(step); width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; font: 800 18px/1 var(--font);
+  /* The number sits beside its heading (the heading's line is 22.5px, the circle 44px), the button mid-card.
+     Scrolled into view, a step keeps a margin, so its glow isn't cut at the window's edge. */
+  .step { counter-increment: step; display: grid; grid-template-columns: 44px 1fr auto; gap: 18px; align-items: start; padding: 18px 20px; border-radius: 18px;
+    scroll-margin: 24px 0; background: rgba(0, 0, 0, .22); box-shadow: inset 0 0 0 1px var(--hair); }
+  .step > * { min-width: 0; }
+  .step::before { content: counter(step); width: 44px; height: 44px; margin-top: -11px; display: grid; place-items: center; border-radius: 50%; font: 800 18px/1 var(--font);
     color: var(--rose-ink); background: var(--rose-300); box-shadow: 0 0 0 6px rgba(255, 122, 169, .1); }
   .step.is-done::before { content: '✓'; background: var(--ok); color: #082416; box-shadow: 0 0 0 6px rgba(158, 230, 192, .1); }
+  .step > .act { align-self: center; }
+  .step > .act:empty, .step.is-done > .act { display: none; }
+  .step.is-next { box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .45), 0 0 0 6px rgba(255, 122, 169, .06); }
   .step h3 { margin: 0 0 4px; font: 700 18px/1.25 var(--font); }
   .step p { margin: 0; font-size: 15px; color: var(--t2); }
   .step p + p { margin-top: 6px; }
-  .step .how { margin-top: 10px; display: grid; gap: 6px; font-size: 14.5px; color: var(--t2); }
-  .step .how li { margin-left: 18px; }
-  kbd, code { font: 600 13px/1 var(--mono); padding: 3px 7px; border-radius: 6px; color: var(--rose-100); background: rgba(255, 236, 244, .07); box-shadow: inset 0 0 0 1px var(--hair-2); }
+  .step .ext { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; }
+  .ext code { min-width: 0; padding: 5px 9px; line-height: 20px; word-break: break-all; }
+  .ext .copy { margin-left: 0; flex: none; height: 30px; }
+  .step .fallback { margin-top: 10px; font-size: 14px; color: var(--t3); }
+  kbd, code { font: 600 13px/1 var(--mono); padding: 3px 7px; border-radius: 6px; color: var(--rose-100); background: rgba(255, 236, 244, .07); box-shadow: inset 0 0 0 1px var(--hair-2); overflow-wrap: anywhere; }
   .toggle-mock { display: inline-flex; align-items: center; gap: 10px; margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: #202124; color: #e8eaed; font: 500 13.5px/1 system-ui, sans-serif; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
   .toggle-mock i { position: relative; width: 34px; height: 18px; border-radius: 9px; background: #8ab4f8; }
   .toggle-mock i::after { content: ''; position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #1a73e8; box-shadow: 0 0 0 2px #8ab4f8; }
@@ -139,6 +149,7 @@
   .note-act { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 10px; }
   .hint:not(:empty) { margin-top: 10px; font-size: 14.5px; color: var(--ember-200); }
   .hint b { color: var(--t1); }
+  .hint.is-ok { color: var(--ok); }
 
   /* features */
   .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
@@ -158,7 +169,9 @@
   details + details { margin-top: 10px; }
   summary { list-style: none; cursor: pointer; padding: 18px 52px 18px 20px; position: relative; font: 700 16.5px/1.35 var(--font); }
   summary::-webkit-details-marker { display: none; }
-  summary::after { content: '+'; position: absolute; right: 20px; top: 50%; transform: translateY(-50%); font: 500 24px/1 var(--font); color: var(--rose-300); transition: transform .3s var(--spring); }
+  /* The second content gives the '+' empty alt text, so the question isn't read with "plus";
+     an engine that can't parse it drops that line and keeps the first. */
+  summary::after { content: '+'; content: '+' / ''; position: absolute; right: 20px; top: 50%; transform: translateY(-50%); font: 500 24px/1 var(--font); color: var(--rose-300); transition: transform .3s var(--spring); }
   details[open] summary::after { transform: translateY(-50%) rotate(45deg); }
   details > div { padding: 0 20px 18px; color: var(--t2); font-size: 15px; }
   details > div p { margin: 0 0 10px; }
@@ -185,8 +198,10 @@
   }
   @media (max-width: 560px) {
     .setup { padding: 18px; }
+    .features { grid-template-columns: 1fr; }
     .step { grid-template-columns: 36px 1fr; padding: 16px; gap: 14px; }
-    .step::before { width: 36px; height: 36px; font-size: 16px; }
+    .step::before { width: 36px; height: 36px; margin-top: -7px; font-size: 16px; }
+    .step .ext { flex-direction: column; }
     .step > .act { grid-column: 1 / -1; }
     .step > .act .btn { width: 100%; }
     .share { flex-direction: column; align-items: flex-start; }
@@ -195,6 +210,13 @@
     .cta { flex-direction: column; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition-duration: .001ms !important; } html { scroll-behavior: auto; } }
+  /* High contrast drops backgrounds and box-shadows, so edges become borders and the chosen browser keeps its fill. */
+  @media (forced-colors: active) {
+    .btn, .chip, .copy { border: 1px solid ButtonText; }
+    .chip[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+    .step::before { border: 2px solid CanvasText; }
+    .step.is-done::before { border-color: Highlight; }
+  }
 </style>
 </head>
 <body>
@@ -203,41 +225,40 @@
     <div>
       <div class="brand"><img src="img/emote.webp" alt="" width="64" height="64"><span>Dopa's Discord Purifier</span></div>
       <h1>Wipe your Discord messages, <em>gently.</em></h1>
-      <p class="lead">Every message you ever sent in a DM, group or server — gone in a few clicks. Nothing else is touched.</p>
+      <p class="lead">Your messages in any DM, group or server channel — gone in a few clicks. Nothing else is touched.</p>
       <div class="cta">
         <a class="btn btn-primary" href="#install" data-role="hero-cta">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
           <span>Get it free</span>
         </a>
-        <button class="btn btn-quiet" type="button" data-act="share">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3M7.5 7.5L12 3l4.5 4.5M5 12v7h14v-7"/></svg>
-          Share with a friend
-        </button>
       </div>
-      <p class="meta"><b>v<span data-role="latest"></span></b> · free, no sign-up · Chrome, Edge, Firefox, Opera, Brave · <span class="nb">Safari's helper app costs $2.99</span></p>
+      <p class="meta">
+        <span class="trust"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.6l7.6 3.1v5.9c0 4.9-3.2 8.4-7.6 10.1-4.4-1.7-7.6-5.2-7.6-10.1V5.7z"/></svg>Only your own messages · <span class="nb">nothing leaves Discord</span> · <a href="https://github.com/codemaker66/discord-stuff">open source</a></span>
+        <b>v<span data-role="latest"></span></b> · <span data-role="meta-free">free, no sign-up</span>
+      </p>
       <div class="installed" data-role="installed" hidden>
         <span class="tick" aria-hidden="true">✓</span>
         <p data-role="installed-text"></p>
         <a class="btn btn-primary btn-sm" href="https://discord.com/app" data-role="installed-action">Open Discord</a>
       </div>
     </div>
-    <div class="shot"><img src="img/purging.webp" alt="The purifier panel mid-purge next to its log window, inside Discord" width="1400" height="1059"></div>
+    <div class="shot"><img src="img/purging.webp" alt="The Purifier panel at work next to its log window, inside Discord" width="1400" height="1059"></div>
   </header>
 
   <section id="install" aria-labelledby="install-title">
     <div class="eyebrow">Two minutes, once</div>
     <h2 id="install-title">Set it up</h2>
-    <p class="sub">It runs inside Discord in your browser through a "userscript manager" extension: free on Chrome, Edge, Firefox, Opera and Brave, $2.99 on Safari. You only do this once — updates arrive by themselves.</p>
+    <p class="sub">It runs inside Discord in your browser with one helper extension, Tampermonkey: free on Chrome, Edge, Firefox, Opera and Brave, $2.99 on Safari. You do this once; updates arrive by themselves. Only use the Discord app? <a href="#desktop-title">That works too</a>.</p>
     <div class="setup">
       <div class="note" data-role="mobile-note" hidden>
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.6l7.6 3.1v5.9c0 4.9-3.2 8.4-7.6 10.1-4.4-1.7-7.6-5.2-7.6-10.1V5.7z"/></svg>
         <div>
-          <p><b>On your phone, princess? ♡</b> Discord's phone app can't wear the Purifier~ Open this page on your computer and it takes two minutes ✨</p>
+          <p data-role="mobile-lead"><b>On your phone, princess? ♡</b> Discord's phone app can't wear the Purifier~ Open this page on your computer and it takes two minutes ✨</p>
           <div class="note-act">
             <button class="btn btn-primary btn-sm" type="button" data-act="send-link">Send me this link</button>
             <button class="btn btn-quiet btn-sm" type="button" data-act="show-steps" aria-controls="browser-picker setup-steps" aria-expanded="true" hidden>Show the computer steps</button>
           </div>
-          <p>Firefox for Android works too: add Tampermonkey, then open discord.com in “Desktop site” mode.</p>
+          <p data-role="android-only" hidden>Firefox for Android works too: add Tampermonkey, then open discord.com in “Desktop site” mode.</p>
         </div>
       </div>
       <div class="picker" id="browser-picker" role="group" aria-label="Your browser">
@@ -255,17 +276,15 @@
             <h3 tabindex="-1">Add Tampermonkey to <span data-role="browser-name">Chrome</span></h3>
             <p data-role="manager-note">Free, made for exactly this. Click <b>Add to <span data-role="browser-name">Chrome</span></b> on the page that opens.</p>
           </div>
-          <div class="act"><a class="btn btn-quiet btn-sm" data-role="manager-link" target="_blank" rel="noopener" href="https://www.tampermonkey.net/">Get Tampermonkey</a></div>
+          <div class="act"><a class="btn btn-primary btn-sm" data-role="manager-link" target="_blank" rel="noopener" href="https://www.tampermonkey.net/">Get Tampermonkey</a></div>
         </li>
         <li class="step" data-step="allow">
           <div>
             <h3>Switch on “Allow User Scripts”</h3>
-            <p>Your browser keeps userscripts off until you say yes — without this, nothing happens.</p>
-            <ol class="how">
-              <li>Right-click the Tampermonkey icon in your toolbar (it may be under the puzzle-piece <b>Extensions</b> button) and choose <b>Manage extension</b>.</li>
-              <li>Turn on <b>Allow User Scripts</b>. <span class="toggle-mock" aria-hidden="true">Allow User Scripts <i></i></span></li>
-              <li data-role="devmode">Don't see that switch? Open <code data-role="ext-url">chrome://extensions</code><button class="copy" type="button" data-act="copy-ext">Copy</button> and turn on <b>Developer mode</b> (top right) instead.</li>
-            </ol>
+            <p><span data-role="browser-name">Chrome</span> keeps scripts off until you say yes. <span data-role="allow-how">Paste this into a new tab, then flip the switch:</span></p>
+            <p class="ext"><code data-role="ext-url">chrome://extensions/?id=dhdgffkkebhmkfjojejmpbldmpobfkfo</code><button class="copy" type="button" data-act="copy-ext">Copy</button></p>
+            <span class="toggle-mock" aria-hidden="true">Allow User Scripts <i></i></span>
+            <p class="fallback">No switch there? Turn on <b>Developer mode</b> on that page instead.</p>
           </div>
           <div class="act"></div>
         </li>
@@ -275,14 +294,14 @@
             <p>Tampermonkey opens a page showing the script — click <b>Install</b> there. Come back here afterwards and this page ticks itself off.</p>
             <div class="hint" data-role="install-help" role="status" aria-live="polite"></div>
           </div>
-          <div class="act"><a class="btn btn-primary btn-sm" data-role="install-link" href="https://raw.githubusercontent.com/codemaker66/discord-stuff/main/dist/dopas-discord-purifier.user.js">Install</a></div>
+          <div class="act"><a class="btn btn-quiet btn-sm" data-role="install-link" href="https://raw.githubusercontent.com/codemaker66/discord-stuff/main/dist/dopas-discord-purifier.user.js">Install</a></div>
         </li>
         <li class="step" data-step="open">
           <div>
             <h3>Open Discord in this browser</h3>
-            <p>Look top-right for the panel. Open any chat, press <b>Scan</b>, then <b>Purify</b>, and hold the red button. That's it~</p>
+            <p>The panel waits at the top right. Open the chat you want to clear, press <b>Purify</b>, check the count, then hold the red button till it fills. That's it~</p>
           </div>
-          <div class="act"><a class="btn btn-quiet btn-sm" href="https://discord.com/app" target="_blank" rel="noopener">Open Discord</a></div>
+          <div class="act"><a class="btn btn-quiet btn-sm" data-role="open-link" href="https://discord.com/app" target="_blank" rel="noopener">Open Discord</a></div>
         </li>
       </ol>
     </div>
@@ -293,10 +312,10 @@
     <h2 id="what-title">Cute on the outside, thorough on the inside</h2>
     <p class="sub">It only ever deletes messages <b>you</b> sent, at a pace Discord is happy with, and shows you everything as it goes.</p>
     <div class="features">
-      <figure class="feature"><img src="img/scanned.webp" alt="" loading="lazy" width="720" height="1056"><figcaption><h3>Scan in a second</h3><p>See how many of your messages are in a chat and how long a purge takes.</p></figcaption></figure>
+      <figure class="feature"><img src="img/scanned.webp" alt="" loading="lazy" width="720" height="1056"><figcaption><h3>See it before it goes</h3><p>See how many of your messages a chat holds and how long they take to go.</p></figcaption></figure>
       <figure class="feature"><img src="img/confirm.webp" alt="" loading="lazy" width="800" height="813"><figcaption><h3>Hold to purify</h3><p>No accidental clicks: hold the button and watch it fill.</p></figcaption></figure>
-      <figure class="feature"><img src="img/batch.webp" alt="" loading="lazy" width="720" height="1515"><figcaption><h3>Many chats at once</h3><p>Tick DMs and server channels, then purge them in one go.</p></figcaption></figure>
-      <figure class="feature"><img src="img/immune.webp" alt="" loading="lazy" width="720" height="1056"><figcaption><h3>Shield your people</h3><p>Tap the shield on anyone and their chat is immune, forever.</p></figcaption></figure>
+      <figure class="feature"><img src="img/batch.webp" alt="" loading="lazy" width="720" height="1515"><figcaption><h3>Many chats at once</h3><p>Pick DMs, groups and server channels, then purify them in one go.</p></figcaption></figure>
+      <figure class="feature"><img src="img/immune.webp" alt="" loading="lazy" width="720" height="1056"><figcaption><h3>Shield your people</h3><p>Tap the shield on a friend's DM and it's never purged, until you tap it again.</p></figcaption></figure>
     </div>
   </section>
 
@@ -306,7 +325,8 @@
     <div class="two">
       <div class="panel">
         <h3>Easiest: use Discord in your browser</h3>
-        <p>Same account, same chats — just at <a href="https://discord.com/app">discord.com/app</a>. Follow the steps above, purge, and go back to the app whenever you like.</p>
+        <p>Same account, same chats — just at <a href="https://discord.com/app">discord.com/app</a>. Follow the steps above, purify, then go back to the app whenever you like.</p>
+        <p>Not logged in there? Discord's login page shows a QR code: scan it with Discord on your phone, no password needed.</p>
       </div>
       <div class="panel">
         <h3>Already on BetterDiscord?</h3>
@@ -329,16 +349,23 @@
       <p>The userscript talks to Discord and nothing else; Tampermonkey itself fetches new versions of it from GitHub. The BetterDiscord plugin also asks GitHub once each time it starts whether there's a new version. No servers of ours, no tracking~ ♡ The whole thing is <a href="https://github.com/codemaker66/discord-stuff">open source</a>, so anyone can check.</p>
     </div></details>
     <details><summary>Can it delete other people's messages?</summary><div>
-      <p>No. Discord only lets you delete your own messages, and the purifier only ever asks for yours. DMs with anyone you shield are left alone, even mid-purge, and Bardo is shielded from the start~ ♡ Shields cover one-to-one DMs, not group chats.</p>
+      <p>No. Discord only lets you delete your own messages, and the purifier only ever asks for yours. DMs with anyone you shield are left alone, even while it purifies, and Bardo &amp; Dopa are shielded from the start~ ♡ Shields cover one-to-one DMs, not group chats.</p>
+      <p>Discord's own notices (calls, people added to a group, renames) can't be deleted by anyone, so those stay too.</p>
     </div></details>
-    <details><summary>Can I undo a purge?</summary><div>
-      <p>No — deleted means deleted. That's why there's a scan first and a hold-to-confirm button. Pause or Stop any time; nothing after that point is touched.</p>
+    <details><summary>Will the other person know?</summary><div>
+      <p>Discord doesn't notify anyone. Your messages just disappear, the same as if you deleted them one by one yourself, so someone would only notice if they scrolled back and saw your side of the chat is gone. A server's logging bot, or someone running a message-logger mod, may have kept a copy; nothing can reach that.</p>
+    </div></details>
+    <details><summary>Can I get deleted messages back?</summary><div>
+      <p>No — deleted means deleted. That's why Purify counts first, shows you exactly what will go, where and as which account, and makes you hold the button. Pause or Stop any time; nothing after that point is touched.</p>
     </div></details>
     <details><summary>Could my account get in trouble?</summary><div>
-      <p>Honest answer: Discord's terms don't allow automating your account, and any tool like this carries a small risk. The purifier works at a human-ish pace (about 40 messages a minute), slows down whenever Discord asks, and never runs on its own — you start every purge. Use it at your own discretion.</p>
+      <p>Honest answer: Discord's terms don't allow automating your account, and any tool like this carries a small risk. The purifier works at a human-ish pace (about 40 messages a minute), slows down whenever Discord asks, and never runs on its own — you start it every time. Purify from one place at a time (one tab or the app, not both), so Discord only ever sees that gentle pace. Use it at your own discretion.</p>
     </div></details>
     <details><summary>How long does it take?</summary><div>
-      <p>About 40 messages a minute, so 1,000 messages take around 25 minutes — a pace Discord is happy with, and slower whenever it asks for a break. A scan tells you the estimate up front; you can minimise the panel and keep chatting while it works. Keep the Discord tab open until it's done.</p>
+      <p>About 40 messages a minute, so 1,000 messages take around 25 minutes — a pace Discord is happy with, and slower whenever it asks for a break. Counting tells you the estimate up front. You can minimise the panel and keep chatting while it works; messages you send after you confirm aren't touched. Keep Discord open until it's done.</p>
+    </div></details>
+    <details><summary>Can it find a DM I closed long ago?</summary><div>
+      <p><b>Many chats</b> lists every DM open in your sidebar, plus your friends. For anyone else, open the DM in Discord first (search their name, or their profile → <b>Message</b>), then use <b>This chat</b>.</p>
     </div></details>
     <details><summary>How do updates work?</summary><div>
       <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Utilities</b> → <b>Check for userscript updates</b>, or just click Install above again.</p>
@@ -375,13 +402,19 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
 
   // ── Browser-specific steps ──
+  // ext is pasted into a new tab (pages can't link to chrome:// URLs); the ?id= form opens Tampermonkey's
+  // details page, where the "Allow User Scripts" switch lives. warn: the store's add dialog says the helper
+  // can "read and change" websites, so the page says so first.
   const BROWSERS = {
-    chrome:  { name: 'Chrome',  store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo', ext: 'chrome://extensions', allow: true },
-    edge:    { name: 'Edge',    store: 'https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd', ext: 'edge://extensions', allow: true,
-               cta: 'Get', then: 'Add extension' },
+    chrome:  { name: 'Chrome',  store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo',
+               ext: 'chrome://extensions/?id=dhdgffkkebhmkfjojejmpbldmpobfkfo', allow: true, then: 'Add extension', warn: true },
+    edge:    { name: 'Edge',    store: 'https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd',
+               ext: 'edge://extensions/?id=iikmkjmpaadaobahmlepeloendndfphd', allow: true, cta: 'Get', then: 'Add extension', warn: true },
     firefox: { name: 'Firefox', store: 'https://addons.mozilla.org/firefox/addon/tampermonkey/', allow: false },
-    opera:   { name: 'Opera',   store: 'https://addons.opera.com/extensions/details/tampermonkey-beta/', ext: 'opera://extensions', allow: true },
-    brave:   { name: 'Brave',   store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo', ext: 'brave://extensions', allow: true },
+    opera:   { name: 'Opera',   store: 'https://addons.opera.com/extensions/details/tampermonkey-beta/', ext: 'opera://extensions', allow: true, warn: true,
+               how: "Paste this into a new tab, open Tampermonkey's <b>Details</b>, then flip the switch:" },
+    brave:   { name: 'Brave',   store: 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo',
+               ext: 'brave://extensions/?id=dhdgffkkebhmkfjojejmpbldmpobfkfo', allow: true, then: 'Add extension', warn: true },
     safari:  { name: 'Safari',  store: 'https://apps.apple.com/app/tampermonkey/id6738342400', allow: false,
                note: 'Tampermonkey for Safari costs $2.99 on the App Store~ Free instead: open this page in Chrome, Edge or Firefox ♡ Staying on Safari? Get it, then turn it on in <b>Safari → Settings → Extensions</b> and allow it on discord.com.' },
   };
@@ -398,6 +431,17 @@
   }
 
   let chosen = 'chrome';
+  let installed = null; // null until the script says hello, then 'ok' or 'outdated'
+
+  // One pink button at a time: step 1 until something is installed, never a paid purchase (Safari's
+  // $2.99 app), and "Update now" when an older copy is found. Once it's up to date, step 4 takes over.
+  function paint() {
+    const safari = chosen === 'safari';
+    $('[data-role="manager-link"]').className = `btn ${safari ? 'btn-quiet' : 'btn-primary'} btn-sm`;
+    $('[data-role="install-link"]').className = `btn ${safari || installed === 'outdated' ? 'btn-primary' : 'btn-quiet'} btn-sm`;
+    $('[data-role="open-link"]').className = `btn ${installed === 'ok' ? 'btn-primary' : 'btn-quiet'} btn-sm`;
+  }
+
   function choose(key) {
     const b = BROWSERS[chosen = key];
     for (const chip of $$('.chip')) chip.setAttribute('aria-pressed', String(chip.dataset.browser === key));
@@ -405,27 +449,54 @@
     $('[data-role="manager-link"]').href = b.store;
     $('[data-role="manager-link"]').textContent = key === 'safari' ? 'Open App Store ($2.99)' : `Add to ${b.name}`;
     $('[data-role="manager-note"]').innerHTML = b.note
-      || `Free, made for exactly this. Click <b>${b.cta || `Add to ${b.name}`}</b> on the page that opens${b.then ? `, then <b>${b.then}</b>` : ''}.`;
+      || `Free, made for exactly this. Click <b>${b.cta || `Add to ${b.name}`}</b> on the page that opens${b.then ? `, then <b>${b.then}</b>` : ''}.`
+        + (b.warn ? ` ${b.name} will warn it can “read and change” websites: every helper like this gets that warning. The Purifier itself only works inside Discord ♡` : '');
     $('[data-step="allow"]').hidden = !b.allow;
     if (b.ext) $('[data-role="ext-url"]').textContent = b.ext;
+    $('[data-role="allow-how"]').innerHTML = b.how || 'Paste this into a new tab, then flip the switch:';
+    paint();
   }
 
   for (const chip of $$('.chip')) chip.addEventListener('click', () => choose(chip.dataset.browser));
   choose(detect());
 
   // Phones read "use your computer" first. The computer steps wait behind a button,
-  // except on Firefox for Android, which really can run it.
-  const PHONE = /Android|iPhone|iPad|Mobile/.test(navigator.userAgent);
+  // except on Firefox for Android, which really can run it. iPadOS Safari sends a Mac user agent,
+  // but no Mac has a touch screen, so a "Mac" with touch points is an iPad.
+  const TABLET = /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
+  const PHONE = /Android|iPhone|iPad|Mobile/.test(navigator.userAgent) || TABLET;
+  const SEND = PHONE && detect() !== 'firefox';
+  const ICON = { get: 'M12 4v11M7 10l5 5 5-5M5 20h14', send: 'M12 15V3M7.5 7.5L12 3l4.5 4.5M5 12v7h14v-7', open: 'M7 17L17 7M9 7h8v8' };
   const stepsButton = $('[data-act="show-steps"]');
   const computerSteps = (show) => {
     for (const el of $$('.setup > .picker, .setup > .steps')) el.hidden = !show;
     stepsButton.hidden = show;
     stepsButton.setAttribute('aria-expanded', String(show));
   };
+  const cta = $('[data-role="hero-cta"]');
   if (PHONE) {
     $('[data-role="mobile-note"]').hidden = false;
-    if (detect() !== 'firefox') computerSteps(false);
+    $('[data-role="android-only"]').hidden = !/Android/.test(navigator.userAgent);
+    if (TABLET) {
+      $('[data-role="mobile-lead"]').innerHTML = "<b>On an iPad, princess? ♡</b> Discord's iPad app can't wear the Purifier~ Open this page on your computer and it takes two minutes ✨";
+    }
+    if (SEND) {
+      computerSteps(false);
+      // The one thing to do from a phone is get the link to a computer, so the first button does that.
+      cta.dataset.mode = 'send';
+      cta.setAttribute('role', 'button');
+      cta.querySelector('span').textContent = 'Send it to my computer';
+      cta.querySelector('path').setAttribute('d', ICON.send);
+      $('[data-role="meta-free"]').textContent = 'free · set up on a computer, two minutes ♡';
+    }
   }
+  cta.addEventListener('click', (e) => {
+    if (cta.dataset.mode !== 'send') return;
+    e.preventDefault();
+    share('Link copied~ open it on your computer ♡');
+  });
+  // A link only answers Enter; as a button it answers Space too.
+  cta.addEventListener('keydown', (e) => { if (cta.dataset.mode === 'send' && e.key === ' ') { e.preventDefault(); cta.click(); } });
   // The button hides itself once used, so hand focus to what it opened (the chosen browser, else step 1)
   // instead of letting it fall to the top of the page.
   stepsButton.addEventListener('click', () => {
@@ -440,11 +511,20 @@
     for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
     return false;
   };
-  function showInstalled(version) {
+  // The good news goes where the person is: the banner up top, step 3's live hint (which speaks; focus
+  // stays put) and, when they come back from Install, step 4 scrolled into view as the next thing to do.
+  function showInstalled(found) {
+    const version = String(found).replace(/[^\w.+-]/g, '');
     const box = $('[data-role="installed"]');
     const outdated = newer(LATEST, version);
+    const returning = !outdated && awaiting() !== null;
     if (!outdated) setAwaiting(null);
-    $('[data-role="install-help"]').textContent = '';
+    installed = outdated ? 'outdated' : 'ok';
+    const help = $('[data-role="install-help"]');
+    help.innerHTML = outdated
+      ? `You have v${version} — v${LATEST} is out. Press <b>Update now</b> ✨`
+      : `Installed ✓ v${version} — you're all set, princess~`;
+    help.classList.toggle('is-ok', !outdated);
     box.hidden = false;
     box.classList.toggle('is-update', outdated);
     $('[data-role="installed-text"]').innerHTML = outdated
@@ -453,11 +533,22 @@
     const action = $('[data-role="installed-action"]');
     action.textContent = outdated ? 'Update now' : 'Open Discord';
     action.href = outdated ? $('[data-role="install-link"]').href : 'https://discord.com/app';
-    for (const s of ['manager', 'allow', 'install']) $(`[data-step="${s}"]`).classList.add('is-done');
-    const cta = $('[data-role="hero-cta"]');
+    for (const s of ['manager', 'allow']) $(`[data-step="${s}"]`).classList.add('is-done');
+    $('[data-step="install"]').classList.toggle('is-done', !outdated);
+    $('[data-role="install-link"]').textContent = outdated ? 'Update now' : 'Install';
+    $('[data-step="open"]').classList.toggle('is-next', !outdated);
+    paint();
+    delete cta.dataset.mode;
+    cta.removeAttribute('role');
     cta.href = action.href;
     cta.querySelector('span').textContent = outdated ? 'Update now' : 'Open Discord';
-    if (!outdated) cta.querySelector('path').setAttribute('d', 'M7 17L17 7M9 7h8v8');
+    cta.querySelector('path').setAttribute('d', outdated ? ICON.get : ICON.open);
+    if (returning) {
+      // After a reload the browser puts the old scroll position back during load, so scroll after it.
+      const reveal = () => requestAnimationFrame(() => $('[data-step="open"]').scrollIntoView({
+        block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
+      if (document.readyState === 'complete') reveal(); else window.addEventListener('load', reveal, { once: true });
+    }
   }
   const check = () => { const v = document.documentElement.dataset.dopaPurifier; if (v) showInstalled(v); };
   window.addEventListener('dopa-purifier:installed', (e) => showInstalled(e.detail.version));
@@ -511,7 +602,7 @@
   $('[data-act="send-link"]').addEventListener('click', () => share('Link copied~ open it on your computer ♡'));
   $('[data-act="copy-ext"]').addEventListener('click', async () => {
     const text = $('[data-role="ext-url"]').textContent;
-    try { await navigator.clipboard.writeText(text); toast(`Copied — paste it into the address bar`); } catch { toast(text); }
+    try { await navigator.clipboard.writeText(text); toast('Copied — paste it into a new tab ♡'); } catch { toast(text); }
   });
 })();
 </script>
