@@ -904,6 +904,8 @@ await test('T41 assistive tech confirms with two presses; mouse clicks and keys 
   await press();
   assert(await dialogOpen(page) && stats.deletes.length === 0, 'one press after expiry only arms again');
   await press();
+  // The run starts a moment after the press, once this tab holds the run lock (D29).
+  await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.run !== 'idle');
   await waitEnd(page);
   assert(stats.deletes.length === 10, `two presses purged ${stats.deletes.length}`);
   await context.close();
@@ -7055,7 +7057,7 @@ await test('T210 rows stay still through a run, and a running row is heard as "p
   assert(heights.join() === 'c:3002:38,c:3003:38,c:5002:32', `row heights ${heights}`);
   assert(Math.max(...s.tops) - Math.min(...s.tops) < 1, `the Servers header moved ${Math.max(...s.tops) - Math.min(...s.tops)}px`);
   const said = [...new Set(s.said)];
-  assert(said.length && said.every((t) => /^purifying \d of 7$/.test(t)) && said.includes('purifying 5 of 7'), `heard ${said}`);
+  assert(said.length && said.every((t) => /^purifying \d of 7$/.test(t)) && said.some((t) => /^purifying [1-6] of 7$/.test(t)), `heard ${said}`); // sampled per frame, so any step mid-run
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });
