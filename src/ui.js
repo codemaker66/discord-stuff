@@ -100,7 +100,8 @@
   // Every Discord tab shares these. A tab writes back only the keys it changed, and shields
   // are read, changed and written in one go, so no tab can erase another tab's settings.
   const PREFS_KEY = 'dopa-purifier:prefs';
-  const prefs = { x: null, y: null, open: true, muted: false, tab: 'current', welcomed: false };
+  // seenVersion: the version whose news the person has seen (4.1 never wrote it).
+  const prefs = { x: null, y: null, open: true, muted: false, tab: 'current', welcomed: false, seenVersion: null };
   const stringList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 500) : []);
 
   function withStorage(fn) {
@@ -126,6 +127,7 @@
     if (typeof saved.muted === 'boolean') prefs.muted = saved.muted;
     if (saved.tab === 'current' || saved.tab === 'batch') prefs.tab = saved.tab;
     if (typeof saved.welcomed === 'boolean') prefs.welcomed = saved.welcomed;
+    if (typeof saved.seenVersion === 'string') prefs.seenVersion = saved.seenVersion;
   }
 
   let prefsTimer = 0;
@@ -267,6 +269,8 @@
     runAs: null,          // the account the last run was confirmed as
     scanError: null,      // { channelId, line, short, code, blocking }: the last failed count of that chat
     runTargets: [],
+    runNow: null,         // the chat a run is on now
+    outcome: null,        // footer { text, tone, flair, sr } of a This chat run that finished while another chat was open
     batchRows: new Map(), // key → row
     selected: new Set(),  // row keys
     runCounted: new Set(), // chat ids whose count a finished run wrote (the purge itself, not a Count)
@@ -632,8 +636,10 @@
   let shownEta = null;  // the run's ETA as shown (see renderHero)
   let beaten = null;    // the verdict whose finish has played its beats
   let lastSnapshot = null;
-  // { key, text, flair?, tone, sticker?, error?, stopped?, problems?, shielded?, failed? }: the last
-  // finished run, shown until the context changes.
+  // The last finished run, shown until the context changes: { key, text (the readout), strip? (the
+  // strip's one line, else text), flair?, tone, sticker?, confetti? (the finish may celebrate), mood?,
+  // footer: { text, tone, flair?, sr? }, error? (plainError's code), stopped?, problems? (chats that
+  // need another look), locked? (chats skipped because you can't read them), shielded?, failed? }.
   let lastEnd = null;
 
   function renderProgress(p) {
@@ -642,6 +648,9 @@
   }
 
   const contextKey = () => (state.tab === 'current' ? `c:${state.target ? state.target.channelId : ''}` : 'batch');
+
+  // Arriving on an immune chat, the footer says what to do instead; the name is heard, not repeated.
+  const immuneStatus = (t) => ['Open another chat to purify~', 'immune', { sr: `${iso(t.name)} is immune. ` }];
 
   // A shield the person set, rather than one of the names that are immune from the start.
   const shieldedByYou = (t) => !!t.partner && protection.ids.has(t.partner.id);
@@ -659,14 +668,15 @@
         case 'lookup-error': return { label: "can't read this chat", labelTone: 'error', line: [state.targetPlain.line], tone: 'error' };
         case 'immune': return {
           icon: 'shield', label: 'immune', labelTone: 'immune', tone: 'immune',
-          line: shieldedByYou(t) ? [...flaired('Immune', '♡'), ' tap the shield to undo'] : [...flaired('Immune from the start', '♡'), ' nothing here gets purged'],
+          line: shieldedByYou(t) ? [...flaired('You shielded this DM', '♡'), ' tap the shield to undo'] : flaired('Safe from the start~ Bardo & Dopa made the purifier', '♡'),
         };
         case 'counting': return { icon: 'scan', label: 'counting…', line: [], tone: 'quiet' };
-        case 'blocked': return { label: 'no access', labelTone: 'error', line: [state.scanError.line], tone: 'error' };
+        // No access is a calm fact: the ring's label says it in crimson, the readout in plain ink.
+        case 'blocked': return { label: 'no access', labelTone: 'error', line: [state.scanError.line], tone: 'quiet' };
         case 'scan-error': return { icon: 'scan', label: 'not counted yet', line: [state.scanError.line], tone: 'error' };
         case 'unscanned': return { icon: 'scan', label: 'not counted yet', line: flaired('Purify asks before anything goes', '♡'), tone: 'quiet' };
-        case 'indexing': return { icon: 'scan', label: 'still indexing', line: ['Discord is still sorting this chat~ purify anyway, or count again soon'], tone: 'quiet' };
-        case 'partial': return { count: n, total: n, label: 'found so far', line: ['Discord is still indexing older ones~'], tone: 'ready' };
+        case 'indexing': return { icon: 'scan', label: 'still searching', line: ['Discord is still searching this chat~ purify now, or count again in a minute'], tone: 'quiet' };
+        case 'partial': return { count: n, total: n, label: 'found so far', line: ['Discord may find older ones later~'], tone: 'ready' };
         case 'clear': return { count: 0, label: 'messages found', line: flaired('All clear~ nothing of yours here', '✨'), tone: 'clear' };
         // The ring keeps its battle cry; every line says Purify, the action.
         default: return { count: n, total: n, label: 'ready for purge', labelTone: 'ready', line: [`about ${formatDuration(estimateSeconds(n))} to purify~`], tone: 'ready' };
@@ -729,7 +739,7 @@
 
   // How a run that ended on an error sounds, by cause (lastEnd.error is plainError's code when the
   // end handler knows it, else true).
-  const ERROR_MOODS = { captcha: 'Discord wants a captcha~', network: 'lost Discord for a sec~', switched: 'stopped to be safe~' };
+  const ERROR_MOODS = { captcha: 'taking a break, princess~', network: 'lost Discord for a sec~', switched: 'stopped to be safe~' };
 
   function renderHero() {
     const p = lastSnapshot || progressSnapshot();
@@ -827,7 +837,7 @@
         left && `${SEP}${left}`,
         p.failed > 0 && h('span', { class: 'sub-fail', text: `${SEP}${fmt(p.failed)} failed` }),
       ].filter(Boolean) : ['counting as we go~']));
-    } else if (mode === 'done') sub.replaceChildren(...flaired(lastEnd.text, lastEnd.flair));
+    } else if (mode === 'done') sub.replaceChildren(...flaired(lastEnd.strip || lastEnd.text, lastEnd.flair));
     else sub.replaceChildren(...(idle.sub || idle.line.map((x) => (x instanceof Node ? x.cloneNode(true) : x))));
     sub.title = sub.textContent; // the strip truncates; hover shows all of it
 
@@ -852,7 +862,8 @@
     let mood = 'awaiting orders, princess~';
     if (mode === 'run') mood = run.stopping ? 'wrapping up~' : run.paused ? 'paused~ take your time' : "purging… don't look~";
     else if (mode === 'done') {
-      mood = lastEnd.error ? ERROR_MOODS[lastEnd.error] || 'oh no… something broke' : lastEnd.stopped ? 'stopped~ no rush ♡' : lastEnd.problems ? 'some chats fought back~'
+      mood = lastEnd.mood ? lastEnd.mood : lastEnd.error ? ERROR_MOODS[lastEnd.error] || 'oh no… something broke' : lastEnd.stopped ? 'stopped~ no rush ♡'
+        : lastEnd.problems ? (lastEnd.problems === 1 ? 'a chat fought back~' : 'some chats fought back~')
         : lastEnd.shielded ? 'a shield went up~ ♡' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
     } else if (state.tab === 'batch') mood = "who's first, princess~?";
     else if (state.target && state.target.protected) mood = "this one's immune~";
@@ -901,13 +912,22 @@
 
   // Lines the footer says once, when it next comes to rest: why a dialog went away, or what a run cut
   // short last time left behind. resume: { mode, chatId, left, told }, from the journal.
-  const notes = { moved: false, resume: null };
+  // news: someone updating sees what changed, once.
+  const notes = { moved: false, resume: null, news: false };
 
-  // What the footer says when it comes to rest: a note waiting for this moment, else that it's ready.
-  // Returns setStatus's arguments.
+  // A footer as setStatus's arguments.
+  const footerArgs = (f) => [f.text, f.tone, { flair: f.flair || '', sr: f.sr || '' }];
+
+  // What the footer says when it comes to rest: the verdict on screen's footer, a run that finished
+  // in another chat, a note waiting for this moment, else that it's ready. Returns setStatus's arguments.
   function restingStatus() {
     const live = routeTarget();
     if (notes.moved) { notes.moved = false; return ['Moved chats~ nothing purged', 'calm']; }
+    if (lastEnd && lastEnd.footer && lastEnd.key === contextKey()) {
+      state.outcome = null; // its chat is on screen: the verdict says it now
+      return footerArgs(lastEnd.footer);
+    }
+    if (state.outcome) return footerArgs(state.outcome);
     const r = notes.resume;
     if (r && r.mode === 'batch') {
       notes.resume = null;
@@ -922,6 +942,12 @@
       // The journal keeps ids only: the name comes from the lists, when they know it.
       const row = state.batchRows.get(`c:${r.chatId}`);
       return [`Cut short last time in ${row ? iso(row.name) : 'a chat'}~ open it and press Purify`, 'info'];
+    }
+    if (notes.news) {
+      notes.news = false;
+      prefs.seenVersion = shortVersion;
+      savePrefs('seenVersion');
+      return ['New look~ Purify counts first, then you hold to confirm', 'info', { flair: '♡' }];
     }
     return [live ? 'Ready to purify~' : 'Ready when you are~', 'info', { flair: '✨' }];
   }
@@ -985,7 +1011,7 @@
       state.target = target;
       if (target.protected && !run.active && !keepStatus) {
         notes.moved = false;
-        setStatus(`${target.name} is immune~`, 'immune');
+        setStatus(...immuneStatus(target));
       } else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus(...restingStatus());
     } catch (err) {
       if (seq !== describeSeq) return;
@@ -1001,9 +1027,15 @@
     renderCurrent();
   }
 
+  // A chat's kind, the way the card's eyebrow names it.
+  const chatKind = (c) => (!c ? 'This chat' : c.guildId ? 'Server channel' : c.kind === 'group' ? 'Group DM' : 'Direct message');
+
   function renderCurrent() {
-    const runningHere = run.active && state.runMode === 'current';
-    const shown = runningHere ? state.runTargets[0] : state.target;
+    // During any run the card names the chat being purified (in Many chats, the one it's on now), and
+    // 'viewing …' names the chat on screen when that's another.
+    const runningHere = run.active;
+    const batchRun = runningHere && state.runMode === 'batch';
+    const shown = runningHere ? state.runNow || state.runTargets[0] : state.target;
     const card = $('[data-role="target"]');
     const blocked = !runningHere && blockedHere(shown);
     const checking = lastLook();
@@ -1013,11 +1045,11 @@
       && !(shown && shown.protected) && state.tab === 'current';
     if (purified) card.dataset.state = 'purified';
     const eyebrow = $('[data-role="eyebrow-text"]');
-    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purifying']));
-    else if (shown && shown.protected) eyebrow.replaceChildren(icon('crown', 'ico-crown'), 'Immune');
+    const which = batchRun ? `${SEP}chat ${state.runTargets.indexOf(shown) + 1} of ${state.runTargets.length}` : '';
+    if (runningHere) eyebrow.replaceChildren(...(run.paused ? [`Paused${which}`] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), `Purifying${which}`]));
+    else if (shown && shown.protected) eyebrow.replaceChildren(icon('crown', 'ico-crown'), chatKind(shown));
     else if (purified) eyebrow.replaceChildren(icon('check'), lastEnd.failed ? 'Mostly purified' : 'Purified');
-    else if (blocked) eyebrow.replaceChildren('No access');
-    else eyebrow.replaceChildren(!shown ? 'This chat' : shown.guildId ? 'Server channel' : shown.kind === 'group' ? 'Group DM' : 'Direct message');
+    else eyebrow.replaceChildren(chatKind(shown));
     if (purified && lastEnd.failed) card.dataset.state = 'partial';
     $('[data-role="target-ico"]').replaceChildren(shown && shown.protected ? icon('shield') : !shown ? '✦' : shown.guildId ? '#' : shown.kind === 'group' ? icon('group') : '@');
     // DMs can be shielded right from the card.
@@ -1029,7 +1061,10 @@
     if (shown) {
       name.textContent = shown.guildId ? shown.name.replace(/^#/, '') : shown.name;
       context.textContent = shown.guildId ? shown.context : '';
+      // Both parts can truncate, so hovering the line names the whole chat.
+      name.parentElement.title = shown.guildId && shown.context ? `${name.textContent} · ${shown.context}` : name.textContent;
     } else {
+      name.parentElement.title = '';
       name.textContent = state.targetError === 'none' ? 'No chat open' : 'finding this chat…';
       context.textContent = '';
     }
@@ -1037,7 +1072,7 @@
     const viewing = $('[data-role="target-viewing"]');
     const elsewhere = runningHere && state.target && state.target.channelId !== shown.channelId;
     viewing.hidden = !elsewhere;
-    if (elsewhere) viewing.textContent = `viewing ${state.target.name}`;
+    if (elsewhere) viewing.textContent = `viewing ${state.target.guildId ? state.target.name.replace(/^#/, '') : state.target.name}`;
     renderHero();
     renderActions();
   }
@@ -1174,6 +1209,7 @@
     const t = state.target;
     if (!t || t.protected || run.active || state.scanning) return;
     const signal = beginScan('current');
+    state.outcome = null;
     setStatus('Counting your messages…', 'info');
     try {
       const n = await countMine(t, {
@@ -1188,11 +1224,17 @@
       const here = !state.route || state.route.channelId === t.channelId;
       const where = here ? '' : ` in \u2068${t.name}\u2069`;
       // Shielded while we were counting: there's nothing to offer here any more.
-      if (here && state.target && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
+      if (here && state.target && state.target.protected) setStatus(...immuneStatus(state.target));
+      // The ring shows the number: the footer names the next step, and the number is still heard.
+      // Discord's search catching up is its normal pace, so no alarm.
       else if (isPartialCount(t.channelId)) {
-        setStatus(n ? `${plural(n, 'message')} found so far${where}${SEP}Discord is still indexing older ones` : `Discord is still indexing${where}~ older messages may be hiding`, 'warn');
+        if (!n) setStatus(`Discord is still searching${where}~ count again in a minute`, 'calm');
+        else if (where) setStatus(`${plural(n, 'message')} found so far${where}`, 'info');
+        else setStatus('Purify now, then once more later for the rest', 'info', { sr: `${plural(n, 'message')} found so far. ` });
       } else if (n) {
-        setStatus(`${plural(n, 'message')} found${where}${SEP}~${formatDuration(estimateSeconds(n))} to purify`, 'success', { flair: '✨' });
+        if (where) setStatus(`${plural(n, 'message')} found${where}`, 'success', { flair: '✨' });
+        // No flair: the line fits one row, so the panel keeps its height into the run.
+        else setStatus("Counted~ press Purify when you're ready", 'success', { sr: `${plural(n, 'message')} found. ` });
       } else setStatus(`All clear~ nothing of yours ${here ? 'here' : `in \u2068${t.name}\u2069`}`, 'success', { flair: '✨' });
     } catch (err) {
       if (err instanceof Stopped) setStatus('Stopped counting~', 'calm');
@@ -1213,10 +1255,12 @@
     const rows = selectedRows();
     if (!rows.length || run.active || state.scanning) return;
     const signal = beginScan('batch');
+    state.outcome = null;
     let grand = 0;
     let deferred = 0;
     let indexing = 0;
     let missed = 0;
+    let missedLocked = 0; // of those, chats you can't read
     let missedWhy = '';
     let searched = false;
     try {
@@ -1240,14 +1284,17 @@
           addLog(`scan failed · ${row.label} · ${err.message}`, 'error');
           setRowState(row, 'error', err.message);
           if (!missed++) missedWhy = err.message;
+          if (plainError(err).code === 'no-access') missedLocked++;
         }
         renderHero(); // the strip keeps up as each chat lands
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
       const counted = rows.length - deferred - missed;
       if (!searched) setStatus('Closed DMs are counted when you purify them~', 'info', { flair: '♡' });
+      // A chat you can't read is a calm fact, not a failure.
+      else if (missed && missedLocked === missed) setStatus(`Counted~ ${plural(grand, 'message')}${SEP}skipped ${plural(missed, 'chat')} you can't read`, 'success');
       else if (missed) setStatus(`Counted~ ${plural(grand, 'message')}${SEP}${plural(missed, 'chat')} skipped${SEP}${shortReason(missedWhy)}${missed > 1 ? ' and more' : ''}`, 'warn');
-      else if (indexing) setStatus(`Counted~ ${plural(grand, 'message')} so far${SEP}Discord is still indexing ${plural(indexing, 'chat')}`, 'warn');
+      else if (indexing) setStatus(`Counted~ Discord is still searching ${plural(indexing, 'chat')}, so more may turn up`, 'info');
       else if (!grand) setStatus(`All clear~ nothing of yours in ${counted === 1 ? 'that chat' : `those ${counted} chats`}`, 'success', { flair: '✨' });
       else setStatus(`Counted~ ${plural(grand, 'message')} in ${plural(counted, 'chat')}`, 'success', { flair: '✨' });
     } catch (err) {
@@ -1297,11 +1344,11 @@
   const PLAIN_ERRORS = [
     // First: the engine reports an account switch with status 0, like a dropped connection.
     { code: 'switched', when: (e) => /switched Discord accounts/.test(e.message), line: 'You switched Discord accounts~ stopped to be safe', short: 'Switched accounts' },
-    { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha|human check/i.test(e.message), line: 'Discord wants a captcha~ solve it in Discord, then press Purify to finish', short: 'Discord wants a captcha' },
-    { code: 'logged-out', when: (e) => e.status === 401 || /login token/.test(e.message), line: "You're logged out of Discord~ log in, then press Try again", short: 'Logged out of Discord' },
-    { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so there's nothing here to purify", short: 'No access here', blocking: true },
+    { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha|human check/i.test(e.message), line: "Discord wants to check you're human~ take a break, then press Purify to finish", short: 'Discord wants a human check' },
+    { code: 'logged-out', when: (e) => e.status === 401 || /login token/.test(e.message), line: "Couldn't use your Discord login~ reload Discord and try again", short: 'Login not working' },
+    { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so Purify can't reach your messages here", short: 'No access here', blocking: true },
     { code: 'no-permission', when: (e) => e.code === 50013 || /Missing Permissions/.test(e.message), line: "Discord won't let you delete here", short: 'No permission here', blocking: true },
-    { code: 'indexing', when: (e) => e.status === 202 || /indexing/.test(e.message), line: 'Discord is still sorting this chat~ try again in a minute', short: 'Discord is still indexing' },
+    { code: 'indexing', when: (e) => e.status === 202 || /indexing/.test(e.message), line: 'Discord is still searching this chat~ try again in a minute', short: 'Discord is still searching' },
     { code: 'network', when: (e) => e.status === 0 || /Network unreachable/.test(e.message), line: "Can't reach Discord~ check your internet, then press Try again", short: "Can't reach Discord" },
     { code: 'server', when: (e) => e.status >= 500, line: 'Discord is having a moment~ try again in a minute', short: 'Discord is having a moment' },
     { code: 'gone', when: (e) => e.code === 10003, line: "This chat doesn't exist any more", short: 'Chat is gone' },
@@ -1325,7 +1372,7 @@
   function listError(what, err) {
     addLog(`couldn't load ${what} · ${err.message}`, 'error');
     const p = plainError(err);
-    if (p.code === 'logged-out') return "You're logged out of Discord~ log in and your chats show up here";
+    if (p.code === 'logged-out') return "Couldn't use your Discord login~ reload Discord and your chats show up here";
     return `${p.code === 'other' ? p.line : p.short}${SEP}press ↻ to try again`;
   }
 
@@ -1573,7 +1620,7 @@
     const tag = el.querySelector('.row-tag');
     const tagText = status === 'running' ? (row.failed ? `purifying~${SEP}${fmt(row.failed)} failed` : 'purifying~')
       : status === 'partial' ? detail || 'run again later'
-        : status === 'indexing' ? 'Discord is still indexing~' : '';
+        : status === 'indexing' ? 'still searching~' : '';
     if (tag.textContent !== tagText) tag.textContent = tagText;
     tag.hidden = !tagText;
     const progress = n ? `${deleted}/${fmt(n)}` : deleted;
@@ -1621,7 +1668,7 @@
   function shortReason(reason) {
     if (/Missing Access/i.test(reason)) return 'no access';
     if (/Missing Permissions/i.test(reason)) return 'no permission';
-    if (/indexing/i.test(reason)) return 'still indexing';
+    if (/indexing/i.test(reason)) return 'still searching';
     if (/system message/i.test(reason)) return 'system message';
     if (/archived/i.test(reason)) return 'archived thread';
     if (/Unknown Message/i.test(reason)) return 'already gone';
@@ -1798,7 +1845,7 @@
       protection.released = before.released;
       if (synced) protectionChanged();
       addLog(`couldn't save the shield for ${name} — Discord's storage is full or blocked`, 'error');
-      setStatus(`Couldn't save~ ${name} is ${shield ? 'not immune' : 'still immune'} (Discord's storage is full or blocked)`, 'error');
+      setStatus(shield ? `Couldn't save~ ${name} isn't immune yet` : `Couldn't save~ ${name} is still immune`, 'error');
       return;
     }
     addLog(shield ? `shielded ${name} — they're immune now ♡` : `${name} is no longer immune`, 'info');
@@ -1832,7 +1879,7 @@
 
   // 'Shield' is the verb and 'immune' the state. The button keeps one name and aria-pressed says
   // whether the shield is up, so a screen reader never hears 'remove' and 'pressed' at once.
-  const shieldTitle = (immune) => (immune ? 'Immune ♡ click to remove the shield' : 'Shield this DM~ never purged');
+  const shieldTitle = (immune) => (immune ? 'Immune ♡ tap to remove the shield' : 'Shield this DM~ never purged');
 
   function shieldButton(user, { protectedNow, label }) {
     const btn = h('button', {
@@ -2847,10 +2894,21 @@
   // The last look over a counted chat, after its last message went: the card says so.
   const lastLook = () => run.active && !run.paused && state.runMode === 'current' && verifying();
 
+  // This chat's footer while purifying: the card names the chat, so this says the one useful thing.
+  // A wait or a failure line gives way to it again at the next message that goes.
+  const RUN_LINE = 'Purifying~ you can minimise me';
+  // Discord's system messages that nobody can delete, by type, for the log.
+  const KEPT_KINDS = { 1: 'member-added notice', 2: 'member-left notice', 3: 'call notice', 4: 'name change notice', 5: 'icon change notice', 21: 'thread starter' };
+  let skippedTypes = new Set(); // this run's skipped system messages, by type
+
   function wireRunEvents() {
     on('start', ({ targets }) => {
       $('[data-role="count"]').textContent = '0';
-      setStatus(targets.length > 1 ? `Starting on ${plural(targets.length, 'chat')}~` : `Purging \u2068${targets[0].name}\u2069~`, 'info', { flair: '✨' });
+      skippedTypes = new Set();
+      state.outcome = null;
+      state.runNow = null;
+      if (state.runMode === 'current') setStatus(RUN_LINE, 'info', { flair: '✨' });
+      else setStatus(targets.length > 1 ? `Starting on ${plural(targets.length, 'chat')}~` : `Purifying \u2068${targets[0].name}\u2069~`, 'info', { flair: '✨' });
       for (const t of targets) addLog(`queued: ${t.label || t.name}`, 'info');
       renderCurrent();
       renderActions();
@@ -2861,6 +2919,8 @@
       if (count > 1) setStatus(`Chat ${index + 1} of ${count}${SEP}\u2068${target.name}\u2069`, 'info');
       if (target.row) setRowState(target, 'running');
       revealRow(target);
+      state.runNow = target;
+      if (state.runMode === 'batch') renderCurrent(); // This chat's card names the chat being purified
     });
     on('dm-opened', ({ target, previousKey }) => {
       if (target.row) rekeyRow(target, previousKey);
@@ -2878,9 +2938,10 @@
       addLog(`Deleted: "${preview(msg)}"`, 'success', { scrub: `Deleted ✓ ${target.name}` });
       if (!run.paused && !run.stopping) {
         if (state.runMode === 'batch') {
+          // The numbers first: a long name is what the line cuts, never the progress.
           const i = state.runTargets.indexOf(target) + 1;
-          setStatus(`Chat ${i} of ${state.runTargets.length}${SEP}\u2068${target.name}\u2069${SEP}${fmt(target.deleted)} of ${target.planned ? fmt(target.planned) : '?'}`, 'info', { quiet: true });
-        } else setStatus(`Deleted "${preview(msg, 34)}"`, 'info', { quiet: true, flair: '♡' });
+          setStatus(`Chat ${i} of ${state.runTargets.length}${SEP}${fmt(target.deleted)} of ${target.planned ? fmt(target.planned) : '?'}${SEP}\u2068${target.name}\u2069`, 'info', { quiet: true });
+        } else if ($('[data-role="status"]').title !== RUN_LINE) setStatus(RUN_LINE, 'info', { quiet: true, flair: '✨' });
       }
       if (target.row) setRowState(target, 'running');
     });
@@ -2889,7 +2950,8 @@
       ring.done++;
       const tags = [msg.pinned && 'pinned', msg.type && msg.type !== 0 && msg.type !== 19 && 'system'].filter(Boolean);
       addLog(`FAILED · ${shortReason(reason)}${tags.length ? ` · ${tags.join(', ')}` : ''} · "${preview(msg, 40)}"`, 'error');
-      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}"${SEP}${shortReason(reason)}`, 'warn', { quiet: true });
+      // A message's words stay in the log: the footer can be on a shared screen.
+      if (!run.paused && !run.stopping) setStatus(`A message couldn't be purged${SEP}${shortReason(reason)}`, 'warn', { quiet: true });
       if (target.row) setRowState(target, 'running');
     });
     on('gone', ({ msg }) => {
@@ -2920,7 +2982,10 @@
       // Re-read the chat without a fresh "Ready~": the switch notice (or the stopped run's error) stays.
       setTimeout(() => refreshRoute({ keepScan: true, keepStatus: true }), 0);
     });
-    on('skip', ({ msg }) => addLog(`skipped a system message (type ${msg.type}) — Discord won't delete those`, 'skip'));
+    on('skip', ({ msg }) => {
+      skippedTypes.add(msg.type);
+      addLog(`kept a ${KEPT_KINDS[msg.type] || 'system message'} — Discord doesn't let anyone delete those`, 'skip');
+    });
     on('wait', (w) => {
       showWait(w);
       addLog(waitText(w), 'warn');
@@ -2933,12 +2998,12 @@
     });
     // What the person chose, and the run's own pace, are calm: no alarm badge.
     on('pause', (p) => {
-      setStatus(`Paused~ ${fmt(p.deleted)} purged so far`, 'calm');
+      setStatus('Resume picks up right here~', 'calm');
       renderCurrent();
       renderActions();
     });
     on('resume', () => {
-      setStatus('Purging again~', 'info', { flair: '✨' });
+      setStatus(state.runMode === 'current' ? RUN_LINE : 'Purifying again~', 'info', { flair: '✨' });
       renderCurrent();
       renderActions();
     });
@@ -2968,48 +3033,111 @@
       const problems = p.problems || [];
       const shielded = p.shielded || [];
       const key = state.runKey;
-      if (problems.length) {
-        addLog(`NEEDS ANOTHER LOOK: ${problems.map((x) => `${x.target.name} (${shortReason(x.reason)})`).join(', ')}`, 'warn');
-      }
+      const done = p.elapsedMs ? `Done in ${formatDuration(p.elapsedMs / 1000)}` : 'Done~';
+      // A chat you can't read is a calm fact: only the other problems need another look.
+      const locked = problems.filter((x) => plainError(x.reason).code === 'no-access');
+      const real = problems.filter((x) => !locked.includes(x));
+      const lockedNames = locked.map((x) => x.target.name).join(', ');
+      if (real.length) {
+        addLog(`NEEDS ANOTHER LOOK: ${real.map((x) => `${x.target.name} (${shortReason(x.reason)})`).join(', ')}${locked.length ? ` · skipped (no access): ${lockedNames}` : ''}`, 'warn');
+      } else if (locked.length) addLog(`skipped (no access): ${lockedNames}`, 'info');
+      // This chat's run, finished while another chat is open: the footer names the chat it was in.
+      const runChat = state.runMode === 'current' ? state.runTargets[0] : null;
+      const live = routeTarget();
+      const away = !!runChat && (!live || live.channelId !== runChat.channelId);
+      const there = runChat ? iso(runChat.name) : '';
+      let elsewhere = null;
+      // lastEnd is what the finish says, read by the readout (text), the strip (strip, else text), the
+      // mood, the sticker, the footer and the finish beats (confetti) until the context changes.
       if (p.error) {
         const plain = plainError(p);
-        if (plain.code === 'switched') {
-          setStatus('Stopped to be safe~ you switched Discord accounts', 'warn');
-          lastEnd = { key, text: `Stopped to be safe~ you switched accounts${SEP}${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'error', error: plain.code };
-        } else {
-          // A purge that broke off carries on with Purify; Try again is This chat's way to count.
-          setStatus(plain.short, 'error');
-          lastEnd = { key, text: plain.line.replace(/press Try again$/, 'press Purify to finish'), tone: 'error', error: plain.code };
-        }
+        // A purge that broke off carries on with Purify; the strip keeps that next step in its one line.
+        const STRIPS = {
+          captcha: 'Take a break, then press Purify', network: 'Check your internet, then press Purify',
+          'logged-out': 'Reload Discord, then press Purify', server: 'Discord is busy~ press Purify in a minute',
+          switched: 'Stopped to be safe~ you switched accounts', indexing: 'Discord may find older ones later~',
+        };
+        const text = plain.code === 'logged-out' ? "Couldn't use your Discord login~ reload Discord, then press Purify to finish"
+          : plain.line.replace(/press Try again$/, 'press Purify to finish');
+        const footer = plain.code === 'switched'
+          ? { text: `Switched accounts~ ${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'warn' }
+          : { text: plain.short, tone: 'error' };
+        lastEnd = { key, text, strip: STRIPS[plain.code], tone: 'error', error: plain.code, footer };
+        if (away && plain.code !== 'switched') elsewhere = { text: `${plain.short} in ${there}`, tone: 'error' };
       } else if (p.stopped) {
-        const handled = p.deleted + p.failed + (p.gone || 0);
-        setStatus('Stopped~ Purify picks up the rest', 'calm');
-        lastEnd = { key, text: p.total > 0 && !p.partial ? `Stopped at ${fmt(handled)} of ${fmt(p.total)}~` : `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
-      } else if (problems.length) {
-        const n = problems.length;
-        const indexingOnly = problems.every((x) => /indexing/i.test(x.reason));
-        setStatus(indexingOnly ? `${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go later~ Discord is still indexing`
-          : `${plural(n, 'chat')} skipped${SEP}${shortReason(problems[0].reason)}${n > 1 ? ' and more' : ''}${SEP}see Logs`, 'warn');
-        lastEnd = { key, text: indexingOnly ? `Purged ${purged}${SEP}run again later for older ones` : `Purged ${purged}${SEP}${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
+        const left = p.total - p.deleted - (p.gone || 0);
+        const known = p.total > 0 && !p.partial;
+        lastEnd = {
+          key, text: known ? `Stopped~ ${fmt(left)} of yours still here` : 'Stopped~ the rest are still here', tone: 'paused', stopped: true,
+          footer: { text: 'Purify picks up the rest~', tone: 'calm', sr: known ? `${fmt(left)} of yours still here. ` : 'The rest are still here. ' },
+        };
+        if (away) elsewhere = { text: `Stopped in ${there}~ Purify there picks up the rest`, tone: 'calm' };
+      } else if (runChat && real.length) {
+        // This chat says what happened to it, never 'chat skipped' or 'fought back'.
+        const plain = plainError(real[0].reason);
+        lastEnd = plain.code === 'indexing'
+          ? {
+            key, text: 'Discord may find older ones later~', tone: 'paused', failed: p.failed, problems: 1, mood: 'almost there, princess~',
+            footer: { text: 'Purify again later to catch them~', tone: 'calm' },
+          }
+          : {
+            key, text: plain.line, tone: 'error', failed: p.failed, problems: 1, mood: plain.code === 'no-access' ? 'that door is locked~' : 'oh no… something broke',
+            footer: { text: plain.short, tone: 'error' },
+          };
+        if (away) elsewhere = { text: `${lastEnd.footer.text.replace(/~$/, '')} in ${there}`, tone: lastEnd.footer.tone };
+      } else if (real.length) {
+        const n = real.length;
+        if (real.every((x) => plainError(x.reason).code === 'indexing')) {
+          lastEnd = {
+            key, text: 'Discord may find older ones later~', tone: 'paused', failed: p.failed, problems: n, locked: locked.length,
+            footer: { text: `${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go later~ Discord is still searching`, tone: 'calm' },
+          };
+        } else {
+          const text = n === 1 ? `1 chat skipped${SEP}${shortReason(real[0].reason)}` : `${fmt(n)} chats skipped`;
+          lastEnd = { key, text, tone: 'warn', failed: p.failed, problems: n, locked: locked.length, footer: { text: `${done}${SEP}reasons in Logs`, tone: 'warn', sr: `${text}. ` } };
+        }
       } else if (shielded.length) {
         // Shielded from another tab mid-purge: what's left there stays on purpose, so no "all clean".
-        const who = shielded.length === 1 ? `\u2068${shielded[0]}\u2069` : plural(shielded.length, 'chat');
-        setStatus(`Done~ ${who} stays shielded`, 'immune');
-        lastEnd = { key, text: `Purged ${purged}${SEP}${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
+        const who = shielded.length === 1 ? `⁨${shielded[0]}⁩` : plural(shielded.length, 'chat');
+        lastEnd = {
+          key, text: `Purged ${purged}${SEP}${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length,
+          footer: { text: `Done~ ${who} stays shielded`, tone: 'immune' },
+        };
       } else if (p.failed) {
-        setStatus(`Done~ ${fmt(p.failed)} wouldn't go${SEP}reasons in Logs`, 'warn');
-        lastEnd = { key, text: `Purged ${fmt(p.deleted)}${SEP}${fmt(p.failed)} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
-        if (p.deleted > 0) celebrate();
+        lastEnd = {
+          key, text: `${plural(p.failed, 'message')} couldn't be purged`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~', confetti: p.deleted > 0, locked: locked.length,
+          footer: { text: `${done}${SEP}reasons in Logs`, tone: 'warn', sr: `${fmt(p.failed)} couldn't be purged. ` },
+        };
+        if (away) elsewhere = { text: `Done~ ${there}${SEP}${fmt(p.failed)} couldn't be purged${SEP}reasons in Logs`, tone: 'warn' };
+      } else if (locked.length) {
+        // Only chats you can't read were skipped: a clean finish for everything that could be reached.
+        const n = locked.length;
+        const text = p.deleted ? `Purged ${purged}~ skipped ${plural(n, 'chat')} you can't read` : `Nothing purged~ ${plural(n, 'chat')} you can't read`;
+        const skipped = n === 1 ? iso(locked[0].target.name) : plural(n, 'chat');
+        const mood = n === 1 ? 'one door stayed locked~' : 'some doors stayed locked~';
+        lastEnd = p.deleted
+          ? { key, text, flair: '✨', tone: 'cheer', sticker: 'flawless~', confetti: true, locked: n, mood, footer: { text: `${done}${SEP}skipped ${skipped}`, tone: 'success', flair: '♡', sr: `${text}. ` } }
+          : { key, text, tone: 'warn', locked: n, mood, footer: { text: `Nothing purged${SEP}skipped ${skipped}`, tone: 'warn', sr: `${text}. ` } };
       } else if (p.deleted) {
-        setStatus(`Done in ${formatDuration(p.elapsedMs / 1000)}${SEP}0 failed`, 'success', { flair: '♡' });
-        lastEnd = { key, text: 'All clean~ nothing left of you here', flair: '✨', tone: 'cheer', sticker: 'flawless~' };
-        celebrate();
+        // Truthful about what stays: nobody can delete Discord's own notices, such as a call's.
+        const kept = [...skippedTypes];
+        const text = !p.skipped || !kept.length ? 'All clean~ nothing left of you here'
+          : kept.every((t) => t === 3) ? "All clean~ only Discord's call notices stay" : "All clean~ only Discord's own notices stay";
+        lastEnd = { key, text, flair: '✨', tone: 'cheer', sticker: 'flawless~', confetti: true, footer: { text: done, tone: 'success', flair: '♡', sr: 'All clean. ' } };
+        if (away) elsewhere = { text: `Done~ ${there} is all clean${SEP}${purged} purged`, tone: 'success', flair: '♡' };
       } else {
-        setStatus('Done~ nothing of yours was here', 'success');
-        lastEnd = { key, text: 'All clear~ nothing of yours here', flair: '✨', tone: 'clear' };
+        lastEnd = { key, text: 'All clear~ nothing of yours here', flair: '✨', tone: 'clear', footer: { text: 'Done~ nothing of yours was here', tone: 'success' } };
+        if (away) elsewhere = { text: `Done~ nothing of yours in ${there}`, tone: 'success' };
       }
+      // Finished in another chat: the footer keeps its line until that chat is visited (its verdict
+      // then says it), or a Count, a Purify or a new run takes over.
+      state.outcome = elsewhere;
+      state.runNow = null;
+      setStatus(...footerArgs(elsewhere || lastEnd.footer));
+      // The finish's confetti plays here until the verdict's own beats take it over (WP-I's D48).
+      if (lastEnd.confetti) celebrate();
       // Minimised through the finish line: the orb carries the outcome until reopened.
-      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd.tone } : null;
+      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !real.length && !shielded.length && !(locked.length && !p.deleted), tone: lastEnd.tone } : null;
       if (state.runMode === 'batch') settleBatchSelection();
       renderCurrent();
       renderActions();
@@ -3067,7 +3195,7 @@
 
   const ACTIONS = {
     scan: () => (state.scanning ? cancelScan() : state.tab !== 'current' ? scanSelected() : describeFailed() ? refreshRoute() : scanCurrent()),
-    purify: () => (state.tab === 'current' ? askPurgeCurrent() : askPurgeSelected()),
+    purify: () => { state.outcome = null; return state.tab === 'current' ? askPurgeCurrent() : askPurgeSelected(); },
     // Focus follows the work: the control that takes over from the one that goes gets focus.
     pause: () => { handFocus('[data-act="resume"]'); pauseRun(); },
     resume: () => { handFocus('[data-act="pause"]'); resumeRun(); },
@@ -3297,7 +3425,12 @@
       { duration: 240, easing: 'cubic-bezier(.22,1,.36,1)' });
     }
     renderProgress(progressSnapshot());
-    if (!prefs.welcomed) showWelcome();
+    // A fresh install gets the welcome; someone updating gets one line on what changed, once.
+    if (!prefs.welcomed) {
+      showWelcome();
+      prefs.seenVersion = shortVersion;
+      savePrefs('seenVersion');
+    } else if (prefs.seenVersion !== shortVersion) notes.news = true;
     // Minimised, it asks Discord nothing about the chat until it opens.
     let looked = Promise.resolve();
     if (prefs.open) looked = refreshRoute();

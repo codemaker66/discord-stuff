@@ -318,8 +318,9 @@
 .eyebrow { display: flex; align-items: center; gap: 6px; font: 700 var(--fs-cap)/13px var(--font); letter-spacing: var(--track-cap); text-transform: uppercase; color: var(--t3); }
 .live-dot { display: none; width: 6px; height: 6px; border-radius: 50%; background: var(--rose-400); }
 .target-line { margin-top: 4px; display: flex; align-items: baseline; gap: 6px; min-width: 0; font: 600 var(--fs-em)/18px var(--font); color: var(--t1); }
-.target-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.target-context { flex: none; max-width: 52%; font-weight: 500; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A long server name gives way before the channel's does; hovering the line names both. */
+.target-name { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.target-context { flex: 0 4 auto; min-width: 3em; max-width: 45%; font-weight: 500; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .target-viewing { margin-top: 3px; font: 500 var(--fs-meta)/14px var(--font); color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .target[data-state="live"] .target-ico { color: var(--rose-200); background: rgba(255, 122, 169, .1); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .25); }
 .target[data-state="live"] .eyebrow { color: var(--rose-300); }
@@ -330,7 +331,6 @@
 .target[data-state="immune"] .target-ico { background: linear-gradient(180deg, #4a3413, #2e1f09); box-shadow: inset 0 0 0 1px rgba(247, 203, 110, .45); font-size: 15px; }
 .target[data-state="immune"] .eyebrow { color: var(--ember-300); }
 .target[data-state="immune"] .target-name { color: var(--ember-200); }
-.target[data-state="blocked"] .eyebrow { color: var(--crim-300); }
 /* The group glyph is ink like '#' and '@'; only an immune chat's shield is gold. */
 .target:not([data-state="immune"]) .target-ico .ico { color: inherit; }
 /* Between chats the last one dims for a moment and takes no clicks, until the new one is read. */
