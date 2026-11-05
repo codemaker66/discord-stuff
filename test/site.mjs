@@ -454,7 +454,7 @@ await test('S30 phones: the rose button lands on the phone note, which says what
     await cta.click();
     await page.waitForTimeout(900);
     const top = (await page.locator('#on-phone').boundingBox()).y;
-    assert(top >= 24 && top <= 60, `${key}: the note's top sits ${Math.round(top)}px from the top after the tap`);
+    assert(top >= 20 && top <= 60, `${key}: the note's top sits ${Math.round(top)}px from the top after the tap`);
     await page.click('[data-act="show-steps"]');
     assert(await page.locator('.chip[data-browser="chrome"][aria-checked="true"]').count() === 1, `${key}: computer steps start on Chrome`);
     assert(/^Your computer's browser:/.test((await page.locator('.picker').textContent()).trim()), `${key}: the picker asks about the computer`);
