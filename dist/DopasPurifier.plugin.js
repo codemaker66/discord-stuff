@@ -1326,7 +1326,7 @@ function createPurifier() {
         h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'This chat' }),
         h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Many chats' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }),
           h('span', { class: 'sr', 'data-role': 'tab-badge-sr', hidden: true, text: ' selected' }))),
-      h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-labelledby': 'dp-welcome-title' },
+      h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dp-welcome-title' },
         h('div', { class: 'welcome-card' },
           h('div', { class: 'welcome-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
           h('div', { class: 'welcome-title', id: 'dp-welcome-title', text: 'Hi princess~ ♡' }),
@@ -3006,6 +3006,16 @@ function createPurifier() {
     items[i < 0 ? 0 : (i + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
   }
 
+  // The first-run card is modal too: Tab cycles its two buttons instead of wandering into Discord.
+  function trapWelcome(e) {
+    const w = $('[data-role="welcome"]');
+    if (w.hidden || w.dataset.leaving || e.key !== 'Tab') return;
+    const items = [$('[data-act="welcome-ok"]'), $('[data-act="welcome-batch"]')].filter(Boolean);
+    const i = items.indexOf(root.activeElement);
+    e.preventDefault();
+    items[i < 0 ? 0 : (i + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
+  }
+
   // ── Terminal log ────────────────────────────────────────
 
   const LOG_LIMIT = 800;
@@ -3795,6 +3805,7 @@ function createPurifier() {
       if (modal && e.key === 'Escape') { e.preventDefault(); closeDialog(false); }
       else if (e.key === 'Escape') escapeFrom(root.activeElement);
       trapFocus(e);
+      trapWelcome(e);
     });
     const modalLayer = $('.modal-layer');
     modalLayer.addEventListener('pointerdown', (e) => {

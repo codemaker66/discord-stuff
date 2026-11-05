@@ -1588,6 +1588,8 @@ await test('T64 first run: the welcome card takes focus, and Tab never lands beh
       await page.keyboard.press('Tab');
       stops.push(await focused(page));
     }
+    // A null stop means focus left the shadow root entirely — onto Discord's own page behind the card.
+    assert(stops.every(Boolean), `Tab escaped the card into Discord: ${JSON.stringify(stops)}`);
     const inside = stops.filter(Boolean);
     assert(inside.every((f) => !f.behind), `Tab reached controls under the card: ${JSON.stringify(inside)}`);
     assert(inside.some((f) => f.id === 'welcome-batch'), `Tab reaches both card buttons: ${JSON.stringify(inside)}`);

@@ -79,9 +79,14 @@ async function hold(page, ms) {
   await page.click('[data-act="purify"]');
   await page.waitForTimeout(450);
   await shot(page, '03-confirm');
-  await hold(page, 480);
+  await hold(page, 200);
+  // Pin the fill partway so the picture always shows it filling — the gesture the card teaches —
+  // never the sealed frame a slow screenshot would otherwise catch past the 850ms commit.
+  await page.evaluate(`(() => { const a = ${sr}.querySelector('.hold-fill').getAnimations()[0]; if (a) { a.currentTime = 540; a.pause(); } })()`);
+  await page.waitForTimeout(80);
   await shot(page, '04-confirm-holding');
-  await page.waitForTimeout(600);
+  await page.evaluate(`(() => { const a = ${sr}.querySelector('.hold-fill').getAnimations()[0]; if (a) a.play(); })()`);
+  await page.waitForTimeout(700);
   await page.mouse.up();
   await page.waitForFunction(`Number(${sr}.querySelector('[data-role="count"]').textContent) >= 14`, null, { timeout: 60000 });
   await page.click('[data-act="logs"]');
