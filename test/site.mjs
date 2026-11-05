@@ -30,11 +30,13 @@ const browser = await chromium.launch();
 const results = [];
 const assert = (c, m) => { if (!c) throw new Error(`assertion failed: ${m}`); };
 
-async function open({ ua, viewport = { width: 1440, height: 900 }, withScript = null, permissions = [] } = {}) {
-  const context = await browser.newContext({ userAgent: ua, viewport, deviceScaleFactor: 2, permissions });
+// init runs before the page's own script (to stand in for navigator.share or a refused clipboard).
+async function open({ ua, viewport = { width: 1440, height: 900 }, withScript = null, permissions = [], init = null, forcedColors = 'none', reducedMotion = 'no-preference' } = {}) {
+  const context = await browser.newContext({ userAgent: ua, viewport, deviceScaleFactor: 2, permissions, forcedColors, reducedMotion });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
+  if (init) await page.addInitScript(init);
   await page.route(`${HOME}**`, (route) => {
     const rel = decodeURIComponent(new URL(route.request().url()).pathname).replace('/discord-stuff/', '') || 'index.html';
     const file = path.join(root, 'docs', rel === '' ? 'index.html' : rel);
@@ -48,10 +50,16 @@ async function open({ ua, viewport = { width: 1440, height: 900 }, withScript = 
   return { context, page, errors };
 }
 
+// A test that can't run on this machine returns skip(why): it is reported, not counted as passing.
+const SKIP = Symbol('skip');
+const skip = (why) => ({ [SKIP]: why });
 async function test(name, fn) {
   if (only && !only.some((o) => name.startsWith(o))) return;
-  try { await fn(); results.push({ name, ok: true }); console.log(`✓ ${name}`); }
-  catch (err) { results.push({ name, ok: false, error: String(err) }); console.log(`✗ ${name}\n    ${err.message}`); }
+  try {
+    const r = await fn();
+    if (r && r[SKIP]) { results.push({ name, skipped: r[SKIP] }); console.log(`– ${name}\n    skipped: ${r[SKIP]}`); return; }
+    results.push({ name, ok: true }); console.log(`✓ ${name}`);
+  } catch (err) { results.push({ name, ok: false, error: String(err) }); console.log(`✗ ${name}\n    ${err.message}`); }
 }
 
 for (const [key, expect] of Object.entries({
@@ -63,11 +71,11 @@ for (const [key, expect] of Object.entries({
 })) {
   await test(`S1 ${key}: detected, right store, right steps`, async () => {
     const { page, context, errors } = await open({ ua: UA[key] });
-    assert(await page.locator(`.chip[data-browser="${key}"][aria-pressed="true"]`).count() === 1, 'browser detected');
+    assert(await page.locator(`.chip[data-browser="${key}"][aria-checked="true"]`).count() === 1, 'browser detected');
     const store = await page.locator('[data-role="manager-link"]').getAttribute('href');
     assert(store.includes(expect.store), `store ${store}`);
     assert((await page.locator('[data-step="allow"]').isVisible()) === expect.allow, 'allow-scripts step visibility');
-    if (expect.ext) assert((await page.locator('[data-role="ext-url"]').textContent()) === expect.ext, 'extensions url');
+    if (expect.ext) assert((await page.locator('[data-role="ext-url"]').textContent()).startsWith(expect.ext), 'extensions url');
     assert(errors.length === 0, errors.join('; '));
     await context.close();
   });
@@ -223,7 +231,7 @@ await test('S10 coming back after Install keeps checking until the latest versio
     await page.evaluate(() => localStorage.setItem('test:tm', 'old'));
     await page.reload();
     await page.waitForSelector('.installed.is-update', { timeout: 3000 });
-    await page.click('[data-role="installed-action"]');
+    await page.click('[data-role="hero-cta"]');
     await page.evaluate(() => localStorage.setItem('test:tm', 'latest'));
     await comeBack(page);
     await page.waitForFunction((v) => document.querySelector('[data-role="installed-text"]').textContent.includes(`Installed — v${v}`), latest, { timeout: 3000 });
@@ -420,8 +428,436 @@ await test('S20 the safety answer says what reaches GitHub (and nothing claims D
   }
 });
 
+const PHONE = { width: 390, height: 844 };
+const visibleText = (page) => page.evaluate(() => document.body.innerText);
+// Store tabs open from step 1; close them and come back the way a person would.
+async function visitStore(page) {
+  const popup = page.context().waitForEvent('page', { timeout: 3000 }).catch(() => null);
+  await page.click('[data-role="manager-link"]');
+  const store = await popup;
+  if (store) await store.close();
+  await comeBack(page);
+}
+
+await test('S30 phones: the rose button lands on the phone note, which says what to do there', async () => {
+  for (const key of ['iphone', 'android']) {
+    const { page, context, errors } = await open({ ua: UA[key], viewport: PHONE });
+    const cta = page.locator('[data-role="hero-cta"]');
+    assert((await cta.textContent()).trim() === 'Get it on your computer', `${key}: hero reads "${(await cta.textContent()).trim()}"`);
+    assert((await cta.getAttribute('href')) === '#on-phone', `${key}: hero goes to ${await cta.getAttribute('href')}`);
+    assert(await cta.locator('svg rect').count() === 1 && await page.locator('#on-phone > svg rect').count() === 1, `${key}: a laptop on both, not a download or a shield`);
+    const note = await page.locator('#on-phone').textContent();
+    assert(/On your phone, princess\? ♡ The Purifier lives in a computer's browser~/.test(note), `${key}: ${note}`);
+    assert(/This link is already in your Discord chat — click it there on your computer/.test(note), `${key}: the easy path is named`);
+    assert((await page.locator('[data-role="android-only"]').isVisible()) === (key === 'android'), `${key}: the Firefox-for-Android line shows only on Android`);
+    assert(!/\$2\.99/.test(await visibleText(page)), `${key}: a price shows before Safari is chosen`);
+    await cta.click();
+    await page.waitForTimeout(900);
+    const top = (await page.locator('#on-phone').boundingBox()).y;
+    assert(top >= 20 && top <= 60, `${key}: the note's top sits ${Math.round(top)}px from the top after the tap`);
+    await page.click('[data-act="show-steps"]');
+    assert(await page.locator('.chip[data-browser="chrome"][aria-checked="true"]').count() === 1, `${key}: computer steps start on Chrome`);
+    assert(/^Your computer's browser:/.test((await page.locator('.picker').textContent()).trim()), `${key}: the picker asks about the computer`);
+    assert(!/\$2\.99/.test(await visibleText(page)), `${key}: no price on the Chrome steps`);
+    await page.click('.chip[data-browser="safari"]');
+    assert(/\$2\.99/.test(await visibleText(page)), `${key}: Safari's steps still name the price`);
+    assert(errors.length === 0, errors.join('; '));
+    await context.close();
+  }
+  // Firefox for Android can wear it: the note says how, with nothing to send and no button row left over.
+  const { page, context } = await open({ ua: UA.firefoxAndroid, viewport: PHONE });
+  const note = await page.locator('#on-phone').textContent();
+  assert(/Firefox for Android can wear it ♡/.test(note) && /Follow the steps below, then open Discord with ⋮ → Desktop site switched on/.test(note), note);
+  assert(!/can't wear/.test(note), 'no "can\'t" on the one phone that can');
+  assert(!(await page.locator('[data-act="send-link"]').isVisible()) && !(await page.locator('[data-role="android-only"]').isVisible()), 'no Send button, no repeated Firefox line');
+  assert((await page.locator('.note-act').evaluate((el) => getComputedStyle(el).display)) === 'none', 'the empty button row takes no space');
+  assert(await page.locator('.chip[data-browser="firefox"][aria-checked="true"]').count() === 1, 'Firefox steps for Firefox');
+  assert((await page.locator('[data-role="hero-cta"]').getAttribute('href')) === '#install', 'its hero goes to the steps');
+  await context.close();
+  // Closing the share sheet is a choice, not a failure: nothing is copied and nothing is said.
+  {
+    const { page, context } = await open({
+      ua: UA.iphone, viewport: PHONE,
+      init: () => {
+        navigator.share = () => Promise.reject(new DOMException('Share canceled', 'AbortError'));
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t; } } });
+      },
+    });
+    await page.click('[data-act="send-link"]');
+    await page.waitForTimeout(300);
+    assert(await page.evaluate(() => window.__copied === undefined), 'copied after the sheet was closed');
+    assert((await page.locator('[data-role="toast"]').textContent()) === '' && await page.locator('.toast.show').count() === 0, 'a toast after the sheet was closed');
+    await context.close();
+  }
+});
+
+// Exactly one rose button among the steps, on the step this person is on.
+const stepState = (page) => page.evaluate(() => ({
+  primary: [...document.querySelectorAll('.steps .btn-primary')].map((b) => b.dataset.role),
+  current: [...document.querySelectorAll('.step.is-current')].map((s) => s.dataset.step),
+  done: [...document.querySelectorAll('.step.is-done')].map((s) => s.dataset.step),
+}));
+const roseAboveFold = (page) => page.evaluate(() => [...document.querySelectorAll('.btn-primary')]
+  .filter((b) => b.offsetParent && b.getBoundingClientRect().top < innerHeight).map((b) => b.textContent.trim()));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+await test('S31 one loud button, on the step you are on (fresh, store visited, installed, outdated)', async () => {
+  {
+    const { page, context, errors } = await open({ ua: UA.chrome });
+    let s = await stepState(page);
+    assert(same(s.primary, ['manager-link']) && same(s.current, ['manager']), `fresh: ${JSON.stringify(s)}`);
+    await visitStore(page);
+    s = await stepState(page);
+    assert(same(s.primary, ['install-link']) && same(s.current, ['allow']) && s.done.length === 0, `store visited: ${JSON.stringify(s)}`);
+    await page.reload();
+    await page.waitForTimeout(300);
+    assert(same((await stepState(page)).current, ['allow']), 'the step holds for the rest of the visit');
+    assert(errors.length === 0, errors.join('; '));
+    await context.close();
+  }
+  {
+    const { page, context } = await open({ ua: UA.firefox });
+    await visitStore(page);
+    const s = await stepState(page);
+    assert(same(s.primary, ['install-link']) && same(s.current, ['install']), `Firefox has no step 2: ${JSON.stringify(s)}`);
+    await context.close();
+  }
+  {
+    const { page, context } = await open({ ua: UA.safari });
+    const s = await stepState(page);
+    assert(s.primary.length === 0 && same(s.current, ['manager']), `Safari's paid helper is never the loud button: ${JSON.stringify(s)}`);
+    await context.close();
+  }
+  // Installed: the banner says so first, the hero holds the one action, the steps fold away.
+  {
+    const { page, context, errors } = await open({ ua: UA.chrome, withScript: userscript });
+    await page.waitForSelector('[data-role="installed"]:not([hidden])', { timeout: 3000 });
+    assert(await page.locator('.lead + .installed + .cta').count() === 1, 'banner sits between the lead and the button');
+    assert(await page.locator('[data-role="installed-action"]').count() === 0, 'no second Open Discord in the banner');
+    assert(same(await roseAboveFold(page), ['Open Discord']), `rose above the fold: ${await roseAboveFold(page)}`);
+    const cta = page.locator('[data-role="hero-cta"]');
+    assert((await cta.getAttribute('target')) === '_blank' && /noopener/.test(await cta.getAttribute('rel')), 'Open Discord opens a new tab');
+    assert(/Installed — v[\d.]+\. You're all set, princess~ Discord already open\? Reload it once\./.test(await page.locator('[data-role="installed-text"]').textContent()), 'installed copy');
+    assert((await page.locator('.installed .tick').textContent()) === '✓', 'tick');
+    assert((await page.title()) === "✓ Installed · Dopa's Discord Purifier", `title ${await page.title()}`);
+    assert(/Installed — v/.test(await page.locator('[data-role="installed-live"]').textContent()), 'said to screen readers');
+    const s = await stepState(page);
+    assert(same(s.primary, ['open-link']) && same(s.current, ['open']) && same(s.done, ['manager', 'allow', 'install']), `steps: ${JSON.stringify(s)}`);
+    assert(!(await page.locator('[data-role="manager-link"]').isVisible()) && !(await page.locator('[data-step="manager"] [data-role="manager-note"]').isVisible()), 'done steps fold to their heading');
+    assert((await page.locator('[data-role="install-link"]').textContent()) === 'Reinstall', 'step 3 offers a quiet Reinstall');
+    assert(errors.length === 0, errors.join('; '));
+    await context.close();
+  }
+  {
+    const old = userscript.replace(/const VERSION = '[^']+';/, "const VERSION = '4.0.0';");
+    const { page, context } = await open({ ua: UA.chrome, withScript: old });
+    await page.waitForSelector('.installed.is-update', { timeout: 3000 });
+    assert(same(await roseAboveFold(page), ['Update now']), `rose above the fold: ${await roseAboveFold(page)}`);
+    const text = await page.locator('[data-role="installed-text"]').textContent();
+    assert(text === `v${latest} is out ✨ You have v4.0.0. Press Update now, then Update in Tampermonkey's tab, and reload Discord.`, text);
+    assert((await page.locator('.installed .tick').textContent()) === '↑', 'an arrow, not a tick, for out of date');
+    assert((await page.title()) === "↑ Update ready · Dopa's Discord Purifier", `title ${await page.title()}`);
+    const s = await stepState(page);
+    assert(same(s.primary, ['install-link']) && same(s.current, ['install']) && same(s.done, ['manager', 'allow']), `steps: ${JSON.stringify(s)}`);
+    assert((await page.locator('[data-role="install-link"]').textContent()) === 'Update', 'step 3 says Update');
+    await context.close();
+  }
+  // Nothing detected after Install: the steps the hint names glow with it.
+  {
+    const { page, context } = await open({ ua: UA.chrome });
+    await withManager(page);
+    await page.click('[data-role="install-link"]');
+    await comeBack(page);
+    await page.waitForFunction(() => /can't see the Purifier/.test(document.querySelector('[data-role="install-help"]').textContent), null, { timeout: 4000 });
+    const hinted = await page.$$eval('.step.is-hint', (els) => els.map((e) => e.dataset.step));
+    assert(same(hinted, ['manager', 'allow']), `hinted steps: ${hinted}`);
+    await context.close();
+  }
+  // The headline sets in at most two lines at every desktop width, so "Set it up" starts above the fold.
+  for (const [w, h] of [[1024, 768], [1280, 800], [1440, 900], [1920, 1080]]) {
+    const { page, context } = await open({ ua: UA.chrome, viewport: { width: w, height: h } });
+    const lines = await page.locator('h1').evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
+    assert(lines >= 1 && lines <= 2, `${w}px: headline in ${lines} lines`);
+    if (w === 1440) assert((await page.locator('#install').boundingBox()).y < h - 120, '"Set it up" above the fold at 1440×900');
+    await context.close();
+  }
+});
+
+await test('S32 trust at first glance, step 2 as one paste, the link preview and the FAQ', async () => {
+  const { page, context, errors } = await open({ ua: UA.chrome });
+  assert(await page.locator('.cta + .trust + .meta').count() === 1, 'trust row between the buttons and the meta line');
+  const trust = await page.$$eval('.trust li', (els) => els.map((li) => ({ text: li.textContent.trim(), top: Math.round(li.getBoundingClientRect().top) })));
+  assert(same(trust.map((t) => t.text), ['Only your messages', 'Login stays in Discord', 'Free & readable code']), JSON.stringify(trust));
+  assert(new Set(trust.map((t) => t.top)).size === 1, 'trust row on one line at 1440');
+  assert((await page.locator('.meta').textContent()).trim() === `v${latest} · two-minute setup on a computer · no sign-up`, await page.locator('.meta').textContent());
+  assert((await page.locator('#install .sub').textContent()).trim() === 'The Purifier lives inside Discord in your browser, carried by Tampermonkey, a free helper extension. Set it up once — updates arrive by themselves.', 'setup intro');
+  await page.click('.trust a[href="#faq-safe"]');
+  await page.waitForTimeout(900);
+  assert(await page.locator('#faq-safe').evaluate((d) => d.open && d.getBoundingClientRect().top >= -2 && d.getBoundingClientRect().top < innerHeight), '"Login stays in Discord" opens the safety answer');
+  // The link preview: says what it is and that it's safe, without repeating the name.
+  const meta = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('meta[property], meta[name]')].map((m) => [m.getAttribute('property') || m.name, m.content])));
+  const blurb = 'Deletes only messages you sent, and only while you hold the button. Free, readable code, and your login never leaves Discord ♡ Two-minute setup on a computer.';
+  assert(meta['og:title'] === 'Wipe your Discord messages, gently ✨', meta['og:title']);
+  assert(meta['og:description'] === blurb && meta.description === blurb, meta['og:description']);
+  assert(/^The Purifier panel inside Discord: 40 messages/.test(meta['og:image:alt'] || ''), 'og:image:alt');
+  assert(meta['og:site_name'] === "Dopa's Discord Purifier" && meta['twitter:card'] === 'summary_large_image' && meta['theme-color'] === '#ff7aa9', 'site name, card and colour kept');
+  // Step 2 on Chrome: copy the address, flip the switch; the Developer-mode fallback is fine print.
+  const how = await page.$$eval('[data-step="allow"] .how li', (els) => els.filter((li) => li.offsetParent).map((li) => li.textContent.replace(/\s+/g, ' ').trim()));
+  assert(how.length === 2 && /^Copy this, paste it into a new tab:/.test(how[0]) && /Allow User Scripts/.test(how[1]), JSON.stringify(how));
+  assert(/^No such switch\? Turn on Developer mode, top right of that same page\.$/.test((await page.locator('[data-step="allow"] .fine').textContent()).trim()), 'fallback fine print');
+  assert(await page.locator('[data-step="allow"] .linkbox [data-role="ext-url"] + [data-act="copy-ext"]').isVisible(), 'the address sits in a field with its Copy button');
+  // FAQ: the plain reassurance first, the two missing questions, and a readable measure.
+  const questions = await page.$$eval('summary', (els) => els.map((s) => s.textContent.trim()));
+  const after = (q, next) => questions.indexOf(next) === questions.indexOf(q) + 1;
+  assert(after('Can I undo a purge?', 'Does anyone get told?') && after('How do updates work?', 'How do I remove it?'), JSON.stringify(questions));
+  assert(/^You never paste a token, a password or any code\./.test((await page.locator('#faq-safe p').first().textContent()).trim()), 'safety answer leads with no token');
+  const help = await page.locator('details', { hasText: 'Nothing shows up' }).textContent();
+  assert(/it's the Allow User Scripts step/.test(help) && !/step 2/.test(help), 'names the switch, not a step number that differs per browser');
+  assert(/Tampermonkey icon → Dashboard/.test(await page.locator('details', { hasText: 'How do I remove it?' }).textContent()), 'how to remove it');
+  assert((await page.locator('details > div').first().evaluate((d) => parseFloat(getComputedStyle(d).maxWidth))) === 760, 'FAQ answers keep a readable measure');
+  assert((await page.locator('.feature h3').first().textContent()) === 'Know before you purge', 'feature card 1');
+  assert(errors.length === 0, errors.join('; '));
+  await context.close();
+  // Opera's helper has no known details page, so its step 2 keeps the toolbar route.
+  {
+    const { page, context } = await open({ ua: UA.opera });
+    const how = await page.$$eval('[data-step="allow"] .how li', (els) => els.filter((li) => li.offsetParent).map((li) => li.textContent.replace(/\s+/g, ' ').trim()));
+    assert(/^Right-click the Tampermonkey icon/.test(how[0]) && how.some((t) => /opera:\/\/extensions/.test(t)), JSON.stringify(how));
+    await context.close();
+  }
+  // Safari is told the price once, where it decides.
+  {
+    const { page, context } = await open({ ua: UA.safari });
+    assert(/· Safari's helper app costs \$2\.99$/.test((await page.locator('.meta').textContent()).trim()), 'Safari meta');
+    assert(/On Safari it costs \$2\.99; Chrome, Edge and Firefox are free\.$/.test((await page.locator('#install .sub').textContent()).trim()), 'Safari intro');
+    await context.close();
+  }
+});
+
+await test('S33 copying says so on the button you pressed; a refused clipboard selects the link instead', async () => {
+  {
+    const { page, context } = await open({ ua: UA.chrome, permissions: ['clipboard-read', 'clipboard-write'] });
+    assert((await page.locator('[data-role="share-url"]').textContent()) === 'codemaker66.github.io/discord-stuff', 'the link reads without its https://');
+    const button = page.locator('.share [data-act="share"]');
+    await button.click();
+    await page.waitForTimeout(200);
+    assert((await button.textContent()).trim() === 'Copied ✓', `share button says "${(await button.textContent()).trim()}"`);
+    assert((await page.evaluate(() => navigator.clipboard.readText())) === HOME, 'the full link is copied');
+    assert(await page.locator('.toast.show').count() === 0 && /Link copied/.test(await page.locator('[data-role="toast"]').textContent()), 'no toast over the page, but screen readers hear it');
+    await page.waitForTimeout(1600);
+    assert((await button.textContent()).trim() === 'Copy link', 'the label comes back');
+    const hero = page.locator('.hero [data-act="share"]');
+    await hero.click();
+    await page.waitForTimeout(200);
+    assert((await hero.locator('span').textContent()) === 'Copied ✓' && await hero.locator('svg').count() === 1, 'hero swaps only its words');
+    await page.click('[data-act="copy-ext"]');
+    await page.waitForTimeout(200);
+    assert((await page.locator('[data-act="copy-ext"]').textContent()) === 'Copied ✓', 'extension address copy says so too');
+    await context.close();
+  }
+  {
+    const { page, context } = await open({ ua: UA.chrome, init: () => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) } });
+    } });
+    await page.click('.hero [data-act="share"]');
+    await page.waitForTimeout(400);
+    assert((await page.evaluate(() => getSelection().toString())) === 'codemaker66.github.io/discord-stuff', 'the link is selected');
+    assert(await page.locator('.toast.show').count() === 1 && (await page.locator('[data-role="toast"]').textContent()) === 'Link selected~ press Ctrl+C (⌘C on Mac) ♡', 'and the toast says what to press');
+    const pasted = await page.evaluate(() => {
+      const data = new DataTransfer();
+      document.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }));
+      return data.getData('text/plain');
+    });
+    assert(pasted === HOME, `Ctrl+C on the shown link copies ${pasted}, which Discord would not make a link`);
+    await page.waitForTimeout(2800);
+    assert(await page.locator('.toast.show').count() === 1, 'the toast stays long enough to act on');
+    await page.waitForTimeout(1200);
+    assert(await page.locator('.toast.show').count() === 0, 'then goes');
+    await page.click('[data-act="copy-ext"]');
+    await page.waitForTimeout(300);
+    assert((await page.evaluate(() => getSelection().toString())) === 'chrome://extensions', 'the address is selected');
+    assert((await page.locator('[data-role="toast"]').textContent()) === 'Selected~ press Ctrl+C, then paste it in the address bar', 'address toast');
+    await context.close();
+  }
+  // A phone that shares says Share; the link wraps instead of hiding its end.
+  {
+    const { page, context } = await open({ ua: UA.android, viewport: PHONE, init: () => { navigator.share = async () => {}; } });
+    assert((await page.locator('.share [data-act="share"]').textContent()).trim() === 'Share link', 'share card on a phone');
+    const url = await page.locator('[data-role="share-url"]').evaluate((el) => ({ full: el.scrollWidth <= el.clientWidth + 1, text: el.textContent }));
+    assert(url.full, `link cut off at 390px: ${url.text}`);
+    await context.close();
+  }
+});
+
+// A step's number sits beside its heading's first line, however tall the step is.
+const badgeOffsets = (page) => page.$$eval('.step', (steps) => steps.filter((s) => s.offsetParent).map((s) => {
+  const cs = getComputedStyle(s); const b = getComputedStyle(s, '::before');
+  const h = parseFloat(b.height); const mt = parseFloat(b.marginTop) || 0; const mb = parseFloat(b.marginBottom) || 0;
+  const row = parseFloat(cs.gridTemplateRows);
+  const align = ['auto', 'normal'].includes(b.alignSelf) ? cs.alignItems : b.alignSelf;
+  const free = row - h - mt - mb;
+  const badge = s.getBoundingClientRect().top + parseFloat(cs.paddingTop) + mt + (align === 'center' ? free / 2 : align === 'end' ? free : 0) + h / 2;
+  const h3 = s.querySelector('h3'); const line = parseFloat(getComputedStyle(h3).lineHeight);
+  return { step: s.dataset.step, off: Math.round(badge - (h3.getBoundingClientRect().top + line / 2)) };
+}));
+
+await test('S34 finish: aligned step numbers, 320px reflow, even desktop cards, the hero picture and icon', async () => {
+  for (const [w, h] of [[1440, 900], [390, 844]]) {
+    const { page, context } = await open({ ua: UA.chrome, viewport: { width: w, height: h } });
+    const off = await badgeOffsets(page);
+    assert(off.length === 4 && off.every((o) => Math.abs(o.off) <= 4), `${w}px: number vs heading ${JSON.stringify(off)}`);
+    await context.close();
+  }
+  {
+    const { page, context } = await open({ ua: UA.chrome, viewport: { width: 320, height: 640 } });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(overflow <= 0, `320px (400% zoom) scrolls sideways by ${overflow}px`);
+    await context.close();
+  }
+  const { page, context } = await open({ ua: UA.chrome });
+  const cards = await page.$$eval('.two .panel', (els) => els.map((p) => { const b = [...p.querySelectorAll('.btn')].pop(); return { last: p.lastElementChild === b, bottom: b && Math.round(b.getBoundingClientRect().bottom), text: b && b.textContent.trim(), href: b && b.getAttribute('href') }; }));
+  assert(cards.length === 2 && cards.every((c) => c.last) && cards[0].bottom === cards[1].bottom, `desktop cards end on buttons at one line: ${JSON.stringify(cards)}`);
+  assert(cards[0].text === 'Open Discord in the browser' && cards[0].href === 'https://discord.com/app', 'the easiest path has its button');
+  assert(await page.locator('.two .panel a[href="downloads/DopasPurifier.plugin.js"]').count() === 1, 'the plugin is offered once');
+  const img = page.locator('.shot img');
+  assert((await img.getAttribute('fetchpriority')) === 'high' && (await img.getAttribute('decoding')) === 'async', 'hero picture loads first');
+  assert((await img.evaluate((el) => getComputedStyle(el).boxShadow)) === 'none', 'the picture brings its own shadows, no ring or box around it');
+  const icon = await page.locator('link[rel="icon"]').first().evaluate((l) => ({ href: l.getAttribute('href'), sizes: l.getAttribute('sizes') }));
+  assert(icon.href === 'img/favicon-32.png' && icon.sizes === '32x32', `first icon ${JSON.stringify(icon)}`);
+  assert(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--t4') === ''), 'no unused --t4');
+  await page.locator('summary').first().focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  assert((await page.locator('summary').first().evaluate((el) => el.matches(':focus-visible') && getComputedStyle(el).borderTopLeftRadius)) === '16px', 'FAQ focus ring follows the card');
+  await context.close();
+});
+
+await test('S35 the browser picker is one radio group: one tab stop, arrows choose', async () => {
+  const { page, context } = await open({ ua: UA.chrome });
+  assert(await page.getByRole('radiogroup', { name: /Your browser/ }).count() === 1, 'a labelled radiogroup');
+  const chips = await page.$$eval('.chip', (els) => els.map((c) => ({ role: c.getAttribute('role'), checked: c.getAttribute('aria-checked'), tab: c.tabIndex })));
+  assert(chips.every((c) => c.role === 'radio') && chips.filter((c) => c.checked === 'true').length === 1, JSON.stringify(chips));
+  assert(same(chips.map((c) => c.tab), [0, -1, -1, -1, -1, -1]), `one tab stop, on the chosen chip: ${chips.map((c) => c.tab)}`);
+  const at = () => page.evaluate(() => ({ focus: document.activeElement.dataset.browser, checked: document.querySelector('.chip[aria-checked="true"]').dataset.browser, store: document.querySelector('[data-role="manager-link"]').href }));
+  await page.locator('.chip[data-browser="chrome"]').focus();
+  await page.keyboard.press('ArrowRight');
+  let s = await at();
+  assert(s.focus === 'edge' && s.checked === 'edge' && /microsoftedge/.test(s.store), `ArrowRight: ${JSON.stringify(s)}`);
+  await page.keyboard.press('End');
+  s = await at();
+  assert(s.focus === 'safari' && s.checked === 'safari', `End: ${JSON.stringify(s)}`);
+  await page.keyboard.press('ArrowRight');
+  assert((await at()).checked === 'chrome', 'wraps around');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Home');
+  s = await at();
+  assert(s.focus === 'chrome' && s.checked === 'chrome', `Home: ${JSON.stringify(s)}`);
+  assert(same(await page.$$eval('.chip', (els) => els.map((c) => c.tabIndex)), [0, -1, -1, -1, -1, -1]), 'the tab stop follows the choice');
+  await context.close();
+});
+
+await test('S36 forced colours: the chosen browser, buttons and cards keep their edges', async () => {
+  const { page, context } = await open({ ua: UA.chrome, forcedColors: 'active' });
+  const look = await page.evaluate(() => {
+    const css = (sel, prop) => getComputedStyle(document.querySelector(sel))[prop];
+    return {
+      chosen: css('.chip[aria-checked="true"]', 'backgroundColor'), other: css('.chip[aria-checked="false"]', 'backgroundColor'),
+      btn: css('.btn', 'borderTopStyle'), copy: css('.copy', 'borderTopStyle'), step: css('.step', 'borderTopStyle'),
+      faq: css('details', 'borderTopStyle'), toggle: css('.toggle-mock i', 'borderTopStyle'),
+    };
+  });
+  assert(look.chosen !== look.other, `chosen chip looks like the rest: ${look.chosen}`);
+  for (const k of ['btn', 'copy', 'step', 'faq', 'toggle']) assert(look[k] === 'solid', `${k} has no edge: ${look[k]}`);
+  await context.close();
+});
+
+await test('S37 reduced motion keeps the toast\'s fade and drops only movement', async () => {
+  const { page, context } = await open({ ua: UA.chrome, reducedMotion: 'reduce', init: () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) } });
+  } });
+  const props = await page.evaluate(() => ({ toast: getComputedStyle(document.querySelector('.toast')).transitionProperty, btn: getComputedStyle(document.querySelector('.btn')).transitionProperty }));
+  assert(!/transform/.test(props.toast) && !/transform/.test(props.btn), `movement still transitions: ${JSON.stringify(props)}`);
+  const samples = await page.evaluate(() => new Promise((resolve) => {
+    const t = document.querySelector('.toast'); const seen = [];
+    document.querySelector('.hero [data-act="share"]').click();
+    const t0 = performance.now();
+    (function frame() { seen.push(Number(getComputedStyle(t).opacity)); if (performance.now() - t0 < 400) requestAnimationFrame(frame); else resolve(seen); })();
+  }));
+  assert(samples.some((o) => o > 0.05 && o < 0.95), `the toast pops in with no fade: ${samples.map((o) => o.toFixed(2)).join(' ')}`);
+  await context.close();
+});
+
+await test('S38 one name per idea on the page and in the README: open a chat, Purify, hold', async () => {
+  const { page, context } = await open({ ua: UA.chrome });
+  const step4 = (await page.locator('[data-step="open"]').textContent()).replace(/\s+/g, ' ');
+  assert(/Already open\? Reload it once\. Look top-right for the panel, open any chat, then Purify, and hold the red button\. That's it~/.test(step4), step4);
+  const faq = async (q) => (await page.locator('details', { hasText: q }).textContent()).replace(/\s+/g, ' ');
+  assert(/That's why it counts first and asks you to hold the button\./.test(await faq('Can I undo a purge?')), 'undo answer');
+  assert(/Bardo and Dopa are shielded from the start~ ♡ Shields cover one-to-one DMs, not group chats\./.test(await faq("Can it delete other people's messages?")), 'shield answer');
+  assert(/press Install \(or Reinstall\) in step 3\./.test(await faq('How do updates work?')), 'updates answer names the button as it reads');
+  assert((await page.locator('.feature p').nth(3).textContent()) === "Tap the shield on anyone's DM and it's never purged, until you say so.", 'shield card');
+  const text = await page.locator('body').textContent();
+  for (const word of [/forever/i, /Current channel/i, /\bBatch\b/, /\bProtect/i]) assert(!word.test(text), `page still says ${word}`);
+  await context.close();
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert(readme.includes('- **Open a chat, press Purify** — it counts your messages first, so the confirm says exactly how many.'), 'README leads with the flow');
+  assert(readme.includes('- **Many chats**:') && !/\*\*Batch\*\*/.test(readme), 'README says Many chats');
+  assert(readme.includes('Bardo and Dopa are shielded from the start ♡'), 'README names both shields');
+});
+
+// tools/marketing.py lifts the panel and the log window out of the shots (test/shots.mjs records both
+// boxes). Run it on a stand-in shot set and check the hero picture matches the page's img size.
+await test('S39 the hero picture and icon come out of tools/marketing.py the size the page says', async () => {
+  const py = spawnSync('python3', ['-c', 'import PIL'], { encoding: 'utf8' });
+  if (py.status !== 0) return skip('needs python3 with Pillow, as tools/marketing.py does');
+  const fonts = spawnSync('fc-match', ['-f', '%{file}', 'Inter:bold'], { encoding: 'utf8' });
+  if (fonts.status !== 0 || !/Inter/.test(fonts.stdout)) return skip('needs the Inter font, as tools/marketing.py does');
+  const shots = path.join(OUT, 'marketing-shots');
+  const out = path.join(OUT, 'marketing-img');
+  fs.rmSync(shots, { recursive: true, force: true });
+  fs.rmSync(out, { recursive: true, force: true });
+  fs.mkdirSync(shots, { recursive: true });
+  fs.mkdirSync(out, { recursive: true });
+  const timing = /const TIMING = \{([^}]*)\}/.exec(fs.readFileSync(path.join(root, 'src/main.js'), 'utf8'))[1];
+  const pace = Object.fromEntries(['deleteDelayMs', 'searchDelayMs'].map((k) => [k, Number(new RegExp(`\\b${k}:\\s*(\\d+)`).exec(timing)[1])]));
+  fs.writeFileSync(path.join(shots, 'pace.json'), JSON.stringify(pace));
+  // A grey "Discord" with a panel and a log window drawn on it, at 2x, the way shots.mjs leaves them.
+  const ctx = await browser.newContext({ deviceScaleFactor: 2, viewport: { width: 860, height: 640 } });
+  const p = await ctx.newPage();
+  await p.setContent('<body style="margin:0;background:#313338"><div style="position:absolute;left:40px;top:40px;width:380px;height:440px;border-radius:16px;background:#0c0609"></div><div style="position:absolute;left:434px;top:40px;width:360px;height:536px;border-radius:20px;background:#1b0f16"></div></body>');
+  const names = ['00-welcome', '02-scanned', '04-confirm-holding', '05-purging-logs', '08-done-settled', '11-batch-scanned', '15-immune'];
+  for (const n of names) await p.screenshot({ path: path.join(shots, `${n}.png`) });
+  await ctx.close();
+  const boxes = Object.fromEntries(names.map((n) => [n, [868, 80, 1588, 1152]]));
+  fs.writeFileSync(path.join(shots, 'panels.json'), JSON.stringify({ dpr: 2, boxes, terms: { '05-purging-logs': [80, 80, 840, 960] }, radius: { panel: 20, term: 16 } }));
+  const shipped = fs.statSync(path.join(root, 'docs/img/purging.webp')).mtimeMs;
+  const run = spawnSync('python3', [path.join(root, 'tools/marketing.py'), shots, out], { encoding: 'utf8' });
+  assert(run.status === 0, `marketing.py: ${run.stderr || run.stdout}`);
+  assert(fs.statSync(path.join(root, 'docs/img/purging.webp')).mtimeMs === shipped, 'docs/img left alone when given another folder');
+  const { page, context } = await open({ ua: UA.chrome });
+  const want = await page.locator('.shot img').evaluate((img) => ({ w: Number(img.getAttribute('width')), h: Number(img.getAttribute('height')) }));
+  const look = (file) => page.evaluate(async (src) => {
+    const img = new Image(); img.src = src; await img.decode();
+    const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+    return { w: img.naturalWidth, h: img.naturalHeight, corner: g.getImageData(0, 0, 1, 1).data[3] };
+  }, `data:image/${path.extname(file).slice(1)};base64,${fs.readFileSync(file).toString('base64')}`);
+  const hero = await look(path.join(out, 'purging.webp'));
+  const icon = await look(path.join(out, 'favicon-32.png'));
+  await context.close();
+  assert(hero.w === want.w && hero.h === want.h, `purging.webp is ${hero.w}×${hero.h}, the page says ${want.w}×${want.h}`);
+  assert(hero.corner === 0, 'the picture floats on the page: transparent around the windows');
+  assert(icon.w === 32 && icon.h === 32 && icon.corner === 0, `favicon ${JSON.stringify(icon)}: 32 px with rounded, see-through corners`);
+  const stamp = `dopa-pace: deleteDelayMs=${pace.deleteDelayMs} searchDelayMs=${pace.searchDelayMs}`;
+  assert(fs.readFileSync(path.join(out, 'purging.webp')).includes(stamp), 'purging.webp carries the pace stamp');
+  assert(fs.readFileSync(path.join(out, 'og.png')).includes(stamp), 'og.png carries the pace stamp');
+  fs.rmSync(shots, { recursive: true, force: true });
+});
+
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));
-const failed = results.filter((r) => !r.ok);
-console.log(`\n${results.length - failed.length}/${results.length} passed`);
+const ran = results.filter((r) => !r.skipped);
+const failed = ran.filter((r) => !r.ok);
+const skipped = results.length - ran.length;
+console.log(`\n${ran.length - failed.length}/${ran.length} passed${skipped ? ` · ${skipped} skipped` : ''}`);
 await browser.close();
 process.exit(failed.length ? 1 : 0);

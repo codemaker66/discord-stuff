@@ -1,3 +1,20 @@
+  // ── Voice: every line the panel says ────────────────────
+  // Words. "Chat" is the umbrella word; "channel" means a server channel only; DM and group DM as
+  // Discord says them. "Shield" is the verb and "immune" the state. Purify is the button and the
+  // action, "purged" the result; "delete" appears plainly only in the confirm lead.
+  // Lines stay short, kind and plain, above all when something goes wrong: errors reach the panel
+  // through plainError(), and Discord's own wording stays in the log. A name from Discord set in a
+  // line of ours sits in bidi isolates (U+2068 … U+2069), so a right-to-left name can't reorder the
+  // words and numbers around it. The yandere wit lives in the ring, the sticker, the dagger
+  // flourish, the mascot and the terminal. Each line has one job: the mood is personality, the
+  // readout the verdict, the footer confirms or names the next step, and nothing is said more
+  // than twice.
+  // Emoji. ♡ care and success, ✨ ready and done, 🦇 the rate-limit breather, 🩸 the confirm dialog
+  // only. At most one per line, always as flair (aria-hidden), never on a warn or error line.
+  // Status tones. info (rose dot), calm (what the person chose and Discord's normal pacing: paused,
+  // stopping, stopped, waits), success ✓, warn ! (needs the person), error ✕, immune ♛.
+  // Colour. Rose means act, crimson means irreversible or failed, gold means Bardo.
+
   // ── Lifecycle ───────────────────────────────────────────
   // Everything that touches the page outside our shadow root is registered here,
   // so the BetterDiscord plugin's stop() leaves Discord exactly as it found it.
@@ -45,6 +62,9 @@
     for (const child of children.flat()) if (child) el.append(child);
     return el;
   }
+
+  // A line's emoji is decoration: it shows, but screen readers hear only the words.
+  const flaired = (text, flair) => (flair ? [text, h('span', { class: 'flair', 'aria-hidden': 'true', text: ` ${flair}` })] : [text]);
 
   const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
@@ -205,7 +225,11 @@
     route: null,          // { guildId, channelId } from the URL
     target: null,         // described route target
     targetError: null,
+    targetPlain: null,    // plainError() of the chat lookup that failed
     scanning: false,
+    counting: null,       // { channelId, abort }: Purify counting an uncounted chat before it asks
+    runAs: null,          // the account the last run was confirmed as
+    scanError: null,      // { channelId, line, short, code, blocking }: the last failed count of that chat
     runTargets: [],
     batchRows: new Map(), // key → row
     selected: new Set(),  // row keys
@@ -243,6 +267,7 @@
     megaphone: 'M3 11l18-5v12L3 14zM11.6 16.8a3 3 0 1 1-5.8-1.6',
     share: 'M12 15V3M7.5 7.5L12 3l4.5 4.5M5 12v7h14v-7',
     forum: 'M4 5h16v10H9l-5 4z',
+    group: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
     dagger: 'M12 1.8l2.1 3.4v9.4H9.9V5.2zM6.8 14.6h10.4v2.2H6.8zM10.9 16.8h2.2v3.4h-2.2zM12 20a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z',
   };
 
@@ -282,9 +307,10 @@
         svg('g', { class: 'g-glow' },
           svg('circle', { ...ARC, class: 'g-ok', stroke: ROSE_STROKE }),
           svg('circle', { ...ARC, class: 'g-head' })),
-        svg('circle', { ...ARC, class: 'g-fail' }),
-        svg('g', { class: 'g-comet' },
-          svg('circle', { ...ARC, stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': `${(G.len * 0.16).toFixed(2)} ${G.c.toFixed(2)}` }))),
+        // The sweep for work with no end in sight yet. It runs along the arc only, so it never
+        // crosses the "3 of 31+" under the ring, and sits under the failure notches.
+        svg('path', { class: 'g-sweep', d: 'M40.6 159.4 A84 84 0 1 1 159.4 159.4', pathLength: '100', fill: 'none', stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': '16 116' }),
+        svg('circle', { ...ARC, class: 'g-fail' })),
       h('div', { class: 'blood' }),
       h('div', { class: 'sticker', 'data-role': 'sticker', hidden: true }),
       h('div', { class: 'gauge-pct', 'data-role': 'pct' }));
@@ -295,15 +321,15 @@
       h('div', { class: 'burst', 'data-role': 'burst', 'aria-hidden': 'true' }),
       buildGauge(),
       h('div', { class: 'hero-core' },
+        h('div', { class: 'hero-face', 'data-role': 'hero-face', 'aria-hidden': 'true' }),
         h('div', { class: 'count', 'data-role': 'count', text: '0' }),
-        h('div', { class: 'count-label', text: 'messages purged' }),
+        h('div', { class: 'count-label', 'data-role': 'count-label', text: 'messages purged' }),
         h('div', { class: 'hero-sub', 'data-role': 'hero-sub' })),
       h('div', { class: 'readout', 'data-role': 'readout' },
         h('div', { class: 'readout-line', 'data-role': 'readout-line', text: '' }),
         h('div', { class: 'stats', 'data-role': 'stats', hidden: true },
-          h('div', { class: 'stat stat-fail', 'data-role': 'stat-fail' }, h('i', { class: 'stat-dot' }), h('b', { text: '0' }), h('span', { text: ' failed' })),
-          h('div', { class: 'stat', 'data-role': 'stat-eta' }, h('b', { text: '—' })),
-          h('div', { class: 'stat', 'data-role': 'stat-rate' }, h('b', { text: '—' })))));
+          h('div', { class: 'stat stat-eta', 'data-role': 'stat-eta' }, h('b', { text: '—' })),
+          h('div', { class: 'stat stat-fail', 'data-role': 'stat-fail' }, h('i', { class: 'stat-dot' }), h('b', { text: '0' }), h('span', { text: ' failed' })))));
   }
 
   // Notches in processing order for the current (or last) run.
@@ -324,12 +350,16 @@
     el.setAttribute('stroke-dashoffset', (-ranges[0][0]).toFixed(2));
   }
 
-  function drawRing({ total, done: doneRaw, fails, spinning }) {
-    const key = `${total}|${doneRaw}|${fails.length}|${spinning}`;
+  // The sweep moves only while work is really happening: a run with no known end (spinning), a
+  // count (scanning) or the run's last look once every counted message is handled (verifying).
+  function drawRing({ total, done: doneRaw, fails, spinning = false, scanning = false, verifying: checking = false }) {
+    const key = `${total}|${doneRaw}|${fails.length}|${spinning}|${scanning}|${checking}`;
     if (key === ring.drawn) return;
     ring.drawn = key;
     const dial = $('.dial');
     dial.classList.toggle('is-spinning', spinning);
+    dial.classList.toggle('is-scanning', scanning);
+    dial.classList.toggle('is-verifying', checking);
     const beads = total > 0 && total <= G.maxBeads;
     dial.classList.toggle('is-beaded', beads);
     const step = total ? G.len / total : G.len;
@@ -387,38 +417,38 @@
   }
 
   function buildCurrentView() {
-    return h('div', { class: 'view', 'data-view': 'current', role: 'tabpanel', 'aria-label': 'Current channel' },
+    return h('div', { class: 'view', 'data-view': 'current', role: 'tabpanel', 'aria-label': 'This chat' },
       h('div', { class: 'target', 'data-role': 'target' },
         h('div', { class: 'target-ico', 'data-role': 'target-ico', 'aria-hidden': 'true', text: '#' }),
         h('div', { class: 'target-text' },
-          h('div', { class: 'eyebrow', 'data-role': 'eyebrow' }, h('i', { class: 'live-dot', 'aria-hidden': 'true' }), h('span', { 'data-role': 'eyebrow-text', text: 'Current channel' })),
+          h('div', { class: 'eyebrow', 'data-role': 'eyebrow' }, h('i', { class: 'live-dot', 'aria-hidden': 'true' }), h('span', { 'data-role': 'eyebrow-text', text: 'This chat' })),
           h('div', { class: 'target-line' },
-            h('span', { class: 'target-name', 'data-role': 'target-name', text: 'detecting…' }),
+            h('span', { class: 'target-name', 'data-role': 'target-name', text: 'finding this chat…' }),
             h('span', { class: 'target-context', 'data-role': 'target-context' })),
-          h('div', { class: 'target-viewing', 'data-role': 'target-viewing', hidden: true }),
-          h('div', { class: 'target-note', 'data-role': 'target-note', hidden: true })),
+          h('div', { class: 'target-viewing', 'data-role': 'target-viewing', hidden: true })),
         h('span', { class: 'target-tools', 'data-role': 'target-tools' })));
   }
 
   function buildBatchView() {
     const dmHead = h('div', { class: 'section-head' },
-      h('div', { class: 'section-title', text: 'Direct messages' }),
+      h('div', { class: 'section-title', id: 'dp-dm-title', text: 'Direct messages' }),
       h('div', { class: 'section-tools' },
         h('button', { class: 'chip', 'data-act': 'dm-all', text: 'All' }),
         h('button', { class: 'chip', 'data-act': 'dm-none', text: 'None' }),
         h('button', { class: 'chip icon-only', 'data-act': 'dm-refresh', 'aria-label': 'Refresh DMs', title: 'Refresh' }, icon('refresh'))));
     const serverHead = h('div', { class: 'section-head' },
-      h('div', { class: 'section-title', text: 'Servers' }),
+      h('div', { class: 'section-title', id: 'dp-server-title', text: 'Servers' }),
       h('div', { class: 'section-tools' },
         h('button', { class: 'chip icon-only', 'data-act': 'server-refresh', 'aria-label': 'Refresh servers', title: 'Refresh' }, icon('refresh'))));
-    return h('div', { class: 'view', 'data-view': 'batch', role: 'tabpanel', 'aria-label': 'Batch' },
-      h('div', { class: 'hint' }, h('span', { class: 'hint-ico', text: '💡' }),
-        h('span', { text: 'Tip: Scan people first to see message counts and get accurate progress tracking!' })),
-      h('input', { class: 'filter', type: 'search', 'data-role': 'filter', placeholder: 'Filter people & channels…', 'aria-label': 'Filter', spellcheck: 'false', autocomplete: 'off' }),
+    // Each list is one Tab stop; the arrows walk it (see List keyboard).
+    return h('div', { class: 'view', 'data-view': 'batch', role: 'tabpanel', 'aria-label': 'Many chats' },
+      h('input', { class: 'filter', type: 'search', 'data-role': 'filter', placeholder: 'Find a chat or server…', 'aria-label': 'Find a chat or server', spellcheck: 'false', autocomplete: 'off' }),
       dmHead,
-      h('div', { class: 'list', 'data-role': 'dm-list' }, h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' })),
+      h('div', { class: 'list', 'data-role': 'dm-list', role: 'group', 'aria-labelledby': 'dp-dm-title', onkeydown: onListKey, onfocusin: onListFocus },
+        h('div', { class: 'list-empty', text: 'Finding your DMs…' })),
       serverHead,
-      h('div', { class: 'list', 'data-role': 'server-list' }, h('div', { class: 'list-empty', text: 'Loading servers… 🏰' })));
+      h('div', { class: 'list', 'data-role': 'server-list', role: 'group', 'aria-labelledby': 'dp-server-title', onkeydown: onListKey, onfocusin: onListFocus },
+        h('div', { class: 'list-empty', text: 'Finding your servers…' })));
   }
 
   function buildPanel() {
@@ -433,25 +463,25 @@
           h('button', { class: 'icon-btn', 'data-act': 'share', 'aria-label': 'Share with a friend', title: 'Share with a friend ♡' }, icon('share')),
           h('button', { class: 'icon-btn', 'data-act': 'mute', 'aria-label': 'Mute sound', title: 'Sound' }, icon('sound')),
           h('button', { class: 'icon-btn', 'data-act': 'minimize', 'aria-label': 'Minimise', title: 'Minimise' }, icon('minimize')))),
-      h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Mode' },
+      h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'What to purify' },
         h('span', { class: 'tab-pill', 'aria-hidden': 'true' }),
-        h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'Current channel' }),
-        h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Batch' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }))),
-      h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-labelledby': 'dp-welcome-title' },
+        h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'This chat' }),
+        h('button', { class: 'tab', role: 'tab', 'data-tab': 'batch' }, h('span', { text: 'Many chats' }), h('span', { class: 'tab-badge', 'data-role': 'tab-badge', hidden: true }),
+          h('span', { class: 'sr', 'data-role': 'tab-badge-sr', hidden: true, text: ' selected' }))),
+      h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dp-welcome-title' },
         h('div', { class: 'welcome-card' },
           h('div', { class: 'welcome-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
           h('div', { class: 'welcome-title', id: 'dp-welcome-title', text: 'Hi princess~ ♡' }),
-          h('div', { class: 'welcome-lead', text: 'Three steps and your messages are gone:' }),
+          h('div', { class: 'welcome-lead', text: 'Two steps and your messages are gone:' }),
           h('ol', { class: 'welcome-steps' },
             h('li', {}, h('span', {}, h('b', { text: 'Open a chat' }), ' — any DM, group or server channel')),
-            h('li', {}, h('span', {}, h('b', { text: 'Scan' }), ' to count your messages there')),
             h('li', {}, h('span', {}, h('b', { text: 'Purify' }), ', then hold the red button till it fills'))),
           h('div', { class: 'welcome-note' },
             icon('shield'),
             h('span', { text: 'Only your own messages, nothing leaves Discord, and anyone you shield is immune.' })),
           h('div', { class: 'welcome-actions' },
             h('button', { class: 'btn btn-purge', 'data-act': 'welcome-ok', text: 'Got it ♡' }),
-            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Purge many chats' })))),
+            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Purify many chats' })))),
       h('div', { class: 'body', 'data-role': 'body' },
         buildHero(),
         buildCurrentView(),
@@ -459,7 +489,9 @@
       h('footer', { class: 'foot' },
         h('div', { class: 'actions', 'data-role': 'idle-actions' },
           h('button', { class: 'btn btn-quiet', 'data-act': 'scan' }, icon('scan'), h('span', { 'data-role': 'scan-label', text: 'Scan' })),
-          h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true }))),
+          h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true }),
+            h('span', { class: 'sr', 'data-role': 'purify-unit' })),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'go-batch', hidden: true }, icon('sparkle'), h('span', { text: 'Purify many chats' }))),
         h('div', { class: 'actions', 'data-role': 'run-actions', hidden: true },
           h('button', { class: 'btn btn-quiet', 'data-act': 'pause' }, icon('pause'), h('span', { text: 'Pause' })),
           h('button', { class: 'btn btn-purge', 'data-act': 'resume', hidden: true }, icon('play'), h('span', { text: 'Resume' })),
@@ -467,14 +499,15 @@
         h('div', { class: 'status-row' },
           h('div', { class: 'status', 'data-role': 'status', role: 'status', 'aria-live': 'polite', dataset: { tone: 'info' } },
             h('span', { class: 'status-dot', 'aria-hidden': 'true' }),
-            h('span', { 'data-role': 'status-text', text: 'Ready to purify~ ✨' })),
-          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' })))));
+            h('span', { 'data-role': 'status-text' }, flaired('Ready to purify~', '✨'))),
+          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' }))),
+        h('div', { class: 'sr', 'data-role': 'milestone', 'aria-live': 'polite' })));
   }
 
   function buildTerminal() {
     return h('section', { class: 'term', 'aria-label': 'Purifier log', hidden: true },
       h('header', { class: 'term-head', 'data-role': 'term-drag' },
-        h('span', { class: 'term-title', text: 'DOPA-OS ♡ PURIFIER MAINFRAME' }),
+        h('span', { class: 'term-title' }, 'DOPA-OS ♡ ', h('span', { class: 'term-title-mid', text: 'PURIFIER ' }), 'MAINFRAME'),
         h('button', { class: 'icon-btn', 'data-act': 'copy-log', 'aria-label': 'Copy log', title: 'Copy log' }, icon('copy')),
         h('button', { class: 'icon-btn', 'data-act': 'close-log', 'aria-label': 'Close log', title: 'Close' }, icon('close'))),
       h('div', { class: 'term-screen' }, h('div', { class: 'term-body', 'data-role': 'term-body', role: 'log', 'aria-live': 'off' })),
@@ -485,21 +518,23 @@
         h('span', { class: 'tf-eta' }, 'ETA ', h('b', { 'data-role': 'tf-eta', text: '--:--' }))));
   }
 
+  // The dialog is described by its one sentence (what, where, as whom, and that it's final), never by
+  // a long list; the parts a dialog doesn't have are skipped.
   function buildModal() {
     return h('div', { class: 'modal-layer', hidden: true },
-      h('div', { class: 'modal', role: 'alertdialog', tabindex: '-1', 'aria-modal': 'true', 'aria-labelledby': 'dp-modal-title', 'aria-describedby': 'dp-modal-text' },
+      h('div', { class: 'modal', role: 'alertdialog', tabindex: '-1', 'aria-modal': 'true', 'aria-labelledby': 'dp-modal-title', 'aria-describedby': 'dp-modal-lead dp-modal-pill dp-modal-who dp-modal-warn' },
         h('div', { class: 'modal-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
         h('div', { class: 'modal-title', id: 'dp-modal-title', 'data-role': 'modal-title' }),
-        h('div', { class: 'modal-text', id: 'dp-modal-text', 'data-role': 'modal-text' }),
+        h('div', { class: 'modal-text', 'data-role': 'modal-text' }),
         h('div', { class: 'modal-buttons' },
           h('button', { class: 'btn btn-quiet', 'data-act': 'cancel', text: 'Nevermind~' }),
           h('button', { class: 'btn btn-purge btn-hold', 'data-act': 'confirm', 'aria-describedby': 'dp-modal-hint' },
             h('span', { class: 'hold-fill', 'aria-hidden': 'true' }),
-            h('span', { class: 'hold-label', 'data-role': 'confirm-label', text: 'Hold to purify ✨' }))),
+            h('span', { class: 'hold-label', 'data-role': 'confirm-label' }))),
         h('div', { class: 'modal-hint', id: 'dp-modal-hint' },
-          h('span', {}, 'Hold with mouse or ', h('kbd', { text: 'Space' })), ' · ',
-          h('span', {}, 'screen reader? press twice'), ' · ',
-          h('span', {}, h('kbd', { text: 'Esc' }), ' keeps you safe'))));
+          h('div', {}, h('span', {}, 'Hold with mouse or ', h('kbd', { text: 'Space' })), ' · ', h('span', {}, h('kbd', { text: 'Esc' }), ' keeps you safe')),
+          h('div', {}, 'Screen reader, voice or switch? Just press twice')),
+        h('div', { class: 'sr', 'data-role': 'modal-live', 'aria-live': 'assertive', 'aria-atomic': 'true' })));
   }
 
   function mount() {
@@ -529,12 +564,20 @@
 
   // ── Status, meter, gauge ────────────────────────────────
 
-  // Per-kill updates are quiet (aria-live off) so screen readers aren't read every deletion.
-  function setStatus(text, tone = 'info', { quiet = false } = {}) {
+  // Per-kill updates are quiet (aria-live off) so screen readers aren't read every deletion. The
+  // flair is the line's one emoji from the palette above. A new line ends any wait's countdown.
+  let waitTick = 0;
+  function setStatus(text, tone = 'info', { quiet = false, flair = '' } = {}) {
+    clearInterval(waitTick);
+    waitTick = 0;
+    paintStatus(text, tone, { quiet, flair });
+  }
+
+  function paintStatus(text, tone, { quiet, flair }) {
     const el = $('[data-role="status"]');
     el.setAttribute('aria-live', quiet ? 'off' : 'polite');
-    $('[data-role="status-text"]').textContent = text;
-    el.title = text; // the line truncates; hover shows all of it
+    $('[data-role="status-text"]').replaceChildren(...flaired(text, flair));
+    el.title = text; // past two lines the line is clamped; hover shows all of it
     el.dataset.tone = tone;
   }
 
@@ -542,9 +585,13 @@
     $('[data-role="mood"]').textContent = text;
   }
 
-  let shownCount = 0;
+  let shownCount = null;
+  let shownEta = null;  // the run's ETA as shown (see renderHero)
+  let beaten = null;    // the verdict whose finish has played its beats
   let lastSnapshot = null;
-  let lastEnd = null; // { key, text, tone } summary of the last finished run, shown until the context changes
+  // { key, text, flair?, tone, sticker?, error?, stopped?, problems?, shielded?, failed? }: the last
+  // finished run, shown until the context changes.
+  let lastEnd = null;
 
   function renderProgress(p) {
     lastSnapshot = p;
@@ -553,66 +600,156 @@
 
   const contextKey = () => (state.tab === 'current' ? `c:${state.target ? state.target.channelId : ''}` : 'batch');
 
-  // Idle preview for whatever the tab points at: the scan verdict and its notch count.
-  function previewFor() {
+  // A shield the person set, rather than one of the names that are immune from the start.
+  const shieldedByYou = (t) => !!t.partner && protection.ids.has(t.partner.id);
+
+  // What the ring says before a run, for each hero state: an icon or the number of your messages
+  // found (a count, never a promise of how many will go), the label under it, the readout line and
+  // the strip's sub-line (This chat's strip repeats the readout). total sizes the notches.
+  function previewFor(name) {
     if (state.tab === 'current') {
       const t = state.target;
-      if (!t) return { total: 0, text: state.targetError === 'none' ? 'open a DM or channel to purify it~' : '', tone: 'quiet' };
-      if (t.protected) return { total: 0, text: 'Protected forever~ nothing here can be purged 🛡', tone: 'immune' };
-      const n = counts.get(t.channelId);
-      if (n === undefined) return { total: 0, text: 'scan first for an honest ETA~', tone: 'quiet' };
-      if (isPartialCount(t.channelId)) {
-        return n
-          ? { total: n, text: `${plural(n, 'message')} found so far · Discord is still indexing older ones`, tone: 'ready' }
-          : { total: 0, text: 'Discord is still indexing this chat~ purify anyway, or scan again later 📚', tone: 'quiet' };
+      const n = t ? counts.get(t.channelId) : undefined;
+      switch (name) {
+        case 'none': return { icon: 'sparkle', label: 'open a chat', line: ['Any DM, group or server channel works~'], tone: 'quiet' };
+        case 'lookup': return { label: 'finding this chat…', line: [], tone: 'quiet' };
+        case 'lookup-error': return { label: "can't read this chat", labelTone: 'error', line: [state.targetPlain.line], tone: 'error' };
+        case 'immune': return {
+          icon: 'shield', label: 'immune', labelTone: 'immune', tone: 'immune',
+          line: shieldedByYou(t) ? [...flaired('Immune', '♡'), ' tap the shield to undo'] : [...flaired('Immune from the start', '♡'), ' nothing here gets purged'],
+        };
+        case 'counting': return { icon: 'scan', label: 'counting…', line: [], tone: 'quiet' };
+        case 'blocked': return { label: 'no access', labelTone: 'error', line: [state.scanError.line], tone: 'error' };
+        case 'scan-error': return { icon: 'scan', label: 'not counted yet', line: [state.scanError.line], tone: 'error' };
+        case 'unscanned': return { icon: 'scan', label: 'not counted yet', line: flaired('Purify counts them first', '♡'), tone: 'quiet' };
+        case 'indexing': return { icon: 'scan', label: 'still indexing', line: ['Discord is still sorting this chat~ purify anyway, or scan again soon'], tone: 'quiet' };
+        case 'partial': return { count: n, total: n, label: 'found so far', line: ['Discord is still indexing older ones~'], tone: 'ready' };
+        case 'clear': return { count: 0, label: 'messages found', line: flaired('All clear~ nothing of yours here', '✨'), tone: 'clear' };
+        default: return { count: n, total: n, label: 'ready for purge', labelTone: 'ready', line: [`about ${formatDuration(estimateSeconds(n))} to purge~`], tone: 'ready' };
       }
-      return n
-        ? { total: n, text: `${plural(n, 'message')} found · ~${formatDuration(estimateSeconds(n))} to purge`, tone: 'ready' }
-        : { total: 0, text: 'All clear! No messages to purge here~ ✨', tone: 'clear' };
     }
+    if (name === 'none') return { label: 'nothing picked yet', line: [], sub: ['tick any DMs or channels below~'], tone: 'quiet' };
     const rows = selectedRows();
-    if (!rows.length) return { total: 0, text: 'pick some chats to purify~', tone: 'quiet' };
     const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
     const total = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
-    // A friend without a DM can't be scanned (that would open one); the run counts them.
-    const later = rows.filter((r) => r.needsDM && r.status !== 'error').length;
-    const unscanned = rows.length - scanned.length - later - rows.filter((r) => r.status === 'error').length;
-    const text = [
-      `${plural(rows.length, 'chat')} selected`, scanned.length ? `${total.toLocaleString()} found` : '',
-      unscanned ? `${unscanned} need a scan` : '', later ? `${plural(later, 'friend')} at purge` : '',
-    ].filter(Boolean).join(' · ');
-    return { total, text, tone: total ? 'ready' : 'quiet' };
+    // A closed DM (a friend with no DM open) can't be counted without opening one; the run counts it.
+    const closed = rows.filter((r) => r.needsDM && r.status !== 'error').length;
+    const toScan = rows.length - scanned.length - closed - rows.filter((r) => r.status === 'error').length;
+    const chats = plural(rows.length, 'chat');
+    // The numeral already says how many were found, so the line says what is still unknown.
+    const parts = [[chats, toScan ? `${toScan.toLocaleString()} to scan` : '', closed ? plural(closed, 'closed DM') : ''].filter(Boolean).join(' · ')];
+    const shared = { line: [], tone: total ? 'ready' : 'quiet' };
+    if (name === 'unscanned') return { ...shared, label: 'not counted yet', sub: parts };
+    if (name === 'partial') return { ...shared, count: total, total, label: 'found so far', sub: parts };
+    if (name === 'clear') return { ...shared, count: 0, label: 'messages found', sub: closed ? parts : flaired(`${chats} · all clear`, '✨') };
+    return {
+      ...shared, count: total, total, label: 'ready for purge', labelTone: 'ready',
+      sub: closed ? parts : [`${chats} · about ${formatDuration(estimateSeconds(total))} to purge~`],
+    };
   }
+
+  // The moment the ring describes, for styles and tests (hero[data-state]). This chat before a run:
+  // none (no chat open), lookup, lookup-error, immune, counting, blocked (no access), scan-error,
+  // unscanned, indexing (still indexing, none found yet), partial, clear or ready. Many chats: none
+  // (nothing picked), unscanned, partial, clear or ready. Then run, and done.
+  function heroState(mode) {
+    if (mode !== 'preview') return mode;
+    if (state.tab === 'current') {
+      const t = state.target;
+      if (!t) return state.targetError === 'none' ? 'none' : 'lookup';
+      if (describeFailed()) return 'lookup-error';
+      if (t.protected) return 'immune';
+      if ((state.counting && state.counting.channelId === t.channelId) || (state.scanning && state.scanKind === 'current')) return 'counting';
+      if (state.scanError && state.scanError.channelId === t.channelId) return state.scanError.blocking ? 'blocked' : 'scan-error';
+      const n = counts.get(t.channelId);
+      if (n === undefined) return 'unscanned';
+      if (isPartialCount(t.channelId)) return n ? 'partial' : 'indexing';
+      return n ? 'ready' : 'clear';
+    }
+    const rows = selectedRows();
+    if (!rows.length) return 'none';
+    const counted = rows.filter((r) => r.channelId && counts.has(r.channelId));
+    if (!counted.length) return 'unscanned';
+    // A friend with no DM yet, or a chat that failed, can't be counted before the purge.
+    const countable = rows.filter((r) => !r.needsDM && r.status !== 'error').length;
+    if (counted.length < countable || counted.some((r) => isPartialCount(r.channelId))) return 'partial';
+    return counted.some((r) => counts.get(r.channelId)) ? 'ready' : 'clear';
+  }
+
+  // What sits in the middle of the ring (hero[data-face]): the count, an icon, or only the label.
+  function heroFace(name) {
+    if (name === 'run' || name === 'done') return 'count';
+    if (state.tab === 'batch') return name === 'none' || name === 'unscanned' ? 'label' : 'count';
+    return ['ready', 'partial', 'clear'].includes(name) ? 'count' : ['lookup', 'lookup-error', 'blocked'].includes(name) ? 'label' : 'icon';
+  }
+
+  // How a run that ended on an error sounds, by cause (lastEnd.error is plainError's code when the
+  // end handler knows it, else true).
+  const ERROR_MOODS = { captcha: 'Discord wants a captcha~', network: 'lost Discord for a sec~', switched: 'stopped to be safe~' };
 
   function renderHero() {
     const p = lastSnapshot || progressSnapshot();
     const mode = run.active ? 'run' : (lastEnd && lastEnd.key === contextKey() ? 'done' : 'preview');
     const processedNow = p.deleted + p.failed + (p.gone || 0);
-    const idle = mode === 'preview' ? previewFor() : null;
     const layer = $('[data-role="layer"]');
     layer.dataset.hero = mode;
+    const hero = $('.hero');
+    const name = heroState(mode);
+    hero.dataset.state = name;
+    hero.dataset.face = heroFace(name);
+    const idle = mode === 'preview' ? previewFor(name) : null;
+    // The finish plays its beats once, when its verdict first shows.
+    const finishing = mode === 'done' && lastEnd !== beaten;
+    if (finishing) beaten = lastEnd;
     // While some chats are still uncounted the total is a floor, not a promise.
     const known = p.total > 0 && !p.partial;
     const ringTotal = mode === 'done' && p.partial ? processedNow : p.total;
+    const checking = mode === 'run' && verifying();
 
-    const shown = mode === 'preview' ? 0 : p.deleted;
+    const face = $('[data-role="hero-face"]');
+    const faceIcon = (idle && idle.icon) || '';
+    if (face.dataset.icon !== faceIcon) {
+      face.dataset.icon = faceIcon;
+      face.replaceChildren(...(faceIcon ? [icon(faceIcon)] : []));
+    }
+
+    // Before a run the number is how many of yours were found; in and after one, how many went.
+    const shown = idle ? idle.count || 0 : p.deleted;
     const countEl = $('[data-role="count"]');
     if (shown !== shownCount) {
       shownCount = shown;
       countEl.textContent = shown.toLocaleString();
     }
+    countEl.classList.toggle('is-found', !!idle && shown > 0);
     countEl.classList.toggle('is-zero', shown === 0);
+    // Sized from the larger of the count and the run's total, so it is set once and never jumps mid-run.
+    countEl.dataset.len = String(Math.max(shown, idle ? 0 : p.total).toLocaleString().length);
 
-    if (mode === 'preview') drawRing({ total: idle.total, done: 0, fails: [], spinning: false });
-    else drawRing({ total: mode === 'run' && !known ? 0 : ringTotal, done: ring.done, fails: ring.fails, spinning: mode === 'run' && !known });
+    const label = $('[data-role="count-label"]');
+    const labelText = idle ? idle.label : 'messages purged';
+    const labelTone = (idle && idle.labelTone) || '';
+    if (label.textContent !== labelText || (label.dataset.tone || '') !== labelTone) {
+      // The dagger flourish shows only in strips.
+      label.replaceChildren(...(labelTone === 'ready' ? [icon('dagger', 'ico-dagger ico-dagger-l'), labelText, icon('dagger', 'ico-dagger ico-dagger-r')] : [labelText]));
+      label.dataset.tone = labelTone;
+    }
 
-    // "18 of 40" counts processed messages (purged + failed), matching the ring.
+    if (idle) drawRing({ total: idle.total || 0, done: 0, fails: [], scanning: name === 'counting' });
+    else drawRing({ total: mode === 'run' && !known ? 0 : ringTotal, done: ring.done, fails: ring.fails, spinning: mode === 'run' && !known, verifying: checking });
+
+    // "18 of 40" counts processed messages (purged + failed), matching the ring. A finished run with
+    // failures says how many really went, and only a clean finish turns rose.
     const pct = $('[data-role="pct"]');
-    pct.textContent = mode === 'preview'
-      ? (idle.total ? `0 of ${idle.total.toLocaleString()}` : '')
-      : known ? `${Math.min(processedNow, p.total).toLocaleString()} of ${p.total.toLocaleString()}`
-        : p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}+` : '';
-    pct.classList.toggle('is-full', mode === 'done' && processedNow >= ringTotal && ringTotal > 0);
+    const went = mode === 'done' && p.failed && !lastEnd.stopped && !lastEnd.error ? p.deleted : processedNow;
+    pct.textContent = idle ? ''
+      : known ? `${Math.min(went, p.total).toLocaleString()} of ${p.total.toLocaleString()}`
+        : p.total ? `${went.toLocaleString()} of ${p.total.toLocaleString()}+` : '';
+    pct.classList.toggle('is-full', mode === 'done' && !p.failed && processedNow >= ringTotal && ringTotal > 0);
+
+    // The ETA counts down freely and goes up only for a real slow-down (over 15 %), never a jitter.
+    if (mode !== 'run' || p.etaSeconds == null) shownEta = null;
+    else if (shownEta == null || p.etaSeconds < shownEta || p.etaSeconds > shownEta * 1.15) shownEta = p.etaSeconds;
+    const left = checking ? 'double-checking…' : shownEta != null ? `~${formatDuration(shownEta)} left` : '';
 
     const readout = $('[data-role="readout"]');
     const line = $('[data-role="readout-line"]');
@@ -620,27 +757,38 @@
     stats.hidden = mode !== 'run';
     line.hidden = mode === 'run';
     if (mode === 'run') {
+      $('[data-role="stat-eta"] b').textContent = left || 'counting as we go~';
       const fail = $('[data-role="stat-fail"]');
       fail.querySelector('b').textContent = p.failed.toLocaleString();
       fail.classList.toggle('has-fails', p.failed > 0);
-      $('[data-role="stat-eta"] b').textContent = known && processedNow >= p.total ? 'double-checking…'
-        : p.etaSeconds != null ? `~${formatDuration(p.etaSeconds)} left` : (known ? 'estimating…' : '—');
-      $('[data-role="stat-rate"] b').textContent = p.rate ? `${p.rate.toFixed(1)}/s` : '—';
       readout.dataset.tone = run.paused ? 'paused' : 'live';
     } else if (mode === 'done') {
-      line.textContent = lastEnd.text;
+      line.replaceChildren(...flaired(lastEnd.text, lastEnd.flair));
       readout.dataset.tone = lastEnd.tone;
     } else {
-      line.textContent = idle.text;
+      line.replaceChildren(...idle.line);
       readout.dataset.tone = idle.tone;
     }
+    // The verdict settles in just after the count's last pop.
+    if (finishing) {
+      line.animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }],
+        { duration: reducedMotion() ? 200 : 220, delay: 60, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+    }
 
+    // A strip has one line under the count: the run's facts, the verdict, or what the ring would say.
     const sub = $('[data-role="hero-sub"]');
-    if (mode === 'run') sub.textContent = p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}${known ? '' : '+'}${p.failed ? ` · ${p.failed} failed` : ''}` : 'counting as we go~';
-    else sub.textContent = mode === 'done' ? lastEnd.text : idle.text;
-    sub.title = sub.textContent; // the Batch strip truncates; hover shows all of it
+    if (mode === 'run') {
+      sub.replaceChildren(...(p.total ? [
+        `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}${known ? '' : '+'}`,
+        left && ` · ${left}`,
+        p.failed > 0 && h('span', { class: 'sub-fail', text: ` · ${p.failed.toLocaleString()} failed` }),
+      ].filter(Boolean) : ['counting as we go~']));
+    } else if (mode === 'done') sub.replaceChildren(...flaired(lastEnd.text, lastEnd.flair));
+    else sub.replaceChildren(...(idle.sub || idle.line.map((x) => (x instanceof Node ? x.cloneNode(true) : x))));
+    sub.title = sub.textContent; // the strip truncates; hover shows all of it
 
     // Minimised through the finish line: the orb keeps the full ring and count until reopened.
+    const orb = $('.orb');
     const orbC = 2 * Math.PI * 22;
     const orbFrac = run.active ? (known ? Math.min(1, processedNow / p.total) : 0)
       : state.orbDone ? (state.orbDone.clean ? 1 : (p.total ? Math.min(1, processedNow / p.total) : 0)) : 0;
@@ -649,26 +797,36 @@
     const badge = $('[data-role="orb-badge"]');
     badge.textContent = p.deleted.toLocaleString();
     badge.hidden = !(run.active || state.orbDone) || !p.deleted;
-    $('.orb').dataset.live = run.active ? 'true' : state.orbDone ? (state.orbDone.clean ? 'done' : 'trouble') : 'false';
+    orb.dataset.live = run.active ? 'true' : state.orbDone ? (state.orbDone.clean ? 'done' : 'trouble') : 'false';
+    // Hovering the orb says how it's going, so a minimised purge needs no reopening to check on.
+    const progress = p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}` : `${p.deleted.toLocaleString()} so far`;
+    const orbSays = run.active ? (run.paused ? 'Paused~ click to open' : `Purging~ ${progress}${p.total && !known ? '+' : ''}`)
+      : state.orbDone ? (state.orbDone.clean ? `All clean~ ${p.deleted.toLocaleString()} purged` : 'Done~ something needs a look') : "Open Dopa's Purifier";
+    orb.title = orbSays;
+    orb.setAttribute('aria-label', run.active && !run.paused ? `Open Dopa's Purifier — purging, ${progress}` : orbSays);
 
     let mood = 'awaiting orders, princess~';
     if (mode === 'run') mood = run.stopping ? 'wrapping up~' : run.paused ? 'paused~ take your time' : "purging… don't look~";
-    else if (mode === 'done') mood = lastEnd.error ? 'oh no… something broke' : lastEnd.stopped ? 'stopped~ the rest can wait' : lastEnd.problems ? 'some chats fought back~' : lastEnd.shielded ? 'a shield went up~ ♡' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
-    else if (state.tab === 'batch') mood = "who's first, princess~?";
-    else if (state.target && state.target.protected) mood = 'this one is protected~';
+    else if (mode === 'done') {
+      mood = lastEnd.error ? ERROR_MOODS[lastEnd.error] || 'oh no… something broke' : lastEnd.stopped ? 'stopped~ no rush ♡' : lastEnd.problems ? 'some chats fought back~'
+        : lastEnd.shielded ? 'a shield went up~ ♡' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
+    } else if (state.tab === 'batch') mood = "who's first, princess~?";
+    else if (state.target && state.target.protected) mood = "this one's immune~";
     setMood(mood);
 
+    // The sticker is stamped beside the ring on the next beat; with reduced motion it fades in.
     const sticker = $('[data-role="sticker"]');
     const stickerText = mode === 'done' && state.tab === 'current' && lastEnd.sticker ? lastEnd.sticker : '';
     if (stickerText !== sticker.textContent || sticker.hidden === !!stickerText) {
       sticker.textContent = stickerText;
       sticker.hidden = !stickerText;
-      if (stickerText && !reducedMotion()) {
+      if (stickerText && finishing && reducedMotion()) sticker.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, delay: 200, fill: 'backwards' });
+      else if (stickerText && finishing) {
         sticker.animate([
-          { transform: 'rotate(-28deg) scale(0)', opacity: 0 },
-          { transform: 'rotate(14deg) scale(1.15)', opacity: 1, offset: 0.6 },
+          { transform: 'rotate(4deg) scale(1.6)', opacity: 0 },
+          { transform: 'rotate(10deg) scale(.94)', opacity: 1, offset: 0.6 },
           { transform: 'rotate(9deg) scale(1)' },
-        ], { duration: 520, delay: 380, easing: 'cubic-bezier(.2,.9,.3,1.2)', fill: 'backwards' });
+        ], { duration: 340, delay: 380, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
       }
     }
 
@@ -676,7 +834,7 @@
     $('[data-role="tf-failed"]').textContent = String(p.failed).padStart(3, '0');
     $('.tf-fail').classList.toggle('has-fails', p.failed > 0);
     $('[data-role="tf-rate"]').textContent = run.active && p.rate ? `${p.rate.toFixed(1)}/s` : '';
-    $('[data-role="tf-eta"]').textContent = run.active && p.etaSeconds != null ? clockTime(p.etaSeconds) : '--:--';
+    $('[data-role="tf-eta"]').textContent = run.active && shownEta != null ? clockTime(shownEta) : '--:--';
   }
 
   function clockTime(seconds) {
@@ -685,10 +843,17 @@
     return t >= 3600 ? `${Math.floor(t / 3600)}:${two(Math.floor((t % 3600) / 60))}:${two(t % 60)}` : `${two(Math.floor(t / 60))}:${two(t % 60)}`;
   }
 
-  // ── Current channel ─────────────────────────────────────
+  // ── This chat ───────────────────────────────────────────
 
-  // A real lookup failure (not just "no chat open"): Scan becomes Retry.
+  // A real lookup failure (not just "no chat open"): Scan becomes Try again.
   const describeFailed = () => !!state.targetError && state.targetError !== 'none';
+
+  // The last count of this chat failed: Scan becomes Try again, one request the person asks for.
+  const scanFailed = (t) => !!t && !!state.scanError && state.scanError.channelId === t.channelId;
+
+  // Discord won't let you read or delete in this chat: a purge could only fail, so Purify waits
+  // until a Try again reads it.
+  const blockedHere = (t) => (scanFailed(t) && state.scanError.blocking) || (!!t && describeFailed() && !!state.targetPlain && state.targetPlain.blocking);
 
   let describeSeq = 0;
   async function refreshRoute({ keepScan = false, keepStatus = false } = {}) {
@@ -697,26 +862,32 @@
     if (state.route && route && state.route.channelId === key && !describeFailed()) return;
     if (!state.route && !route && state.target === null && state.targetError === 'none') return;
     if (state.scanning && state.scanKind === 'current' && !keepScan) cancelScan();
+    cancelCount();
     // The footer may still be talking about the last chat (or the failed lookup); an account
     // switch re-reads the same chat and keeps its notice.
     const freshStatus = !keepStatus && (!state.target || state.target.channelId !== key || describeFailed());
     state.route = route;
     state.target = null;
     state.targetError = route ? null : 'none';
+    state.targetPlain = null;
+    state.scanError = null;
     const seq = ++describeSeq;
     renderCurrent();
-    if (!route) { if (!run.active) setStatus('Open a chat to purify~', 'info'); return; }
+    if (!route) { if (!run.active) setStatus('Ready when you are~', 'info', { flair: '✨' }); return; }
     try {
       const target = await describeRoute(route);
       if (seq !== describeSeq) return; // user moved on while we were asking
       state.target = target;
       if (target.protected && !run.active && !keepStatus) setStatus(`${target.name} is immune~`, 'immune');
-      else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~ ✨', 'info');
+      else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~', 'info', { flair: '✨' });
     } catch (err) {
       if (seq !== describeSeq) return;
-      state.target = { channelId: route.channelId, guildId: route.guildId, kind: route.guildId ? 'guild' : 'dm', name: route.channelId, context: '', protected: false };
+      // Unread, it has no name we can trust; the id would only confuse.
+      state.target = { channelId: route.channelId, guildId: route.guildId, kind: route.guildId ? 'guild' : 'dm', name: 'this chat', context: '', protected: false };
       state.targetError = err.message;
-      setStatus(`Couldn't read this channel: ${err.message} 😿`, 'error');
+      state.targetPlain = plainError(err);
+      addLog(`couldn't read this chat · ${err.message}`, 'error');
+      setStatus(state.targetPlain.short, 'error');
     }
     renderCurrent();
   }
@@ -725,33 +896,32 @@
     const runningHere = run.active && state.runMode === 'current';
     const shown = runningHere ? state.runTargets[0] : state.target;
     const card = $('[data-role="target"]');
-    card.dataset.state = runningHere ? (run.paused ? 'paused' : 'live') : (shown && shown.protected ? 'immune' : 'idle');
+    const blocked = !runningHere && blockedHere(shown);
+    const checking = lastLook();
+    card.dataset.state = runningHere ? (run.paused ? 'paused' : 'live') : shown && shown.protected ? 'immune' : blocked ? 'blocked' : 'idle';
+    card.toggleAttribute('data-checking', checking);
     const purified = !runningHere && lastEnd && lastEnd.key === contextKey() && !lastEnd.stopped && !lastEnd.error && !lastEnd.problems && !lastEnd.shielded
       && !(shown && shown.protected) && state.tab === 'current';
     if (purified) card.dataset.state = 'purified';
     const eyebrow = $('[data-role="eyebrow-text"]');
-    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purging']));
+    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purging']));
     else if (shown && shown.protected) eyebrow.replaceChildren(icon('crown', 'ico-crown'), 'Immune');
     else if (purified) eyebrow.replaceChildren(icon('check'), lastEnd.failed ? 'Mostly purified' : 'Purified');
-    else eyebrow.replaceChildren(shown && !shown.guildId ? (shown.kind === 'group' ? 'Group DM' : 'Direct message') : 'Current channel');
+    else if (blocked) eyebrow.replaceChildren('No access');
+    else eyebrow.replaceChildren(!shown ? 'This chat' : shown.guildId ? 'Server channel' : shown.kind === 'group' ? 'Group DM' : 'Direct message');
     if (purified && lastEnd.failed) card.dataset.state = 'partial';
-    const ico = $('[data-role="target-ico"]');
-    if (shown && shown.protected) ico.replaceChildren(icon('shield'));
-    else ico.textContent = !shown ? '✦' : shown.guildId ? '#' : (shown.kind === 'group' ? '👥' : '@');
+    $('[data-role="target-ico"]').replaceChildren(shown && shown.protected ? icon('shield') : !shown ? '✦' : shown.guildId ? '#' : shown.kind === 'group' ? icon('group') : '@');
     // DMs can be shielded right from the card.
     const tools = $('[data-role="target-tools"]');
     const partner = !runningHere && shown && shown.partner;
     tools.replaceChildren(...(partner ? [shieldButton(partner, { protectedNow: !!shown.protected, label: shown.name })] : []));
-    const note = $('[data-role="target-note"]');
-    note.hidden = !purified;
-    note.textContent = purified ? (lastEnd.failed ? `${lastEnd.failed.toLocaleString()} wouldn't budge — see logs` : 'Nothing left of you here~') : '';
     const name = $('[data-role="target-name"]');
     const context = $('[data-role="target-context"]');
     if (shown) {
       name.textContent = shown.guildId ? shown.name.replace(/^#/, '') : shown.name;
       context.textContent = shown.guildId ? shown.context : '';
     } else {
-      name.textContent = state.targetError === 'none' ? 'No channel open' : 'detecting…';
+      name.textContent = state.targetError === 'none' ? 'No chat open' : 'finding this chat…';
       context.textContent = '';
     }
     context.hidden = !context.textContent;
@@ -778,7 +948,9 @@
     $('[data-act="resume"]').hidden = !run.paused;
     $('[data-act="pause"]').disabled = run.stopping;
     $('[data-act="resume"]').disabled = run.stopping;
-    $('[data-act="stop"]').disabled = run.stopping;
+    // Stopping, Stop keeps focus (and says it's busy) until the run ends and hands it on.
+    const stop = $('[data-act="stop"]');
+    if (run.stopping) stop.setAttribute('aria-disabled', 'true'); else stop.removeAttribute('aria-disabled');
     const scan = $('[data-act="scan"]');
     const purify = $('[data-act="purify"]');
     const scanLabel = $('[data-role="scan-label"]');
@@ -788,27 +960,41 @@
     const badge = $('[data-role="tab-badge"]');
     badge.textContent = String(rows.length);
     badge.hidden = !rows.length;
+    // No chat open: the one useful thing left is the other tab.
+    const noChat = state.tab === 'current' && state.targetError === 'none';
+    if (noChat) idle.dataset.mode = 'none'; else delete idle.dataset.mode;
+    scan.hidden = noChat;
+    purify.hidden = noChat;
+    $('[data-act="go-batch"]').hidden = !noChat;
+    // Purify counting before it asks: busy, still focused, and deaf to more presses until it lands.
+    const counting = !!state.counting;
+    if (counting) purify.setAttribute('aria-busy', 'true'); else purify.removeAttribute('aria-busy');
+    let clean = false;
     if (state.tab === 'current') {
       const t = state.target;
       const usable = !!t && !t.protected && !state.targetError;
       const n = usable ? counts.get(t.channelId) : undefined;
-      const retry = describeFailed();
-      scan.disabled = !usable && !state.scanning && !retry;
-      purify.disabled = !usable || state.scanning || (n === 0 && !isPartialCount(t.channelId));
-      scanLabel.textContent = state.scanning ? 'Cancel scan' : retry ? 'Retry' : (n !== undefined ? 'Scan again' : 'Scan');
-      purifyLabel.textContent = 'Purify';
+      const retry = describeFailed() || scanFailed(t);
+      clean = usable && n === 0 && !isPartialCount(t.channelId);
+      scan.disabled = (!usable && !state.scanning && !describeFailed()) || counting;
+      purify.disabled = !usable || state.scanning || clean || blockedHere(t);
+      scanLabel.textContent = state.scanning ? 'Cancel scan' : retry ? 'Try again' : (n !== undefined ? 'Scan again' : 'Scan');
+      purifyLabel.textContent = counting ? 'Counting…' : 'Purify';
       purifyCount.textContent = n ? n.toLocaleString() : '';
-      purifyCount.hidden = !n;
+      purifyCount.hidden = !n || counting;
     } else {
       scan.disabled = !rows.length && !state.scanning;
-      // Nothing left to purge in any selected chat (all scanned at 0): nothing to offer.
-      const allClear = rows.length && rows.every((r) => r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId));
-      purify.disabled = !rows.length || state.scanning || allClear;
+      // Nothing left to do in any selected chat (all counted at 0, or closed to us): nothing to offer.
+      const empty = (r) => !!r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId);
+      clean = rows.length > 0 && rows.every(empty);
+      purify.disabled = !rows.length || state.scanning || rows.every((r) => empty(r) || accessError(r));
       scanLabel.textContent = state.scanning ? 'Cancel scan' : 'Scan selected';
       purifyLabel.textContent = 'Purify selected';
       purifyCount.textContent = String(rows.length);
       purifyCount.hidden = !rows.length;
     }
+    // Resting, not broken: there is simply nothing of yours left to purge.
+    purify.classList.toggle('is-clean', clean);
     const busy = run.active || state.scanning;
     for (const row of state.batchRows.values()) if (row.box) row.box.disabled = busy;
     for (const act of ['dm-all', 'dm-none', 'dm-refresh', 'server-refresh']) $(`[data-act="${act}"]`).disabled = busy;
@@ -817,7 +1003,30 @@
       b.title = run.active ? 'Stop the purge to change shields' : shieldTitle(b.classList.contains('is-on'));
     }
     if (root.querySelector('.guild')) syncGuildChecks();
+    speakCounts(rows);
     $('[data-role="layer"]').dataset.run = run.active ? (run.paused ? 'paused' : 'running') : 'idle';
+    applyFocus();
+  }
+
+  // Focus follows the work. An action that hides or swaps the focused control names where focus
+  // goes next, and it lands as soon as that control can take it. It only moves when focus was
+  // already in the panel and the person hasn't gone elsewhere since, so Discord's message box is
+  // never touched; :focus-visible keeps the ring off for mouse users.
+  let focusNext = null;
+
+  function handFocus(sel) {
+    if (root.activeElement) focusNext = sel;
+  }
+
+  function applyFocus() {
+    if (!focusNext) return;
+    const active = document.activeElement;
+    if (active && active !== host && active !== document.body) { focusNext = null; return; }
+    const el = $(focusNext);
+    if (el && !el.hidden && !el.disabled && !el.closest('[inert]') && el.getClientRects().length) {
+      el.focus({ preventScroll: true });
+      focusNext = null;
+    }
   }
 
   // Scans are cancellable: the Scan button becomes Cancel, and leaving the channel cancels too.
@@ -825,6 +1034,8 @@
     state.scanning = true;
     state.scanKind = kind;
     state.scanAbort = new AbortController();
+    state.scanError = null;
+    renderHero(); // the ring says it's counting
     renderActions();
     return state.scanAbort.signal;
   }
@@ -833,6 +1044,7 @@
     state.scanning = false;
     state.scanAbort = null;
     state.scanKind = null;
+    renderHero(); // the sweep stops with the count
     if (state.tab === 'batch') setTimeout(loadPendingLists, 0);
   }
 
@@ -840,31 +1052,45 @@
     if (state.scanAbort) state.scanAbort.abort();
   }
 
+  // Purify on an uncounted chat counts it first, with one search. Leaving the chat, the tab, the
+  // panel or the account abandons that count at once; the count itself clears state.counting
+  // when it settles only while the entry is still its own.
+  function cancelCount() {
+    if (!state.counting) return;
+    state.counting.abort.abort();
+    state.counting = null;
+  }
+
   async function scanCurrent() {
     const t = state.target;
     if (!t || t.protected || run.active || state.scanning) return;
     const signal = beginScan('current');
-    setStatus('Counting your messages… 🔍', 'info');
+    setStatus('Counting your messages…', 'info');
     try {
       const n = await countMine(t, {
         signal,
-        onWait: (w) => setStatus(waitText(w), 'warn'),
-        onProgress: ({ count, scanned }) => setStatus(`Scanning… found ${count.toLocaleString()} so far (${scanned.toLocaleString()} checked) 🔍`, 'info', { quiet: true }),
+        onWait: showWait,
+        onProgress: ({ count, scanned }) => setStatus(`Checked ${scanned.toLocaleString()} · ${count.toLocaleString()} of yours so far`, 'info', { quiet: true }),
       });
       counts.set(t.channelId, n);
       if (lastEnd && lastEnd.key === `c:${t.channelId}`) lastEnd = null;
-      const here = state.target && state.target.channelId === t.channelId;
-      const where = here ? '' : ` in ${t.name}`;
+      // Measured against the address, so a chat being re-read (an account switch) still counts as here.
+      const here = !state.route || state.route.channelId === t.channelId;
+      const where = here ? '' : ` in \u2068${t.name}\u2069`;
       // Shielded while we were counting: there's nothing to offer here any more.
-      if (here && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
+      if (here && state.target && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
       else if (isPartialCount(t.channelId)) {
-        setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones 📚` : `Discord is still indexing${where}~ older messages may be hiding 📚`, 'warn');
-      } else {
-        setStatus(n ? `${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge ✨` : `All clear${where}! No messages to purge~ ✨`, 'success');
-      }
+        setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones` : `Discord is still indexing${where}~ older messages may be hiding`, 'warn');
+      } else if (n) {
+        setStatus(`${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge`, 'success', { flair: '✨' });
+      } else setStatus(`All clear~ nothing of yours ${here ? 'here' : `in \u2068${t.name}\u2069`}`, 'success', { flair: '✨' });
     } catch (err) {
       if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
-      else setStatus(`Scan error: ${err.message} 😿`, 'error');
+      else {
+        state.scanError = { channelId: t.channelId, ...plainError(err) };
+        addLog(`scan failed · ${err.message}`, 'error');
+        setStatus(state.scanError.short, 'error');
+      }
     } finally {
       endScan();
       renderCurrent();
@@ -880,6 +1106,8 @@
     let grand = 0;
     let deferred = 0;
     let indexing = 0;
+    let missed = 0;
+    let missedWhy = '';
     let searched = false;
     try {
       for (let i = 0; i < rows.length; i++) {
@@ -888,27 +1116,36 @@
         // Search is Discord's tightest limit: pace it like a purge does instead of leaning on 429s.
         if (searched) await sleep(TIMING.searchDelayMs, signal);
         searched = true;
-        setStatus(`Scanning ${i + 1}/${rows.length}: ${row.label}… 🔍`, 'info', { quiet: true });
+        setStatus(`Counting ${i + 1} of ${rows.length} · \u2068${row.display}\u2069`, 'info', { quiet: true });
         setRowState(row, 'scanning');
         try {
-          const n = await countMine(row, { signal, onWait: (w) => setStatus(waitText(w), 'warn') });
+          const n = await countMine(row, { signal, onWait: showWait });
           counts.set(row.channelId, n);
           grand += n;
           if (isPartialCount(row.channelId)) indexing++;
           setRowState(row, isPartialCount(row.channelId) ? 'indexing' : n ? 'ready' : 'clean');
         } catch (err) {
           if (err instanceof Stopped || err.status === 401 || err.code === 'captcha') throw err;
+          addLog(`scan failed · ${row.label} · ${err.message}`, 'error');
           setRowState(row, 'error', err.message);
+          if (!missed++) missedWhy = err.message;
         }
+        renderHero(); // the strip keeps up as each chat lands
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
-      if (!searched) setStatus(`${plural(deferred, 'friend')} counted at purge~ ♡`, 'info');
-      else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')} 📚`, 'warn');
-      else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(rows.length - deferred, 'chat')} ✨`, 'success');
+      const counted = rows.length - deferred - missed;
+      if (!searched) setStatus("Closed DMs are counted as they're purged~", 'info', { flair: '♡' });
+      else if (missed) setStatus(`Scan done~ ${plural(grand, 'message')} · ${plural(missed, 'chat')} skipped · ${shortReason(missedWhy)}${missed > 1 ? ' and more' : ''}`, 'warn');
+      else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')}`, 'warn');
+      else if (!grand) setStatus(`All clear~ nothing of yours in ${counted === 1 ? 'that chat' : `those ${counted} chats`}`, 'success', { flair: '✨' });
+      else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(counted, 'chat')}`, 'success', { flair: '✨' });
     } catch (err) {
       for (const row of rows) if (row.status === 'scanning') setRowState(row, 'idle');
       if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
-      else setStatus(`Scan error: ${err.message} 😿`, 'error');
+      else {
+        addLog(`scan failed · ${err.message}`, 'error');
+        setStatus(plainError(err).short, 'error');
+      }
     } finally {
       endScan();
       renderHero();
@@ -916,11 +1153,66 @@
     }
   }
 
-  function waitText(w) {
-    if (w.kind === 'rate') return `Rate limited~ waiting ${Math.ceil(w.seconds)}s… 🦇 zzz…`;
-    if (w.kind === 'index') return 'Discord is still indexing this chat~ hang on… 📚';
-    if (w.kind === 'network') return `Connection hiccup~ retrying in ${Math.ceil(w.seconds)}s… 📡`;
-    return `Discord is having a moment~ retrying in ${Math.ceil(w.seconds)}s…`;
+  // Short enough for the one line a running footer has, seconds included.
+  function waitText(w, s = Math.max(1, Math.ceil(w.seconds))) {
+    if (w.kind === 'rate') return `Taking a breather~ back in ${s}s`;
+    if (w.kind === 'index') return 'Discord is still indexing~ hang on…';
+    if (w.kind === 'network') return `Connection hiccup~ retrying in ${s}s`;
+    return `Discord is busy~ retrying in ${s}s`;
+  }
+
+  // Discord's own pacing, said calmly. The seconds count down here, once a second and with no
+  // requests; the next line the panel says ends the countdown. Screen readers hear the first line.
+  function showWait(w) {
+    const end = Date.now() + w.seconds * 1000;
+    const left = () => Math.max(1, Math.ceil((end - Date.now()) / 1000));
+    const flair = w.kind === 'rate' ? '🦇' : '';
+    setStatus(waitText(w, left()), 'calm', { flair });
+    if (w.kind === 'index' || left() <= 1) return;
+    waitTick = setInterval(() => {
+      const s = left();
+      paintStatus(waitText(w, s), 'calm', { quiet: true, flair });
+      if (s <= 1) { clearInterval(waitTick); waitTick = 0; }
+    }, 1000);
+  }
+
+  // Discord's errors in the panel's own words: `line` for the readout, `short` for the footer, and
+  // `code` naming the cause (logged-out, no-access, no-permission, indexing, network, captcha,
+  // switched, server, gone or other). `blocking` means a purge there could only fail. Discord's own
+  // wording is untrusted: it stays in the log, and reaches the panel only as text.
+  const PLAIN_ERRORS = [
+    // First: the engine reports an account switch with status 0, like a dropped connection.
+    { code: 'switched', when: (e) => /switched Discord accounts/.test(e.message), line: 'You switched Discord accounts~ stopped to be safe', short: 'Switched accounts' },
+    { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha/i.test(e.message), line: 'Discord wants a captcha~ solve it in Discord, then press Purify to finish', short: 'Discord wants a captcha' },
+    { code: 'logged-out', when: (e) => e.status === 401 || /login token/.test(e.message), line: "You're logged out of Discord~ log in, then press Try again", short: 'Logged out of Discord' },
+    { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so there's nothing here to purge", short: 'No access here', blocking: true },
+    { code: 'no-permission', when: (e) => e.code === 50013 || /Missing Permissions/.test(e.message), line: "Discord won't let you delete here", short: 'No permission here', blocking: true },
+    { code: 'indexing', when: (e) => e.status === 202 || /indexing/.test(e.message), line: 'Discord is still sorting this chat~ try again in a minute', short: 'Discord is still indexing' },
+    { code: 'network', when: (e) => e.status === 0 || /Network unreachable/.test(e.message), line: "Can't reach Discord~ check your internet, then press Try again", short: "Can't reach Discord" },
+    { code: 'server', when: (e) => e.status >= 500, line: 'Discord is having a moment~ try again in a minute', short: 'Discord is having a moment' },
+    { code: 'gone', when: (e) => e.code === 10003, line: "This chat doesn't exist any more", short: 'Chat is gone' },
+  ];
+
+  // Takes an Error, any { status, code, message }, a run's end ({ error, errorStatus, errorCode })
+  // or a bare reason string such as a row's 'Missing Access (code 50001)'.
+  function plainError(errLike) {
+    const e = typeof errLike === 'string' ? { message: errLike } : errLike || {};
+    const message = String(e.message ?? e.error ?? '');
+    const tagged = /\(code (\d+)\)$/.exec(message);
+    const err = { status: e.status ?? e.errorStatus ?? null, code: e.code ?? e.errorCode ?? (tagged ? Number(tagged[1]) : null), message };
+    const known = PLAIN_ERRORS.find((p) => p.when(err));
+    if (known) return { line: known.line, short: known.short, code: known.code, blocking: !!known.blocking };
+    const said = message.replace(/\s*\(code \d+\)$/, '').replace(/^HTTP (\d+)$/, 'error $1') || 'something went wrong';
+    return { line: `Discord said: ${said}`, short: said.length > 28 ? `${said.slice(0, 27)}…` : said, code: 'other', blocking: false };
+  }
+
+  // A list that couldn't load, in a list's words: its retry is its own ↻ (not This chat's Try
+  // again), and logging in fills the lists by itself. Discord's wording goes to the log.
+  function listError(what, err) {
+    addLog(`couldn't load ${what} · ${err.message}`, 'error');
+    const p = plainError(err);
+    if (p.code === 'logged-out') return "You're logged out of Discord~ log in and your chats show up here";
+    return `${p.code === 'other' ? p.line : p.short} · press ↻ to try again`;
   }
 
   // The dialog names the account doing the deleting, so a switched account can't surprise anyone.
@@ -928,56 +1220,133 @@
     try { syncAccount(); const me = await whoAmI(); return me.username; } catch { return null; }
   }
 
-  async function askPurgeCurrent() {
-    if (!state.target || state.target.protected || run.active || modal) return;
+  const COUNT_CAP_MS = 1200;
+  const gaveUpCounting = new WeakSet(); // chats (this visit's target) whose count Discord held up
+
+  // Purify on an uncounted chat counts it first with the one search the purge would start with, so
+  // the dialog can say how many. It asks who you are first, as the dialog always has; only Discord's
+  // search is on the clock. Past COUNT_CAP_MS, or at any wait Discord asks for, the count is given up
+  // for this visit and the dialog says "all your messages". Returns { go, who }: whether the dialog
+  // should follow, and as whom.
+  async function countFirst(t) {
+    const ctl = new AbortController();
+    state.counting = { channelId: t.channelId, abort: ctl };
+    renderCurrent();
+    setStatus('Counting your messages…', 'info');
     const who = await actingAs();
-    const t = state.target; // re-read: an account switch may have reset everything meanwhile
-    if (!t || t.protected || run.active || modal || state.scanning) return; // a scan began while we asked
-    const n = isPartialCount(t.channelId) ? 0 : counts.get(t.channelId);
+    let cap = 0;
+    let plain = null;
+    let held = null;
+    try {
+      if (who) {
+        cap = setTimeout(() => ctl.abort(), COUNT_CAP_MS);
+        counts.set(t.channelId, await countMine(t, {
+          signal: ctl.signal,
+          searchOnly: true,
+          onWait: (w) => { held = w; ctl.abort(); },
+        }));
+      }
+    } catch (err) {
+      if (!(err instanceof Stopped)) {
+        plain = plainError(err);
+        if (plain.blocking) state.scanError = { channelId: t.channelId, ...plain };
+        addLog(`count failed · ${err.message}`, 'warn');
+      }
+    } finally {
+      clearTimeout(cap);
+    }
+    // Someone else ended it (left the chat, the tab, the panel or the account): nothing follows.
+    const own = !!state.counting && state.counting.abort === ctl;
+    if (own) state.counting = null;
+    if (own && !counts.has(t.channelId)) {
+      gaveUpCounting.add(t);
+      if (!who) addLog("count skipped · Discord didn't say who you are", 'warn');
+      else if (held) addLog(`count skipped · Discord asked for a wait (${held.kind}), so the purge counts as it goes`, 'info');
+      else if (!plain) addLog('count skipped · Discord took too long, so the purge counts as it goes', 'info');
+    }
+    renderCurrent();
+    const here = state.target && state.target.channelId === t.channelId && !state.target.protected;
+    if (!own || !here || run.active || modal || state.scanning) return { go: false };
+    // A chat you can't read could only fail: say so instead of asking.
+    if (plain && plain.blocking) { setStatus(plain.short, 'error'); return { go: false }; }
+    if (counts.get(t.channelId) === 0 && !isPartialCount(t.channelId)) {
+      setStatus('All clear~ nothing of yours here', 'success', { flair: '✨' });
+      return { go: false };
+    }
+    setStatus('Ready to purify~', 'info', { quiet: true, flair: '✨' }); // under the dialog, for after it
+    return { go: true, who };
+  }
+
+  async function askPurgeCurrent() {
+    if (!state.target || state.target.protected || run.active || modal || state.counting || state.scanning) return;
+    const t = state.target;
+    const blocked = state.scanError && state.scanError.channelId === t.channelId && state.scanError.blocking;
+    if (blocked) { setStatus(state.scanError.short, 'error'); return; }
+    let who;
+    if (counts.has(t.channelId) || gaveUpCounting.has(t)) who = await actingAs();
+    else {
+      const counted = await countFirst(t);
+      if (!counted.go) return;
+      ({ who } = counted);
+    }
+    // Re-read: an account switch may have reset everything meanwhile, or the person moved on.
+    const now = state.target;
+    if (!now || now.channelId !== t.channelId || now.protected || run.active || modal || state.scanning || state.counting || state.tab !== 'current') return;
+    const n = isPartialCount(now.channelId) ? 0 : counts.get(now.channelId);
+    const b = (k) => h('b', { text: k.toLocaleString() });
     confirmDialog({
       title: 'Ready to purify?',
-      lead: n ? ['This will delete all ', h('b', { text: n.toLocaleString() }), ' of your messages in'] : ['This will delete all your messages in'],
-      pill: t,
+      lead: n === 1 ? ['This will delete your ', b(1), ' message in']
+        : n ? ['This will delete all ', b(n), ' of your messages in'] : ['This will delete all your messages in'],
+      pill: now,
       who,
-      confirmLabel: 'Hold to purify ✨',
-      onConfirm: () => beginRun([{ ...t }], 'current'),
+      confirmLabel: ['Hold to purify', '✨'],
+      onConfirm: () => beginRun([{ ...now }], 'current', who),
     });
   }
 
+  // One sentence that says exactly what goes: the counted messages, every message in the chats not
+  // counted yet, and that an index still being built may hold older ones. Chats Discord won't let you
+  // into are listed as skipped, not counted as purged.
   async function askPurgeSelected() {
     if (!selectedRows().length || run.active || modal) return;
     const who = await actingAs();
     const rows = selectedRows(); // re-read: an account switch clears the selection
     if (!rows.length || run.active || modal || state.scanning) return;
-    const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
-    const known = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
-    const blocked = rows.filter((r) => r.status === 'error').length;
-    const unscanned = rows.length - scanned.length - blocked;
-    const more = unscanned || scanned.some((r) => isPartialCount(r.channelId));
-    const chats = plural(rows.length, 'chat').replace(' ', '\u00a0');
-    // Never lead with a bare "0+": say what is known, and that the rest is all of yours.
-    const lead = !known && more
-      ? ['Purging ', h('b', { text: 'all' }), ` your messages in ${chats}`, unscanned ? ' (not\u00a0counted\u00a0yet)' : ' (Discord\u00a0is\u00a0still\u00a0indexing)']
-      : known && unscanned
-        ? ['Purging ', h('b', { text: known.toLocaleString() }), ` found + all of yours in ${unscanned}\u00a0uncounted\u00a0chat${unscanned === 1 ? '' : 's'}`]
-        : ['Purging ', h('b', { text: `${known.toLocaleString()}${more ? '+' : ''}` }), ` of your messages from ${chats}`];
+    const skipped = rows.filter(accessError);
+    const counted = rows.filter((r) => !accessError(r) && r.channelId && counts.has(r.channelId));
+    const known = counted.reduce((sum, r) => sum + counts.get(r.channelId), 0);
+    const uncounted = rows.length - skipped.length - counted.length;
+    const partial = counted.some((r) => isPartialCount(r.channelId));
+    if (!known && !uncounted && !partial) return; // nothing left to purge in any of them
+    const n = rows.length - skipped.length;
+    const b = (k) => h('b', { text: k.toLocaleString() });
+    const chats = (k) => (k === 1 ? 'chat' : 'chats');
+    const lead = known && !uncounted ? ['This deletes all ', b(known), ` of your messages in ${n === 1 ? 'this chat' : 'these chats'}`]
+      : known ? ['This deletes ', b(known), ` counted message${known === 1 ? '' : 's'}, plus every message of yours in the `, b(uncounted), ` ${chats(uncounted)} not counted yet`]
+        : counted.length && uncounted ? ['This deletes every message of yours in the ', b(uncounted), ` ${chats(uncounted)} not counted yet`]
+          : n === 1 ? [`This deletes every message of yours in this chat${uncounted ? ' — not counted yet' : ''}`]
+            : ['This deletes every message of yours in these ', b(n), ` chats${uncounted ? ' — none counted yet' : ''}`];
     confirmDialog({
-      title: 'Batch purify?',
-      lead: [...lead, blocked ? ` · ${blocked}\u00a0no\u00a0access` : '', ':'],
+      title: `Purify ${plural(n, 'chat')}?`,
+      lead: [...lead, partial ? ' (Discord may find older ones later)' : '', ':'],
       list: rows.map((r) => {
-        const n = r.channelId ? counts.get(r.channelId) : undefined;
-        return { label: r.label, meta: r.status === 'error' ? 'no access' : n === undefined ? 'not scanned' : plural(n, 'msg') };
+        const k = r.channelId ? counts.get(r.channelId) : undefined;
+        if (accessError(r)) return { label: r.label, meta: `skipped · ${shortReason(r.reason)}`, tone: 'skipped' };
+        return k === undefined ? { label: r.label, meta: 'not counted', tone: 'unknown' } : { label: r.label, meta: plural(k, 'message') };
       }),
       who,
-      confirmLabel: 'Hold to purify all ✨',
-      onConfirm: () => beginRun(rows, 'batch'),
+      confirmLabel: ['Hold to purify all', '✨'],
+      onConfirm: () => beginRun(rows, 'batch', who),
     });
   }
 
-  async function beginRun(targets, mode) {
+  // `who` is the account the person confirmed as; the run is bound to it.
+  async function beginRun(targets, mode, who) {
     if (syncProtection()) protectionStale = true; // a shield from another tab; the engine honours it per chat
     state.runTargets = targets;
     state.runMode = mode;
+    state.runAs = who || null;
     state.runKey = mode === 'current' ? `c:${targets[0].channelId}` : 'batch';
     ring.done = 0;
     ring.fails = [];
@@ -995,50 +1364,82 @@
     await startRun(targets);
   }
 
-  // ── Batch lists ─────────────────────────────────────────
+  // ── Many chats: lists ───────────────────────────────────
 
   function rowKey(row) {
     return row.channelId ? `c:${row.channelId}` : `u:${row.userId}`;
   }
 
+  // One line per row: the count is the readiness and the pill the outcome, so only news (purging,
+  // still indexing, run again later) takes a second line. Each row's checkbox is described by its
+  // tag and meta, so a screen reader hears 'DM: Mira, checkbox, checked, 7 msgs'.
   function setRowState(row, status, detail) {
+    const was = row.status;
     row.status = status;
+    row.reason = detail || '';
     const el = row.el;
     if (!el || row.protected) return;
     el.dataset.state = status;
+    el.title = detail || '';
     const n = counts.get(row.channelId);
     const deleted = (row.deleted || 0).toLocaleString();
-    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: k.toLocaleString() }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
-    const pill = (kind, ...children) => h('span', { class: `run-pill run-pill-${kind}` }, ...children);
     const tag = el.querySelector('.row-tag');
-    if (status === 'ready') tag.replaceChildren(icon('dagger', 'ico-dagger ico-dagger-l'), 'READY FOR PURGE', icon('dagger', 'ico-dagger ico-dagger-r'));
-    else if (status === 'running') tag.replaceChildren(row.failed ? `purging~ · ${row.failed} failed` : 'purging~');
-    else if (status === 'error') tag.replaceChildren(detail ? shortReason(detail) : 'error');
-    else if (status === 'partial') tag.replaceChildren(detail || 'run again later');
-    else if (status === 'indexing') tag.replaceChildren('Discord is still indexing~');
-    else tag.replaceChildren();
-    tag.hidden = !tag.textContent;
+    const tagText = status === 'running' ? (row.failed ? `purging~ · ${row.failed} failed` : 'purging~')
+      : status === 'partial' ? detail || 'run again later'
+        : status === 'indexing' ? 'Discord is still indexing~' : '';
+    if (tag.textContent !== tagText) tag.textContent = tagText;
+    tag.hidden = !tagText;
+    const progress = n ? `${deleted}/${n.toLocaleString()}` : deleted;
+    // Each kill changes only the running pill's number, so its spinner keeps turning.
+    const live = was === 'running' && status === 'running' && el.querySelector('.run-pill-live .run-pill-n');
+    if (live) { live.textContent = progress; return; }
+    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: k.toLocaleString() }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
+    const clear = () => h('span', { class: 'meta-clear' }, 'all clear', h('span', { 'aria-hidden': 'true', text: ' ✓' }));
+    const pill = (kind, ...children) => h('span', { class: `run-pill run-pill-${kind}` }, ...children);
+    const say = (text) => h('span', { class: 'sr', text });
     let meta = null;
-    if (status === 'idle') meta = row.needsDM ? h('span', { class: 'chip-need', text: 'no DM yet' }) : (n !== undefined ? (n ? msgs(n) : 'clean ✓') : null);
+    if (status === 'idle') meta = row.needsDM ? h('span', { class: 'chip-need', text: 'closed DM' }) : null;
     else if (status === 'scanning') meta = pill('scan', h('i', { class: 'spin' }), 'scanning');
     else if (status === 'ready') meta = n ? msgs(n) : null;
     else if (status === 'indexing') meta = n ? msgs(n) : 'none yet';
-    else if (status === 'clean') meta = 'no messages found';
+    else if (status === 'clean') meta = clear();
     else if (status === 'queued') meta = pill('queued', 'queued');
-    else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), n ? `${deleted}/${n.toLocaleString()}` : deleted);
-    else if (status === 'done') meta = pill('done', icon('check'), row.failed ? `${deleted} · ${row.failed} failed` : deleted);
+    else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), say('purging '), h('span', { class: 'run-pill-n', text: progress }));
+    else if (status === 'done') meta = pill('done', icon('check'), say('purged '), row.failed ? `${deleted} · ${row.failed} failed` : deleted);
     else if (status === 'partial') meta = pill('stopped', `${deleted} · again later`);
-    else if (status === 'error') meta = pill('error', '✗ skipped');
+    else if (status === 'error') meta = pill('error', h('span', { 'aria-hidden': 'true', text: '✗ ' }), h('span', { class: 'run-pill-why', text: detail ? shortReason(detail) : 'skipped' }));
     else if (status === 'stopped') meta = pill('stopped', 'stopped');
     el.querySelector('.row-meta').replaceChildren(...(meta ? [meta] : []));
-    el.title = detail || '';
   }
 
+  // A row drawn afresh (a refreshed list, a shield redraw) shows what is already known about its chat.
+  function restingState(row) {
+    const n = row.channelId ? counts.get(row.channelId) : undefined;
+    if (n === undefined) return 'idle';
+    return isPartialCount(row.channelId) ? 'indexing' : n ? 'ready' : 'clean';
+  }
+
+  // The checkbox is described by the row's tag and meta; the ids follow the row's key.
+  function describeRow(row) {
+    if (!row.box) return; // an immune row has no checkbox
+    const tag = row.el.querySelector('.row-tag');
+    const meta = row.el.querySelector('.row-meta');
+    tag.id = `dp-tag-${row.key}`;
+    meta.id = `dp-meta-${row.key}`;
+    row.box.setAttribute('aria-describedby', `${tag.id} ${meta.id}`);
+  }
+
+  // Why one message or chat didn't go, in two or three words. Anything else is Discord's own
+  // words, without its code.
   function shortReason(reason) {
     if (/Missing Access/i.test(reason)) return 'no access';
     if (/Missing Permissions/i.test(reason)) return 'no permission';
     if (/indexing/i.test(reason)) return 'still indexing';
-    return reason.length > 28 ? `${reason.slice(0, 27)}…` : reason;
+    if (/system message/i.test(reason)) return 'system message';
+    if (/archived/i.test(reason)) return 'archived thread';
+    if (/Unknown Message/i.test(reason)) return 'already gone';
+    if (/captcha/i.test(reason)) return 'captcha';
+    return plainError(reason).short;
   }
 
   function initials(name) {
@@ -1079,6 +1480,9 @@
     });
     box.disabled = run.active || state.scanning;
     row.box = box;
+    // A DM row with no one to shield (a group) keeps the shield's room, so every count ends on one column.
+    const end = row.partner ? shieldButton(row.partner, { protectedNow: false, label: row.display })
+      : row.kind !== 'guild' ? h('span', { class: 'shield-slot', 'aria-hidden': 'true' }) : null;
     row.el = h('label', { class: `row${indent ? ' row-indent' : ''}${box.checked ? ' is-selected' : ''}`, dataset: { key } },
       box,
       h('span', { class: 'check-ui', 'aria-hidden': 'true' }, icon('check')),
@@ -1088,8 +1492,9 @@
         row.sub ? h('span', { class: 'row-sub', text: row.sub }) : null,
         h('span', { class: 'row-tag', hidden: true })),
       h('span', { class: 'row-meta' }),
-      row.partner ? shieldButton(row.partner, { protectedNow: false, label: row.display }) : null);
-    setRowState(row, row.status || 'idle');
+      end);
+    describeRow(row);
+    setRowState(row, row.status || restingState(row));
     return row.el;
   }
 
@@ -1101,7 +1506,10 @@
     state.batchRows.set(key, row);
     if (state.selected.delete(oldKey)) state.selected.add(key);
     row.key = key;
-    if (row.el) row.el.dataset.key = key;
+    if (row.el) {
+      row.el.dataset.key = key;
+      describeRow(row);
+    }
   }
 
   function snowflakeDesc(a, b) {
@@ -1123,17 +1531,15 @@
     }
     const seq = ++dmSeq;
     state.dmsLoading = true;
-    list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' }));
+    list.replaceChildren(h('div', { class: 'list-empty', text: 'Finding your DMs…' }));
     try {
       const [channels, relationships] = await Promise.all([listDMs(), listRelationships()]);
       if (seq !== dmSeq) return;
       state.dmData = { channels, relationships };
-      const counted = renderDMs();
-      // A routine "loaded" never buries an error the user hasn't read yet.
-      if (state.tab === 'batch' && !run.active && $('[data-role="status"]').dataset.tone !== 'error') setStatus(`Loaded ${plural(counted.dms, 'DM')} + ${plural(counted.friends, 'friend')} ✨`, 'success');
+      renderDMs();
     } catch (err) {
       if (seq !== dmSeq) return;
-      list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load DMs 😿 ${err.message}` }));
+      list.replaceChildren(h('div', { class: 'list-empty', text: listError('your DMs', err) }));
     } finally {
       if (seq === dmSeq) state.dmsLoading = false;
     }
@@ -1158,7 +1564,7 @@
       glyph: c.type === 3 ? '👥' : '',
       partner: c.type === 1 && c.recipients ? c.recipients[0] : null,
       protected: isProtectedChannel(c),
-      label: c.type === 3 ? `Group: ${dmTitle(c)}` : `DM: ${dmTitle(c)}`,
+      label: c.type === 3 ? `Group: ${iso(dmTitle(c))}` : `DM: ${iso(dmTitle(c))}`,
       context: c.type === 3 ? 'Group DM' : 'Direct message',
     }));
     for (const rel of relationships) {
@@ -1170,24 +1576,25 @@
         name, display: name, sub: user.username ? `@${user.username} · friend` : 'friend', glyph: '',
         partner: user,
         protected: isProtectedUser(user),
-        label: `Friend: ${name}`, context: 'Direct message',
+        label: `Friend: ${iso(name)}`, context: 'Direct message',
       });
     }
     rows.sort((a, b) => Number(b.protected) - Number(a.protected));
     for (const r of rows) if (r.protected) state.selected.delete(rowKey(r));
-    list.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r)) : [h('div', { class: 'list-empty', text: 'No DMs or friends found~' })]));
+    list.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r)) : [h('div', { class: 'list-empty', text: 'No DMs here yet~' })]));
     state.dmsLoaded = true;
     applyFilter();
-    const dmRows = rows.filter((r) => r.kind !== 'friend').length;
-    return { dms: dmRows, friends: rows.length - dmRows };
   }
 
   // ── Protection ──────────────────────────────────────────
 
+  // Who is immune, by person rather than by account name: 'Bardo & Dopa ♡ + 1 you shielded'.
+  const IMMUNE_PEOPLE = { bardo: 'Bardo', bardosama: 'Bardo', dopameanie: 'Dopa', dopa_meanie: 'Dopa' };
+
   function immuneSummary() {
-    const names = [...PROTECTED_USERNAMES].filter((n) => !protection.released.has(n));
-    const extra = protection.ids.size ? ` + ${protection.ids.size} shielded` : '';
-    return (names.join(', ') || 'nobody yet') + extra;
+    const people = [...new Set([...PROTECTED_USERNAMES].filter((n) => !protection.released.has(n)).map((n) => IMMUNE_PEOPLE[n] || n))];
+    const named = people.length ? `${people.join(' & ')} ♡` : 'nobody yet';
+    return protection.ids.size ? `${named} + ${protection.ids.size} you shielded` : named;
   }
 
   function toggleProtection(user) {
@@ -1197,14 +1604,14 @@
     const before = { ids: new Set(protection.ids), released: new Set(protection.released) };
     const shield = !isProtectedUser(user);
     setProtected(user, shield);
-    const name = user.global_name || user.username;
+    const name = iso(user.global_name || user.username);
     // A shield that didn't save would be gone after a reload: put things back and say so.
     if (!storeProtection()) {
       protection.ids = before.ids;
       protection.released = before.released;
       if (synced) protectionChanged();
       addLog(`couldn't save the shield for ${name} — Discord's storage is full or blocked`, 'error');
-      setStatus(`Couldn't save~ ${name} is ${shield ? 'not immune' : 'still immune'} (Discord's storage is full or blocked) 😿`, 'error');
+      setStatus(`Couldn't save~ ${name} is ${shield ? 'not immune' : 'still immune'} (Discord's storage is full or blocked)`, 'error');
       return;
     }
     addLog(shield ? `shielded ${name} — they're immune now ♡` : `${name} is no longer immune`, 'info');
@@ -1212,13 +1619,18 @@
     protectionChanged();
   }
 
-  // Redraw everything that shows who is immune.
+  // Redraw everything that shows who is immune. The redraw rebuilds every shield, so a shield that
+  // had focus hands it to the same person's new one: a keyboard toggle keeps its place.
   function protectionChanged({ keepVerdict = false } = {}) {
+    const focused = root.activeElement && root.activeElement.closest('.shield-btn');
+    const who = focused && focused.dataset.userId;
     if (state.dmData) renderDMs();
     const partner = state.target && state.target.partner;
     if (partner) state.target.protected = isProtectedUser(partner);
     if (!keepVerdict && lastEnd && lastEnd.key === contextKey()) lastEnd = null;
     renderCurrent();
+    const again = who && $(`.view:not([hidden]) .shield-btn[data-user-id="${window.CSS.escape(who)}"]`); // CSS here is our stylesheet
+    if (again) again.focus();
   }
 
   // Another tab shielded or released someone: take it on now, or once this tab's run ends
@@ -1231,14 +1643,17 @@
     else protectionChanged();
   }
 
-  const shieldTitle = (immune) => (immune ? 'Immune — click to allow purging again' : 'Protect — never purge this chat');
+  // 'Shield' is the verb and 'immune' the state. The button keeps one name and aria-pressed says
+  // whether the shield is up, so a screen reader never hears 'remove' and 'pressed' at once.
+  const shieldTitle = (immune) => (immune ? 'Immune ♡ click to remove the shield' : 'Shield this DM~ never purged');
 
   function shieldButton(user, { protectedNow, label }) {
     const btn = h('button', {
       class: `shield-btn${protectedNow ? ' is-on' : ''}`,
       type: 'button',
+      'data-user-id': user.id,
       'aria-pressed': String(protectedNow),
-      'aria-label': protectedNow ? `Stop protecting ${label}` : `Protect ${label}`,
+      'aria-label': `Shield ${iso(label)}`,
       title: shieldTitle(protectedNow),
     }, icon('shield'));
     btn.addEventListener('click', (e) => {
@@ -1257,17 +1672,17 @@
     }
     const seq = ++guildSeq;
     state.guildsLoading = true;
-    list.replaceChildren(h('div', { class: 'list-empty', text: 'Loading servers… 🏰' }));
+    list.replaceChildren(h('div', { class: 'list-empty', text: 'Finding your servers…' }));
     try {
       const guilds = await myGuilds({ refresh });
       if (seq !== guildSeq) return;
       for (const [key, row] of state.batchRows) if (row.kind === 'guild') state.batchRows.delete(key);
-      list.replaceChildren(...(guilds.length ? guilds.map(buildGuild) : [h('div', { class: 'list-empty', text: 'No servers found~' })]));
+      list.replaceChildren(...(guilds.length ? guilds.map(buildGuild) : [h('div', { class: 'list-empty', text: "You're not in any servers~" })]));
       state.guildsLoaded = true;
       applyFilter();
     } catch (err) {
       if (seq !== guildSeq) return;
-      list.replaceChildren(h('div', { class: 'list-empty', text: `Failed to load servers 😿 ${err.message}` }));
+      list.replaceChildren(h('div', { class: 'list-empty', text: listError('your servers', err) }));
     } finally {
       if (seq === guildSeq) state.guildsLoading = false;
     }
@@ -1281,28 +1696,33 @@
       h('span', { class: 'guild-badge', 'aria-hidden': 'true', text: initials(guild.name) }),
       h('span', { class: 'guild-name', text: guild.name }),
       h('span', { class: 'guild-meta', 'data-role': 'guild-meta' }));
-    const all = h('input', { type: 'checkbox', class: 'check', 'aria-label': `All channels in ${guild.name}` });
+    const all = h('input', { type: 'checkbox', class: 'check', 'aria-label': `All channels in ${iso(guild.name)}` });
     const allLabel = h('label', { class: 'guild-all', title: 'Select every channel' }, all, h('span', { class: 'check-ui', 'aria-hidden': 'true' }, icon('check')));
+    // The select-all box comes first, where it is drawn, so focus moves the way the eye does.
     const section = h('div', { class: 'guild', dataset: { guildId: guild.id, name: guild.name.toLowerCase() } },
-      h('div', { class: 'guild-bar' }, head, allLabel), channelsEl);
+      h('div', { class: 'guild-bar' }, allLabel, head), channelsEl);
     let loading = null;
     const load = () => {
       if (!loading) {
-        channelsEl.replaceChildren(h('div', { class: 'list-empty', text: 'Loading channels…' }));
+        channelsEl.replaceChildren(h('div', { class: 'list-empty', text: 'Finding channels…' }));
         loading = listTextChannels(guild.id).then((channels) => {
-          const rows = channels.map((ch) => ({
-            kind: 'guild', channelId: ch.id, guildId: guild.id,
-            name: `#${ch.name}`, display: ch.name, glyph: ch.type === 2 || ch.type === 13 ? 'sound' : ch.type === 5 ? 'megaphone' : ch.type === 15 || ch.type === 16 ? 'forum' : '#',
-            sub: ch.categoryName ? ch.categoryName.toLowerCase() : '',
-            protected: false, label: `#${ch.name} (${guild.name})`, context: guild.name,
-          }));
-          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'No text channels~' })]));
+          const rows = channels.map((ch) => {
+            const glyph = ch.type === 2 || ch.type === 13 ? 'sound' : ch.type === 5 ? 'megaphone' : ch.type === 15 || ch.type === 16 ? 'forum' : '#';
+            return {
+              kind: 'guild', channelId: ch.id, guildId: guild.id,
+              name: `#${ch.name}`, display: ch.name, glyph,
+              sub: ch.categoryName ? ch.categoryName.toLowerCase() : '',
+              // Only a text channel is '#name'; voice, forum and announcement channels go by their name.
+              protected: false, label: `${glyph === '#' ? '#' : ''}${iso(ch.name)} (${iso(guild.name)})`, context: guild.name,
+            };
+          });
+          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'Nothing here you can purge~' })]));
           head.querySelector('[data-role="guild-meta"]').textContent = plural(rows.length, 'channel');
           applyFilter();
           syncGuildChecks();
         }, (err) => {
           loading = null;
-          channelsEl.replaceChildren(h('div', { class: 'list-empty', text: `Couldn't load channels 😿 ${err.message}` }));
+          channelsEl.replaceChildren(h('div', { class: 'list-empty', text: listError(`${guild.name}'s channels`, err) }));
           throw err;
         });
       }
@@ -1311,6 +1731,7 @@
     const expand = (open) => {
       head.setAttribute('aria-expanded', String(open));
       channelsEl.hidden = !open;
+      rove(section.parentElement);
       if (open) load().catch(() => {});
     };
     head.addEventListener('click', () => expand(head.getAttribute('aria-expanded') !== 'true'));
@@ -1342,11 +1763,16 @@
     }
   }
 
+  // Every list is filtered, re-roved and, when nothing in it matches, says so.
+  const LISTS = ['[data-role="dm-list"]', '[data-role="server-list"]'];
+
   function applyFilter() {
-    const q = state.filter.trim().toLowerCase();
+    const typed = state.filter.trim();
+    const q = typed.toLowerCase();
     for (const row of state.batchRows.values()) {
       if (!row.el) continue;
-      const hay = `${row.display} ${row.name} ${row.label} ${row.sub || ''}`.toLowerCase();
+      // The marks that keep names in reading order are invisible, so they never stop a match.
+      const hay = `${row.display} ${row.name} ${row.label} ${row.sub || ''}`.replace(/[\u2066-\u2069]/g, '').toLowerCase();
       row.el.hidden = !!q && !hay.includes(q);
     }
     for (const guild of $$('.guild')) {
@@ -1354,6 +1780,15 @@
       const anyChannel = Array.from(guild.querySelectorAll('.row')).some((r) => !r.hidden);
       guild.hidden = !nameHit && !anyChannel;
       if (q && nameHit) for (const r of guild.querySelectorAll('.row')) r.hidden = false;
+    }
+    for (const list of LISTS.map($)) {
+      const none = list.querySelector('[data-role="no-match"]');
+      if (none) none.remove();
+      const items = list.querySelectorAll(':scope > .row, :scope > .guild');
+      if (q && items.length && [...items].every((el) => el.hidden)) {
+        list.append(h('div', { class: 'list-empty', 'data-role': 'no-match', text: `No chats match “${iso(typed)}”~` }));
+      }
+      rove(list);
     }
   }
 
@@ -1375,9 +1810,142 @@
     renderActions();
   }
 
+  // Numbers a screen reader would otherwise hear bare: 'Many chats 4 selected', 'Purify selected 4 chats'.
+  function speakCounts(rows) {
+    $('[data-role="tab-badge-sr"]').hidden = !rows.length;
+    const one = state.tab === 'current' ? !!state.target && counts.get(state.target.channelId) === 1 : rows.length === 1;
+    const unit = state.tab === 'current' ? (one ? ' message' : ' messages') : (one ? ' chat' : ' chats');
+    $('[data-role="purify-unit"]').textContent = $('[data-role="purify-count"]').hidden ? '' : unit;
+  }
+
+  // ── List keyboard ───────────────────────────────────────
+  // Each list is one Tab stop, so 129 DMs no longer cost 265 presses to get past. Up and Down walk
+  // its lines (keeping to the row's shield, or a server's name, when the next line has one), Home
+  // and End jump to either end, Right goes along a line and into a server, Left comes back out or
+  // folds the server up. Ticking still takes its own Space or click: moving never selects.
+  const CONTROLS = '.check, .shield-btn, .guild-head';
+
+  // Shown within its list (the list's own view may be hidden: it is still that list's Tab stop).
+  function shownIn(list, el) {
+    for (let node = el; node && node !== list; node = node.parentElement) if (node.hidden) return false;
+    return true;
+  }
+
+  const linesOf = (list) => Array.from(list.querySelectorAll('.row, .guild-bar')).filter((line) => shownIn(list, line));
+  const lineOf = (control) => control.closest('.row, .guild-bar');
+  const controlsOf = (line) => Array.from(line.querySelectorAll(CONTROLS));
+  const lineKey = (line) => line.dataset.key || `g:${line.parentElement.dataset.guildId}`;
+
+  // The control a list gives Tab, remembered by line and column so it survives the list being redrawn.
+  const roving = new Map(); // list's data-role → { key, col }
+
+  // Unvisited, a list starts on its first checkbox rather than Bardo's shield, so a reflex Space
+  // ticks a chat instead of lifting a shield.
+  function rove(list) {
+    if (!list) return;
+    const lines = linesOf(list);
+    const spot = roving.get(list.dataset.role);
+    const kept = spot && lines.find((line) => lineKey(line) === spot.key);
+    const line = kept || lines.find((l) => l.querySelector('.check')) || lines[0];
+    const cols = line ? controlsOf(line) : [];
+    const keep = cols[kept ? Math.min(spot.col, cols.length - 1) : 0];
+    for (const control of list.querySelectorAll(CONTROLS)) control.tabIndex = control === keep ? 0 : -1;
+  }
+
+  function onListFocus(e) {
+    const control = e.target.closest(CONTROLS);
+    if (!control) return;
+    const list = e.currentTarget;
+    const line = lineOf(control);
+    roving.set(list.dataset.role, { key: lineKey(line), col: controlsOf(line).indexOf(control) });
+    for (const other of list.querySelectorAll(CONTROLS)) other.tabIndex = other === control ? 0 : -1;
+    line.scrollIntoView({ block: 'nearest' }); // the whole line, clear of the sticky strip (scroll-padding)
+  }
+
+  function onListKey(e) {
+    const control = e.target.closest(CONTROLS);
+    if (!control || e.altKey || e.ctrlKey || e.metaKey) return;
+    const list = e.currentTarget;
+    const lines = linesOf(list);
+    const line = lineOf(control);
+    const at = lines.indexOf(line);
+    const cols = controlsOf(line);
+    const col = cols.indexOf(control);
+    const inColumn = (target, c) => { const all = target ? controlsOf(target) : []; return all[Math.min(c, all.length - 1)]; };
+    const isHead = control.classList.contains('guild-head');
+    const open = isHead && control.getAttribute('aria-expanded') === 'true';
+    let to = null;
+    if (e.key === 'ArrowDown') to = inColumn(lines[at + 1], col);
+    else if (e.key === 'ArrowUp') to = inColumn(lines[at - 1], col);
+    else if (e.key === 'Home') to = inColumn(lines[0], 0);
+    else if (e.key === 'End') to = inColumn(lines[lines.length - 1], 0);
+    else if (e.key === 'ArrowRight') {
+      const child = lines[at + 1] && lines[at + 1].closest('.guild-channels') && lines[at + 1].closest('.guild') === line.closest('.guild') ? lines[at + 1] : null;
+      if (cols[col + 1]) to = cols[col + 1];
+      else if (isHead && !open) control.click();
+      else if (open) to = inColumn(child, 0);
+    } else if (e.key === 'ArrowLeft') {
+      if (open) control.click();
+      else if (col > 0) to = cols[col - 1];
+      else if (line.closest('.guild-channels')) to = line.closest('.guild').querySelector('.guild-head');
+    } else return;
+    e.preventDefault();
+    if (to) to.focus({ preventScroll: true }); // onListFocus brings its whole line into view
+  }
+
+  // A chat Discord won't let you read or delete in: another go can't change that.
+  const accessError = (row) => row.status === 'error' && plainError(row.reason).blocking;
+
+  // After a batch only what's left stays ticked, so Purify never offers to purge a finished chat
+  // again. Rows keep their pills, so the outcome stays readable. Partial, indexing, stopped and
+  // done-with-failures rows stay ticked.
+  function settleBatchSelection() {
+    for (const row of state.runTargets) {
+      if (!row.row || !row.box) continue;
+      if ((row.status === 'done' && !row.failed) || accessError(row)) {
+        state.selected.delete(row.key);
+        row.box.checked = false;
+        row.el.classList.remove('is-selected');
+      }
+    }
+    syncGuildChecks();
+  }
+
+  // The running chat stays in view as a batch moves down the list, unless the person moved
+  // around the list themselves in the last few seconds.
+  let lastUserScroll = -Infinity;
+  function revealRow(target) {
+    if (target.el && performance.now() - lastUserScroll > 4000) target.el.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' });
+  }
+
+  // A long purge says how it's going now and then, to screen readers only: past 25, 50 and 75 %,
+  // at most once a minute. A total that is still a floor (chats not counted yet) stays quiet.
+  const milestone = { next: 25, at: -Infinity };
+
+  function resetMilestones() {
+    milestone.next = 25;
+    milestone.at = -Infinity;
+    $('[data-role="milestone"]').textContent = '';
+  }
+
+  function speakProgress(p) {
+    if (!p.total || p.partial) return;
+    const done = p.deleted + p.failed + (p.gone || 0);
+    const passed = Math.floor((done / p.total) * 4) * 25;
+    const now = performance.now();
+    if (passed < milestone.next || passed >= 100 || now - milestone.at < 60000) return;
+    milestone.next = passed + 25;
+    milestone.at = now;
+    const failed = p.failed ? ` · ${p.failed.toLocaleString()} failed` : '';
+    const left = p.etaSeconds != null ? ` · about ${formatDuration(p.etaSeconds)} left` : '';
+    $('[data-role="milestone"]').textContent = `${Math.floor((done / p.total) * 100)}% · ${p.deleted.toLocaleString()} of ${p.total.toLocaleString()} purged${failed}${left}`;
+  }
+
   // ── Tabs ────────────────────────────────────────────────
 
   function switchTab(tab, { initial = false } = {}) {
+    const changed = tab !== state.tab;
+    if (changed) cancelCount();
     state.tab = tab;
     prefs.tab = tab;
     if (!initial) savePrefs('tab');
@@ -1393,7 +1961,7 @@
       if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
       if (!state.guildsLoaded && !state.guildsLoading) loadServers();
     }
-    if (!initial) kick({ stretch: tab === 'batch' ? 0.025 : -0.025 });
+    if (!initial && changed) $('[data-role="body"]').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
     renderCurrent();
     layoutPanel();
   }
@@ -1402,37 +1970,63 @@
 
   const HOLD_MS = 850;
   const ARMED_MS = 5000; // how long a first assistive press waits for the second
+  const TAP_MS = 250; // a release sooner than this was a tap, not a change of mind
+  const SLOP_PX = 12; // how far a finger or pen may drift off the button and still be holding it
   let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed }
   let dialogTimer = 0;
 
+  // The hold button's words, each a [text, flair] pair (the line's one emoji, unspoken). The two long
+  // ones are set smaller; the let-go wraps to "Let go~" over the outcome.
+  const HOLD_WORDS = {
+    holding: ['Keep holding~'],
+    sealed: ['Purifying~', '♡'],
+    tap: ['Hold it down~', '♡'],
+    letGo: ['Let go~ nothing purged', '♡'],
+    armed: ['Press again to purify~'],
+  };
+  function holdLabel(words) {
+    const label = $('[data-role="confirm-label"]');
+    label.classList.toggle('is-long', words === HOLD_WORDS.letGo || words === HOLD_WORDS.armed);
+    label.replaceChildren(...flaired(...words));
+  }
+
+  // While the dialog is up nothing behind it can be reached, by Tab or by a screen reader's browse mode.
+  const behindDialog = () => [$('[data-role="shell"]'), $('.term'), $('.orb')];
+
+  // The whole name, however long: it wraps instead of trailing off, at the moment it matters most.
   function targetPill(t) {
-    return h('div', { class: 'pill' },
-      h('span', { class: 'pill-glyph', text: t.guildId ? '#' : (t.kind === 'group' ? '👥' : '@') }),
+    return h('div', { class: 'pill', id: 'dp-modal-pill' },
+      h('span', { class: 'pill-glyph', 'aria-hidden': 'true' }, t.guildId ? '#' : (t.kind === 'group' ? icon('group') : '@')),
       h('span', { class: 'pill-name', text: t.guildId ? t.name.replace(/^#/, '') : t.name }),
-      t.guildId && t.context ? h('span', { class: 'pill-context', text: `· ${t.context}` }) : null);
+      // A real space: it is read aloud as a pause, and a long name can break there before the server.
+      t.guildId && t.context ? [' ', h('span', { class: 'pill-context', text: `· ${t.context}` })] : null);
   }
 
   function confirmDialog({ title, lead, pill, list, who, confirmLabel, onConfirm }) {
     if (modal) return;
     const layer = $('.modal-layer');
     $('[data-role="modal-title"]').textContent = title;
-    const text = $('[data-role="modal-text"]');
-    text.replaceChildren(...[
-      h('p', { class: 'modal-lead' }, lead),
+    $('[data-role="modal-text"]').replaceChildren(...[
+      h('p', { class: 'modal-lead', id: 'dp-modal-lead' }, lead),
       pill && targetPill(pill),
-      list && h('div', { class: 'modal-list' }, list.map((item) => h('div', { class: 'modal-item' },
-        h('span', { class: 'modal-item-name', text: item.label }),
-        h('span', { class: `modal-item-meta${item.meta === 'not scanned' ? ' is-unknown' : ''}`, text: item.meta })))),
-      who && h('div', { class: 'modal-who' }, 'as ', h('b', { text: `@${who}` })),
-      h('div', { class: 'modal-warn', text: "This can't be undone~ 🩸" }),
+      list && h('div', { class: 'modal-list', role: 'list', 'aria-label': plural(list.length, 'chat'), tabindex: '0' },
+        list.map((item) => h('div', { class: 'modal-item', role: 'listitem' },
+          h('span', { class: 'modal-item-name', title: item.label, text: item.label }),
+          h('span', { class: `modal-item-meta${item.tone ? ` is-${item.tone}` : ''}`, text: item.meta })))),
+      who && h('div', { class: 'modal-who', id: 'dp-modal-who' }, 'deleting as ', h('b', { text: `@${who}` })),
+      h('div', { class: 'modal-warn', id: 'dp-modal-warn' }, h('span', {}, flaired("This can't be undone", '🩸'))),
     ].filter(Boolean));
-    $('[data-role="confirm-label"]').textContent = confirmLabel;
     modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0 };
     hold.pointer = false;
+    hold.sealed = false;
     clearTimeout(dialogTimer);
+    delete layer.dataset.sealed;
+    $('[data-act="confirm"]').classList.remove('is-sealed');
     layer.hidden = false;
     layer.dataset.open = 'true';
+    layer.scrollTop = 0;
     resetHold();
+    for (const el of behindDialog()) el.inert = true;
     $('[data-act="cancel"]').focus();
   }
 
@@ -1441,84 +2035,127 @@
     const { onConfirm, restoreFocus } = modal;
     clearTimeout(modal.armed);
     modal = null;
-    resetHold();
+    for (const el of behindDialog()) el.inert = false;
+    $('[data-role="modal-live"]').textContent = '';
     const layer = $('.modal-layer');
+    // A finished hold keeps its full bar while the dialog fades: the last thing seen is the seal,
+    // never a drain that reads as a cancel.
+    const sealed = confirmed && hold.sealed;
+    if (sealed) layer.dataset.sealed = 'true';
+    else resetHold();
     layer.dataset.open = 'false';
-    const finish = () => { if (!modal) layer.hidden = true; };
     clearTimeout(dialogTimer);
-    if (reducedMotion()) finish(); else dialogTimer = setTimeout(finish, 160);
-    if (confirmed) onConfirm();
-    else if (restoreFocus && restoreFocus.focus) restoreFocus.focus();
+    dialogTimer = setTimeout(() => {
+      if (!modal) layer.hidden = true; // a dialog opened meanwhile keeps its layer
+      delete layer.dataset.sealed;
+      $('[data-act="confirm"]').classList.remove('is-sealed');
+      hold.sealed = false;
+      resetHold();
+    }, sealed ? 240 : 160);
+    if (confirmed) {
+      handFocus('[data-act="pause"]'); // the run's own controls take over from the hold
+      onConfirm();
+    } else if (restoreFocus && restoreFocus.focus) restoreFocus.focus();
   }
 
-  const hold = { start: 0, raf: 0, active: false, nudge: 0, pointer: false };
-  const ARMED_LABEL = 'Press again to purify~';
+  // key: the key (Space or Enter) holding the button down, until it is released.
+  const hold = { start: 0, timer: 0, active: false, sealed: false, nudge: 0, pointer: false, anim: null, key: null };
 
   function resetHold() {
-    cancelAnimationFrame(hold.raf);
+    clearTimeout(hold.timer);
     clearTimeout(hold.nudge);
     hold.active = false;
-    const btn = $('[data-act="confirm"]');
-    btn.style.setProperty('--hold', '0');
-    btn.classList.remove('is-holding');
-    const label = $('[data-role="confirm-label"]');
-    delete label.dataset.nudge;
-    if (modal) label.textContent = modal.armed ? ARMED_LABEL : modal.label;
+    if (hold.anim) { hold.anim.cancel(); hold.anim = null; }
+    $('[data-act="confirm"]').classList.remove('is-holding');
+    delete $('[data-role="confirm-label"]').dataset.nudge;
+    if (modal) holdLabel(modal.armed ? HOLD_WORDS.armed : modal.label);
   }
 
+  // The fill is a compositor animation, so it flows even while Discord keeps the page busy. The
+  // commit is timed on the clock, not on frames, so it lands at HOLD_MS however slowly they come.
   function beginHold() {
-    if (!modal || hold.active) return;
-    clearTimeout(hold.nudge);
+    if (!modal || hold.active || hold.sealed) return;
+    resetHold();
     hold.active = true;
     hold.start = performance.now();
     const btn = $('[data-act="confirm"]');
     btn.classList.add('is-holding');
-    const step = (now) => {
+    holdLabel(HOLD_WORDS.holding);
+    hold.anim = $('.hold-fill').animate([{ transform: 'translateX(-100%)' }, { transform: 'translateX(0)' }],
+      { duration: HOLD_MS, easing: 'linear', fill: 'forwards' });
+    const commit = () => {
       if (!hold.active) return;
-      const t = Math.min(1, (now - hold.start) / HOLD_MS);
-      btn.style.setProperty('--hold', String(t));
-      $('[data-role="confirm-label"]').textContent = t < 1 ? 'Keep holding~' : 'Purifying~';
-      if (t >= 1) {
-        hold.active = false;
-        closeDialog(true);
-        return;
-      }
-      hold.raf = requestAnimationFrame(step);
+      const left = HOLD_MS - (performance.now() - hold.start);
+      if (left > 0) { hold.timer = setTimeout(commit, left); return; }
+      hold.anim.finish(); // full now, even if the last frame of the fill hasn't been drawn yet
+      hold.active = false;
+      hold.sealed = true;
+      btn.classList.add('is-sealed');
+      holdLabel(HOLD_WORDS.sealed);
+      closeDialog(true);
     };
-    hold.raf = requestAnimationFrame(step);
+    hold.timer = setTimeout(commit, HOLD_MS);
   }
 
-  // Let go too soon: the button says what it needs for a moment, then settles back.
-  function endHold() {
+  // Let go too soon. A quick tap is taught the gesture with a nudge; any other early end (a let-go,
+  // a slide-off, a blur, a hidden tab) just says nothing went. The bar drains from where it really is.
+  function endHold(e) {
     if (!hold.active) return;
+    const tap = performance.now() - hold.start < TAP_MS && !!e && (e.type === 'pointerup' || e.type === 'keyup');
+    const fill = $('.hold-fill');
+    if (hold.anim) {
+      try { hold.anim.commitStyles(); } catch { /* not rendered: nothing to drain */ }
+      hold.anim.cancel();
+      hold.anim = null;
+    }
     resetHold();
-    const label = $('[data-role="confirm-label"]');
-    label.textContent = 'Hold it down~ ♡';
-    void label.offsetWidth; // restart the shake on a quick second tap
-    label.dataset.nudge = 'true';
+    void fill.offsetWidth; // settle on the committed spot, so the drain transition starts there
+    fill.style.transform = '';
+    holdLabel(tap ? HOLD_WORDS.tap : HOLD_WORDS.letGo);
+    if (tap) {
+      const label = $('[data-role="confirm-label"]');
+      void label.offsetWidth; // restart the shake on a quick second tap
+      label.dataset.nudge = 'true';
+    }
     hold.nudge = setTimeout(resetHold, 1400);
   }
 
   // Screen readers, voice control and switches can't hold, so for them two presses confirm. Their
   // press is a click no pointer went down for: detail 0 in Chromium, detail 1 but no pointerdown
   // in Firefox. Mouse, pen and touch clicks always follow a pointerdown and still need the hold.
+  // Arming and its lapse are spoken, since only the button's name changes otherwise.
   function pressConfirm() {
-    if (!modal || hold.active) return;
+    if (!modal || hold.active || hold.sealed) return;
     if (modal.armed) { closeDialog(true); return; }
+    const live = $('[data-role="modal-live"]');
     modal.armed = setTimeout(() => {
       if (!modal) return;
       modal.armed = 0;
+      live.textContent = 'Disarmed. Nothing was purged.';
       if (!hold.active) resetHold();
     }, ARMED_MS);
+    live.textContent = `Armed — press again within ${ARMED_MS / 1000} seconds to purify, or Esc to cancel.`;
     resetHold();
   }
 
+  // Tab cycles Nevermind → Hold → the list of chats (to read it through) and back; from anywhere
+  // else in the dialog it starts at the safe choice.
   function trapFocus(e) {
     if (!modal || e.key !== 'Tab') return;
-    const items = [$('[data-act="cancel"]'), $('[data-act="confirm"]')];
-    const i = Math.max(-1, items.indexOf(root.activeElement));
+    const items = [$('[data-act="cancel"]'), $('[data-act="confirm"]'), $('.modal-list')].filter(Boolean);
+    const i = items.indexOf(root.activeElement);
     e.preventDefault();
-    items[(i + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
+    items[i < 0 ? 0 : (i + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
+  }
+
+  // The first-run card is modal too: Tab cycles its two buttons instead of wandering into Discord.
+  function trapWelcome(e) {
+    const w = $('[data-role="welcome"]');
+    if (w.hidden || w.dataset.leaving || e.key !== 'Tab') return;
+    const items = [$('[data-act="welcome-ok"]'), $('[data-act="welcome-batch"]')].filter(Boolean);
+    const i = items.indexOf(root.activeElement);
+    e.preventDefault();
+    items[i < 0 ? 0 : (i + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
   }
 
   // ── Terminal log ────────────────────────────────────────
@@ -1534,7 +2171,7 @@
     return [
       bannerLine('wake up, princess~'),
       bannerLine('loading heart.sys · dagger.dll'),
-      bannerLine(`immune list · ${immuneSummary()} ♡`),
+      bannerLine(`immune · ${immuneSummary()}`),
       bannerLine('♡ SYSTEM ONLINE ♡'),
       bannerLine('AWAITING ORDERS, PRINCESS~'),
       h('div', { class: 'line banner rule' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text: '♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡' })),
@@ -1563,11 +2200,12 @@
     $('[data-role="term-body"]').replaceChildren(...logBanner());
   }
 
-  function addLog(text, tone = 'info', { scrub } = {}) {
+  // wrap: a line worth reading whole (a link to copy) wraps instead of ending in an ellipsis.
+  function addLog(text, tone = 'info', { scrub, wrap = false } = {}) {
     const body = $('[data-role="term-body"]');
     const pinned = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
     const time = new Date().toTimeString().slice(0, 8);
-    const line = h('div', { class: `line ${tone}` },
+    const line = h('div', { class: `line ${tone}${wrap ? ' wrap' : ''}` },
       h('span', { class: 'line-time', text: time }),
       h('span', { class: 'line-pfx', text: LOG_PREFIX[tone] || '›' }),
       h('span', { class: 'line-msg', text }));
@@ -1580,37 +2218,70 @@
 
   function preview(msg, max = 56) {
     const text = (msg.content || '').replace(/\s+/g, ' ').trim();
-    if (!text) return msg.attachments && msg.attachments.length ? '[attachment]' : '[embed/sticker]';
+    if (!text) return msg.attachments && msg.attachments.length ? '[attachment]' : '[sticker or embed]';
     const chars = [...text];
     return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : text;
   }
 
+  // The log boots in and fades out the way it came; opening it again mid-fade keeps it.
+  let logExit = null;
+
   function toggleLog(force) {
     const term = $('.term');
-    const open = force != null ? force : term.hidden;
-    term.hidden = !open;
+    const isOpen = !term.hidden && !logExit;
+    const open = force != null ? force : !isOpen;
     $('[data-act="logs"]').setAttribute('aria-pressed', String(open));
-    $('[data-role="logs-label"]').textContent = 'Logs';
     if (open) {
-      placeTerminal();
-      term.dataset.boot = 'true';
-      setTimeout(() => { delete term.dataset.boot; }, 700);
+      if (logExit) {
+        logExit.cancel();
+        logExit = null;
+        delete term.dataset.leaving;
+      } else if (term.hidden) {
+        term.hidden = false;
+        placeTerminal();
+        term.dataset.boot = 'true';
+        setTimeout(() => { delete term.dataset.boot; }, 400);
+      }
       const body = $('[data-role="term-body"]');
       body.scrollTop = body.scrollHeight;
+    } else if (isOpen) {
+      term.dataset.leaving = 'true'; // clicks go through it to whatever is underneath
+      const exit = term.animate(reducedMotion() ? [{ opacity: 1 }, { opacity: 0 }]
+        : [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(4px) scale(.985)' }], { duration: 140, easing: 'cubic-bezier(.4,0,1,1)' });
+      logExit = exit;
+      exit.finished.then(() => {
+        if (logExit !== exit) return;
+        logExit = null;
+        delete term.dataset.leaving;
+        term.hidden = true;
+        applyFocus();
+      }, () => {});
     }
+    applyFocus();
   }
 
+  // The log sits beside the panel, on whichever side has room for it, and narrows to fit. With
+  // no room on either side it tucks behind the panel, so Pause and Stop always stay in reach.
   function placeTerminal() {
     const term = $('.term');
     if (term.hidden) return;
     const panel = $('.panel').getBoundingClientRect();
-    const w = term.offsetWidth || 380;
-    const hgt = term.offsetHeight || 420;
+    const hgt = term.offsetHeight || 440;
     const gap = 14;
-    let left = panel.left - w - gap;
-    if (left < 8) left = panel.right + gap;
-    if (left + w > innerWidth - 8) left = clamp(innerWidth - w - 8, 8, innerWidth);
+    const MIN = 280;
+    const roomL = panel.left - gap - 8;
+    const roomR = innerWidth - panel.right - gap - 8;
+    let w = Math.min(380, innerWidth - 16);
+    let left = 8;
+    if (roomL >= MIN) {
+      w = Math.min(380, roomL);
+      left = panel.left - gap - w;
+    } else if (roomR >= MIN) {
+      w = Math.min(380, roomR);
+      left = panel.right + gap;
+    }
     const top = clamp(panel.top, 8, Math.max(8, innerHeight - hgt - 8));
+    term.style.width = `${Math.round(w)}px`;
     term.style.left = `${Math.round(left)}px`;
     term.style.top = `${Math.round(top)}px`;
   }
@@ -1627,7 +2298,7 @@
 
   // ── Motion: springs, blood, confetti ────────────────────
 
-  const wob = { rot: new Spring(220, 16, 0), sx: new Spring(260, 15, 1), sy: new Spring(260, 15, 1), raf: 0, last: 0 };
+  const wob = { rot: new Spring(260, 24, 0), sx: new Spring(260, 15, 1), sy: new Spring(260, 15, 1), raf: 0, last: 0 };
 
   function animateWobble(now) {
     const dt = Math.min(0.032, (now - wob.last) / 1000 || 1 / 60);
@@ -1644,25 +2315,29 @@
     }
   }
 
-  function kick({ spin = 0, squash = 0, stretch = 0 } = {}) {
+  function kick({ spin = 0, squash = 0 } = {}) {
     if (reducedMotion()) return;
     wob.rot.velocity += spin;
-    wob.sx.velocity += stretch + squash;
-    wob.sy.velocity += -squash - stretch * 0.6;
+    wob.sx.velocity += squash;
+    wob.sy.velocity += -squash;
     if (!wob.raf) {
       wob.last = performance.now();
       wob.raf = requestAnimationFrame(animateWobble);
     }
   }
 
+  // Kills are the panel's only clock: each one pops the count, pings the live dot and brings the
+  // footer's new line in. Nothing else keeps time, so a wait or a stall is visibly still.
   function popCount() {
-    const el = $('[data-role="count"]');
-    if (reducedMotion() || !fxVisible()) return;
-    el.animate([
-      { transform: 'scale(1.07)', color: 'var(--rose-300)', textShadow: '0 0 22px rgba(255, 122, 169, .8)' },
-      { transform: 'scale(0.99)', offset: 0.6 },
+    if (!fxVisible()) return;
+    if (!run.paused && !run.stopping) $('[data-role="status-text"]').animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
+    if (reducedMotion()) return;
+    $('[data-role="count"]').animate([
+      { transform: 'scale(1.04)', color: 'var(--rose-300)', textShadow: '0 0 22px rgba(255, 122, 169, .8)' },
       { transform: 'none' },
-    ], { duration: 420, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    ], { duration: 300, easing: 'cubic-bezier(.22,1,.36,1)' });
+    $('.live-dot').animate([{ boxShadow: '0 0 0 0 rgba(255, 122, 169, .6)' }, { boxShadow: '0 0 0 6px rgba(255, 122, 169, 0)' }],
+      { duration: 600, easing: 'cubic-bezier(.22,1,.36,1)' });
   }
 
   // A couple of drops fall from just outside the ring's leading edge, clear of the number.
@@ -1694,7 +2369,7 @@
 
   // Confetti bursts outward from the ring's rim, so it frames the number instead of covering it.
   function celebrate() {
-    kick({ spin: (Math.random() - 0.5) * 24, squash: 0.8 });
+    kick({ squash: 0.35 }); // an exhale, not a jolt
     if (reducedMotion() || !fxVisible()) return;
     const fx = $('[data-role="burst"]');
     const box = fx.getBoundingClientRect();
@@ -1775,7 +2450,12 @@
       top = lifted;
       shell.style.top = `${Math.round(top)}px`;
     }
-    $('.panel').style.maxHeight = `${Math.max(240, innerHeight - top - 12)}px`;
+    const maxH = Math.max(240, innerHeight - top - 12);
+    $('.panel').style.maxHeight = `${maxH}px`;
+    // The height tier follows the real cap, and never reshapes under a drag. Natural heights: full
+    // 536, snug 460 and strip 344 px, plus 18 for a chat name on two lines.
+    const layer = $('[data-role="layer"]');
+    if (!layer.dataset.dragging) layer.dataset.fit = maxH >= 556 ? 'full' : maxH >= 482 ? 'snug' : 'strip';
     placeTerminal();
     placeOrb();
   }
@@ -1784,20 +2464,28 @@
     return { x: innerWidth - (panelSize().w || 360) - 20, y: 56 };
   }
 
+  // A drag begins after 3px of movement, so a click on the header never jiggles the panel or moves
+  // its remembered spot. The tilt follows the hand gently; on release the spring swings back through
+  // rest on its own.
   function makeDraggable() {
     const handle = $('[data-role="drag"]');
+    const layer = $('[data-role="layer"]');
     let drag = null;
     handle.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.target.closest('button')) return;
       const shell = $('[data-role="shell"]');
-      drag = { id: e.pointerId, dx: e.clientX - shell.offsetLeft, dy: e.clientY - shell.offsetTop, lastX: e.clientX, vx: 0, t: performance.now() };
+      drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: e.clientX - shell.offsetLeft, dy: e.clientY - shell.offsetTop, lastX: e.clientX, vx: 0, t: performance.now(), moved: false };
       handle.setPointerCapture(e.pointerId);
-      $('[data-role="layer"]').dataset.dragging = 'true';
-      kick({ squash: -0.35 });
       e.preventDefault();
     });
     handle.addEventListener('pointermove', (e) => {
       if (!drag || e.pointerId !== drag.id) return;
+      if (!drag.moved) {
+        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 3) return;
+        drag.moved = true;
+        layer.dataset.dragging = 'true';
+        kick({ squash: -0.2 });
+      }
       const now = performance.now();
       const dt = Math.max(1, now - drag.t);
       drag.vx = drag.vx * 0.6 + ((e.clientX - drag.lastX) / dt) * 16 * 0.4;
@@ -1805,16 +2493,19 @@
       drag.t = now;
       placeShell(e.clientX - drag.dx, e.clientY - drag.dy, { remember: true });
       if (!reducedMotion()) {
-        wob.rot.target = clamp(drag.vx * 0.35, -7, 7);
+        wob.rot.target = clamp(drag.vx * 0.25, -3.5, 3.5);
         kick();
       }
     });
     const end = (e) => {
       if (!drag || e.pointerId !== drag.id) return;
-      wob.rot.target = 0;
-      kick({ spin: clamp(drag.vx * 1.8, -40, 40), squash: Math.min(0.6, Math.abs(drag.vx) * 0.02) });
+      const { moved, vx } = drag;
       drag = null;
-      delete $('[data-role="layer"]').dataset.dragging;
+      if (!moved) return;
+      wob.rot.target = 0;
+      kick({ squash: Math.min(0.25, Math.abs(vx) * 0.01) });
+      delete layer.dataset.dragging;
+      layoutPanel(); // the height tier waited for the drop
       savePrefs('x', 'y');
     };
     handle.addEventListener('pointerup', end);
@@ -1830,43 +2521,81 @@
     orb.style.top = `${Math.round(clamp(parseFloat(shell.style.top) || 56, 8, innerHeight - 60))}px`;
   }
 
+  // Minimising folds the panel into the orb along one path, and restoring plays it back; a click
+  // mid-way reverses what is running instead of starting over. With reduced motion the two
+  // cross-fade in place.
+  const DRAWER = 'cubic-bezier(.32, .72, 0, 1)';
+  let fold = null; // { open, anims }: the fold in flight, settled when its last animation ends
+
+  function foldAnimations(open, panel, orb) {
+    if (reducedMotion()) {
+      const fade = { duration: 150, easing: 'ease-out', fill: 'both' };
+      return [panel.animate([{ opacity: open ? 0 : 1 }, { opacity: open ? 1 : 0 }], fade),
+        orb.animate([{ opacity: open ? 1 : 0 }, { opacity: open ? 0 : 1 }], fade)];
+    }
+    // The panel shrinks into the orb's centre on the drawer curve, while its opacity follows the
+    // clock: it holds for the first 35 % of the way, so the orb has appeared before it has gone.
+    const pr = panel.getBoundingClientRect();
+    const transformOrigin = `${parseFloat(orb.style.left) + 30 - pr.left}px ${parseFloat(orb.style.top) + 30 - pr.top}px`;
+    const small = { transform: `scale(${(60 / pr.width).toFixed(3)})`, transformOrigin };
+    const whole = { transform: 'none', transformOrigin };
+    if (open) {
+      return [panel.animate([small, whole], { duration: 320, easing: DRAWER, fill: 'both' }),
+        panel.animate([{ opacity: 0 }, { opacity: 1, offset: 0.65 }, { opacity: 1 }], { duration: 320, fill: 'both' }),
+        orb.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: 'ease-out', fill: 'both' })];
+    }
+    return [orb.animate([{ transform: 'scale(.8)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 200, delay: 120, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'both' }),
+      panel.animate([whole, small], { duration: 260, easing: DRAWER, fill: 'both' }),
+      panel.animate([{ opacity: 1 }, { opacity: 1, offset: 0.35 }, { opacity: 0 }], { duration: 260, fill: 'both' })];
+  }
+
   function setOpen(open, { initial = false } = {}) {
     prefs.open = open;
     if (!initial) savePrefs('open');
     const shell = $('[data-role="shell"]');
     const orb = $('.orb');
     const layer = $('[data-role="layer"]');
+    if (fold) {
+      if (fold.open !== open) {
+        fold.open = open;
+        for (const a of fold.anims) a.reverse();
+      }
+      return;
+    }
+    const settle = () => {
+      const now = fold ? fold.open : open;
+      if (fold) for (const a of fold.anims) a.cancel();
+      fold = null;
+      shell.hidden = !now;
+      orb.hidden = now;
+      layer.dataset.open = String(now);
+      applyFocus();
+    };
     if (open) {
       state.orbDone = null;
       shell.hidden = false;
-      orb.hidden = true;
-      layer.dataset.open = 'true';
       const home = homePosition();
       placeShell(home.x, home.y);
-      if (!initial && !reducedMotion()) {
-        $('.panel').animate([
-          { transform: 'translate(24px, -12px) scale(0.6)', opacity: 0, transformOrigin: '90% 0' },
-          { transform: 'none', opacity: 1, transformOrigin: '90% 0' },
-        ], { duration: 420, easing: 'cubic-bezier(.2,1.25,.3,1)' });
-        kick({ spin: (Math.random() - 0.5) * 12 });
-      }
+      applyFocus();
     } else {
+      cancelCount();
       placeOrb();
       toggleLog(false);
-      const finish = () => { shell.hidden = true; orb.hidden = false; layer.dataset.open = 'false'; };
-      if (initial || reducedMotion()) { finish(); return; }
-      $('.panel').animate([
-        { transform: 'none', opacity: 1, transformOrigin: '90% 0' },
-        { transform: 'translate(24px, -12px) scale(0.6)', opacity: 0, transformOrigin: '90% 0' },
-      ], { duration: 220, easing: 'cubic-bezier(.4,0,1,1)' }).finished.then(finish, finish);
     }
+    if (initial) { settle(); return; }
+    shell.hidden = false;
+    orb.hidden = false;
+    // The first animation is the one that ends last, either way round.
+    fold = { open, anims: foldAnimations(open, $('.panel'), orb) };
+    fold.anims[0].onfinish = settle;
   }
 
   function renderMute() {
     const btn = $('[data-act="mute"]');
     btn.replaceChildren(icon(prefs.muted ? 'muted' : 'sound'));
-    btn.setAttribute('aria-label', prefs.muted ? 'Unmute sound' : 'Mute sound');
+    // A toggle keeps one name; aria-pressed says which way it is.
     btn.setAttribute('aria-pressed', String(prefs.muted));
+    btn.title = prefs.muted ? 'Unmute sound' : 'Mute sound';
   }
 
   // ── Welcome & share ─────────────────────────────────────
@@ -1881,12 +2610,17 @@
     if (document.activeElement === document.body) $('[data-act="welcome-ok"]').focus({ preventScroll: true });
   }
 
+  // The card is gone for focus and clicks at once; it only fades for the eye, as it came in.
   function hideWelcome() {
     const w = $('[data-role="welcome"]');
-    const hadFocus = w.contains(root.activeElement);
-    w.hidden = true;
+    if (w.hidden || w.dataset.leaving) return;
+    if (w.contains(root.activeElement)) handFocus('.tab[aria-selected="true"]');
     for (const el of underWelcome()) el.inert = false;
-    if (hadFocus) $('.tab[aria-selected="true"]').focus();
+    w.dataset.leaving = 'true';
+    w.inert = true;
+    applyFocus();
+    const gone = () => { w.hidden = true; w.inert = false; delete w.dataset.leaving; };
+    w.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-out' }).finished.then(gone, gone);
     prefs.welcomed = true;
     savePrefs('welcomed');
   }
@@ -1895,19 +2629,25 @@
     const text = `Dopa's Discord Purifier — wipe your own Discord messages in a few clicks~ ✨ ${SHARE_URL}`;
     try {
       await navigator.clipboard.writeText(text);
-      setStatus('Install link copied~ send it to a friend ♡', 'success');
+      addLog(`share link: ${SHARE_URL}`, 'info');
+      setStatus('Install link copied~ send it to a friend', 'success', { flair: '♡' });
     } catch {
-      setStatus(`Share this link~ ${SHARE_URL}`, 'info');
+      // Discord can lock the clipboard: the link waits in the log, whole, to select and copy.
+      addLog(`share link: ${SHARE_URL}`, 'info', { wrap: true });
+      setStatus("Couldn't copy~ the link is waiting in Logs", 'info', { flair: '♡' });
+      toggleLog(true);
     }
-    addLog(`share link: ${SHARE_URL}`, 'info');
   }
 
   // ── Run events → UI ─────────────────────────────────────
 
+  // The last look over a counted chat, after its last message went: the card says so.
+  const lastLook = () => run.active && !run.paused && state.runMode === 'current' && verifying();
+
   function wireRunEvents() {
     on('start', ({ targets }) => {
       $('[data-role="count"]').textContent = '0';
-      setStatus(targets.length > 1 ? `Batch purge starting~ ${plural(targets.length, 'chat')} ✨` : `Purging ${targets[0].name}~ ✨`, 'info');
+      setStatus(targets.length > 1 ? `Starting on ${plural(targets.length, 'chat')}~` : `Purging \u2068${targets[0].name}\u2069~`, 'info', { flair: '✨' });
       for (const t of targets) addLog(`queued: ${t.label || t.name}`, 'info');
       renderCurrent();
       renderActions();
@@ -1915,16 +2655,17 @@
     on('target-start', ({ target, index, count }) => {
       setPrompt(`purge ${target.name}`);
       addLog(`── Starting: ${target.label || target.name} ──`, 'info');
-      if (count > 1) setStatus(`Batch ${index + 1}/${count}: ${target.label || target.name}`, 'info');
+      if (count > 1) setStatus(`Chat ${index + 1} of ${count} · \u2068${target.name}\u2069`, 'info');
       if (target.row) setRowState(target, 'running');
+      revealRow(target);
     });
     on('dm-opened', ({ target, previousKey }) => {
       if (target.row) rekeyRow(target, previousKey);
-      addLog(`opened a DM with ${target.name} 💬`, 'info');
+      addLog(`opened a DM with ${target.name}`, 'info');
     });
     on('progress', (p) => {
       renderProgress(p);
-
+      if (lastLook() !== $('[data-role="target"]').hasAttribute('data-checking')) renderCurrent();
     });
     on('kill', ({ target, msg }) => {
       ring.done++;
@@ -1932,15 +2673,20 @@
       popCount();
       bleed();
       addLog(`Deleted: "${preview(msg)}"`, 'success', { scrub: `Deleted ✓ ${target.name}` });
-      if (!run.paused && !run.stopping) setStatus(`Deleted "${preview(msg, 34)}" ♡`, 'info', { quiet: true });
+      if (!run.paused && !run.stopping) {
+        if (state.runMode === 'batch') {
+          const i = state.runTargets.indexOf(target) + 1;
+          setStatus(`Chat ${i} of ${state.runTargets.length} · \u2068${target.name}\u2069 · ${target.deleted.toLocaleString()} of ${target.planned ? target.planned.toLocaleString() : '?'}`, 'info', { quiet: true });
+        } else setStatus(`Deleted "${preview(msg, 34)}"`, 'info', { quiet: true, flair: '♡' });
+      }
       if (target.row) setRowState(target, 'running');
     });
     on('fail', ({ target, msg, reason }) => {
       ring.fails.push(ring.done);
       ring.done++;
       const tags = [msg.pinned && 'pinned', msg.type && msg.type !== 0 && msg.type !== 19 && 'system'].filter(Boolean);
-      addLog(`FAILED${tags.length ? ` (${tags.join(', ')})` : ''}: "${preview(msg)}" — ${reason}`, 'error');
-      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}" — ${shortReason(reason)}`, 'warn', { quiet: true });
+      addLog(`FAILED · ${shortReason(reason)}${tags.length ? ` · ${tags.join(', ')}` : ''} · "${preview(msg, 40)}"`, 'error');
+      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}" · ${shortReason(reason)}`, 'warn', { quiet: true });
       if (target.row) setRowState(target, 'running');
     });
     on('gone', ({ msg }) => {
@@ -1949,8 +2695,10 @@
     });
     on('account-changed', () => {
       if (modal) closeDialog(false);
+      cancelCount();
+      // A run the switch stopped keeps its verdict on screen; anything else was the old account's.
       const keepVerdict = lastEnd && lastEnd.error;
-      lastEnd = null;
+      if (!keepVerdict) lastEnd = null;
       state.selected.clear();
       state.batchRows.clear();
       state.dmsLoaded = false;
@@ -1960,48 +2708,54 @@
       state.dmsLoading = false;
       state.guildsLoading = false;
       state.route = null;
-      $('[data-role="dm-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Loading DMs & friends… 💬' }));
-      $('[data-role="server-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Loading servers… 🏰' }));
+      $('[data-role="dm-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your DMs…' }));
+      $('[data-role="server-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your servers…' }));
       addLog('switched Discord accounts — counts and lists reset', 'warn');
-      if (!keepVerdict) setStatus('New account~ counts cleared 🔄', 'warn');
+      if (!keepVerdict) setStatus('Switched Discord accounts~ scan again to count', 'warn');
       if (state.tab === 'batch' && !run.active) { loadDMs(); loadServers({ refresh: true }); }
       // Re-read the chat without a fresh "Ready~": the switch notice (or the stopped run's error) stays.
       setTimeout(() => refreshRoute({ keepScan: true, keepStatus: true }), 0);
     });
     on('skip', ({ msg }) => addLog(`skipped a system message (type ${msg.type}) — Discord won't delete those`, 'skip'));
     on('wait', (w) => {
-      setStatus(waitText(w), 'warn');
+      showWait(w);
       addLog(waitText(w), 'warn');
     });
     on('log', ({ text, tone }) => addLog(text, tone));
     on('target-end', ({ target, ok, error, immune, midway, stopped, warn }) => {
-      if (immune) addLog(midway ? `${target.name} was shielded in another tab 👑 — stopped purging there` : `${target.name} is immune 👑 — skipped`, 'warn');
+      if (immune) addLog(midway ? `${target.name} was shielded in another tab — stopped purging there` : `${target.name} is immune — skipped`, 'warn');
       else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${(target.deleted || 0).toLocaleString()} purged) ──`, 'info');
       if (target.row) setRowState(target, immune ? 'immune' : ok ? 'done' : warn ? 'partial' : stopped ? 'stopped' : 'error', error || warn);
     });
+    // What the person chose, and the run's own pace, are calm: no alarm badge.
     on('pause', (p) => {
-      setStatus(`Paused~ ${p.deleted.toLocaleString()} purged so far`, 'warn');
+      setStatus(`Paused~ ${p.deleted.toLocaleString()} purged so far`, 'calm');
       renderCurrent();
       renderActions();
     });
     on('resume', () => {
-      setStatus('Resumed! Purging~ ✨', 'info');
+      setStatus('Purging again~', 'info', { flair: '✨' });
       renderCurrent();
       renderActions();
     });
     on('stopping', () => {
-      setStatus('Stopping after this one~ 🛑', 'warn');
+      setStatus('Stopping after this one~', 'calm');
       renderActions();
     });
+    // Each ending is said once: the readout gives the verdict, the footer confirms it or names the
+    // next step, and the mood (renderHero) is the personality.
     on('end', (p) => {
+      const fromRun = $('[data-role="run-actions"]').contains(root.activeElement);
       setPrompt('');
       for (const t of state.runTargets) if (t.row && (t.status === 'queued' || t.status === 'running')) setRowState(t, 'stopped');
       addLog('────────────────────', 'info');
+      if (p.error) addLog(`STOPPED · ${plainError(p).short}`, 'error');
+      else if (p.stopped) addLog('STOPPED by you · nothing after this point was touched', 'warn');
       addLog(`SUMMARY: ${p.deleted.toLocaleString()} purged, ${p.failed.toLocaleString()} failed${p.skipped ? `, ${p.skipped} system skipped` : ''}`, 'info');
       if (p.failures.length) {
         addLog('FAILED MESSAGES:', 'error');
         const shown = p.failures.slice(0, 50);
-        shown.forEach((f, i) => addLog(`${i + 1}. "${preview(f.msg)}"${f.msg.pinned ? ' [PINNED]' : ''} — ${f.reason}`, 'error'));
+        shown.forEach((f, i) => addLog(`${i + 1}. ${shortReason(f.reason)}${f.msg.pinned ? ' · pinned' : ''} · "${preview(f.msg, 40)}"`, 'error'));
         if (p.failures.length > shown.length) addLog(`…and ${(p.failures.length - shown.length).toLocaleString()} more`, 'error');
       }
       scrubLog();
@@ -2009,38 +2763,57 @@
       const purged = plural(p.deleted, 'message');
       const problems = p.problems || [];
       const shielded = p.shielded || [];
+      const key = state.runKey;
       if (problems.length) {
         addLog(`NEEDS ANOTHER LOOK: ${problems.map((x) => `${x.target.name} (${shortReason(x.reason)})`).join(', ')}`, 'warn');
       }
       if (p.error) {
-        setStatus(`Error: ${p.error} 😿`, 'error');
-        lastEnd = { key: state.runKey, text: `Stopped by an error~ ${purged} purged`, tone: 'error', error: true };
+        const plain = plainError(p);
+        if (plain.code === 'switched') {
+          setStatus('Stopped to be safe~ you switched Discord accounts', 'warn');
+          lastEnd = { key, text: `Stopped to be safe~ you switched accounts · ${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'error', error: plain.code };
+        } else {
+          // A purge that broke off carries on with Purify; Try again is This chat's way to count.
+          setStatus(plain.short, 'error');
+          lastEnd = { key, text: plain.line.replace(/press Try again$/, 'press Purify to finish'), tone: 'error', error: plain.code };
+        }
       } else if (p.stopped) {
-        setStatus(`Stopped! Purged: ${p.deleted.toLocaleString()} | Failed: ${p.failed.toLocaleString()} 🛑`, 'warn');
-        lastEnd = { key: state.runKey, text: `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
+        const handled = p.deleted + p.failed + (p.gone || 0);
+        setStatus('Stopped~ Purify picks up the rest', 'calm');
+        lastEnd = { key, text: p.total > 0 && !p.partial ? `Stopped at ${handled.toLocaleString()} of ${p.total.toLocaleString()}~` : `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
       } else if (problems.length) {
         const n = problems.length;
         const indexingOnly = problems.every((x) => /indexing/i.test(x.reason));
-        setStatus(`${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go~ see logs`, 'warn');
-        lastEnd = { key: state.runKey, text: indexingOnly ? `Purged ${purged} · run again later for older ones` : `Purged ${purged} · ${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
+        setStatus(indexingOnly ? `${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go later~ Discord is still indexing`
+          : `${plural(n, 'chat')} skipped · ${shortReason(problems[0].reason)}${n > 1 ? ' and more' : ''} · see Logs`, 'warn');
+        lastEnd = { key, text: indexingOnly ? `Purged ${purged} · run again later for older ones` : `Purged ${purged} · ${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
       } else if (shielded.length) {
         // Shielded from another tab mid-purge: what's left there stays on purpose, so no "all clean".
-        const who = shielded.length === 1 ? shielded[0] : plural(shielded.length, 'chat');
-        setStatus(`Done~ ${who} stays shielded 🛡`, 'immune');
-        lastEnd = { key: state.runKey, text: `Purged ${purged} · ${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
+        const who = shielded.length === 1 ? `\u2068${shielded[0]}\u2069` : plural(shielded.length, 'chat');
+        setStatus(`Done~ ${who} stays shielded`, 'immune');
+        lastEnd = { key, text: `Purged ${purged} · ${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
       } else if (p.failed) {
-        setStatus(`Done~ ${p.failed.toLocaleString()} wouldn't go · see logs`, 'warn');
-        lastEnd = { key: state.runKey, text: `Purged ${purged} · ${p.failed.toLocaleString()} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
+        setStatus(`Done~ ${p.failed.toLocaleString()} wouldn't go · reasons in Logs`, 'warn');
+        lastEnd = { key, text: `Purged ${p.deleted.toLocaleString()} · ${p.failed.toLocaleString()} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
         if (p.deleted > 0) celebrate();
+      } else if (p.deleted) {
+        setStatus(`Done in ${formatDuration(p.elapsedMs / 1000)} · 0 failed`, 'success', { flair: '♡' });
+        lastEnd = { key, text: 'All clean~ nothing left of you here', flair: '✨', tone: 'cheer', sticker: 'flawless~' };
+        celebrate();
       } else {
-        setStatus(`Done in ${formatDuration((p.deleted + p.failed + (p.gone || 0)) / Math.max(p.rate, 0.01))} · 0 failed · ${p.rate.toFixed(1)}/s`, 'success');
-        lastEnd = { key: state.runKey, text: p.deleted ? `All clean! Purged ${purged}~ ✨🎉` : 'All clear! Nothing to purge~ ✨', tone: 'cheer', sticker: p.deleted ? 'flawless~' : '' };
-        if (p.deleted > 0) celebrate();
+        setStatus('Done~ nothing of yours was here', 'success');
+        lastEnd = { key, text: 'All clear~ nothing to purge here', flair: '✨', tone: 'clear' };
       }
       // Minimised through the finish line: the orb carries the outcome until reopened.
-      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd ? lastEnd.tone : 'warn' } : null;
+      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd.tone } : null;
+      if (state.runMode === 'batch') settleBatchSelection();
       renderCurrent();
       renderActions();
+      // Focus on Pause or Stop moves on to the next thing to press once they go.
+      if (fromRun) {
+        focusNext = ['[data-act="scan"]', '[data-act="go-batch"]'].find((sel) => !$(sel).hidden && !$(sel).disabled) || '.tab[aria-selected="true"]';
+        applyFocus();
+      }
       if (state.tab === 'batch') loadPendingLists();
     });
     on('end', () => {
@@ -2048,10 +2821,10 @@
       protectionStale = false;
       protectionChanged({ keepVerdict: true });
     });
+    on('start', resetMilestones);
+    on('progress', speakProgress);
   }
 
-  // Lists can't be (re)built mid-run or mid-scan; build them as soon as that ends. A list
-  // still loading is left to finish, so navigating through an outage doesn't stack requests.
   function loadPendingLists() {
     if (run.active || state.scanning) return;
     if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
@@ -2065,17 +2838,19 @@
   const ACTIONS = {
     scan: () => (state.scanning ? cancelScan() : state.tab !== 'current' ? scanSelected() : describeFailed() ? refreshRoute() : scanCurrent()),
     purify: () => (state.tab === 'current' ? askPurgeCurrent() : askPurgeSelected()),
-    pause: pauseRun,
-    resume: resumeRun,
+    // Focus follows the work: the control that takes over from the one that goes gets focus.
+    pause: () => { handFocus('[data-act="resume"]'); pauseRun(); },
+    resume: () => { handFocus('[data-act="pause"]'); resumeRun(); },
     stop: stopRun,
     logs: () => toggleLog(),
-    'close-log': () => toggleLog(false),
+    'close-log': () => { handFocus('[data-act="logs"]'); toggleLog(false); },
     'copy-log': copyLog,
-    minimize: () => setOpen(false),
+    minimize: () => { handFocus('.orb'); setOpen(false); },
     share: () => shareLink(),
     'welcome-ok': () => hideWelcome(),
     'welcome-batch': () => { switchTab('batch'); hideWelcome(); },
-    restore: () => setOpen(true),
+    'go-batch': () => { handFocus('.tab[data-tab="batch"]'); switchTab('batch'); },
+    restore: () => { handFocus('[data-act="minimize"]'); setOpen(true); },
     mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); },
     poke: () => {
       kick({ spin: (Math.random() - 0.5) * 26, squash: 0.7 });
@@ -2089,13 +2864,23 @@
     'server-refresh': () => loadServers({ refresh: true }),
   };
 
+  // Esc closes what focus is in (the dialog's own Esc goes first): the log hands focus back to
+  // Logs, and the welcome card goes as if dismissed.
+  function escapeFrom(el) {
+    if (!el) return;
+    if (el.closest('.term')) {
+      handFocus('[data-act="logs"]');
+      toggleLog(false);
+    } else if (el.closest('[data-role="welcome"]')) hideWelcome();
+  }
+
   function wire() {
     const layer = $('[data-role="layer"]');
     layer.addEventListener('click', (e) => {
       const tab = e.target.closest('.tab');
       if (tab) { switchTab(tab.dataset.tab); return; }
       const btn = e.target.closest('[data-act]');
-      if (!btn || btn.disabled) return;
+      if (!btn || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
       if (btn.dataset.act === 'confirm') {
         const assistive = e.detail === 0 || !hold.pointer;
         hold.pointer = false;
@@ -2107,10 +2892,12 @@
       const fn = ACTIONS[btn.dataset.act];
       if (fn) fn();
     });
-    // Tab keyboard model: arrows move between tabs.
+    // Tab keyboard model: arrows move between the two tabs; Home and End go to the first and last.
     $('.tabs').addEventListener('keydown', (e) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      const next = state.tab === 'current' ? 'batch' : 'current';
+      const next = e.key === 'Home' ? 'current' : e.key === 'End' ? 'batch'
+        : e.key === 'ArrowLeft' || e.key === 'ArrowRight' ? (state.tab === 'current' ? 'batch' : 'current') : null;
+      if (!next) return;
+      e.preventDefault();
       switchTab(next);
       $(`.tab[data-tab="${next}"]`).focus();
     });
@@ -2122,38 +2909,60 @@
       beginHold();
     });
     // Capture keeps a release anywhere reaching endHold; sliding off (even onto Nevermind) lets go.
+    // A mouse is exact; a finger or pen may wander SLOP_PX. Letting go this way says so, and coming
+    // back never resumes: a fresh press starts from empty.
     confirmBtn.addEventListener('pointermove', (e) => {
       if (!hold.active) return;
       const r = confirmBtn.getBoundingClientRect();
-      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) resetHold();
+      const slop = e.pointerType === 'mouse' ? 0 : SLOP_PX;
+      if (e.clientX < r.left - slop || e.clientX > r.right + slop || e.clientY < r.top - slop || e.clientY > r.bottom + slop) endHold();
     });
     confirmBtn.addEventListener('pointerup', endHold);
     confirmBtn.addEventListener('pointercancel', endHold);
     confirmBtn.addEventListener('keydown', (e) => {
       if (e.key !== ' ' && e.key !== 'Enter') return;
       e.preventDefault(); // repeats too: a held key must never turn into bare clicks
-      if (!e.repeat) beginHold();
+      if (e.repeat) return;
+      beginHold();
+      if (hold.active) hold.key = e.key;
     });
-    confirmBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(); });
+    confirmBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(e); });
     confirmBtn.addEventListener('blur', endHold);
     listen(document, 'visibilitychange', () => { if (document.hidden) endHold(); });
+    // A key still held when the dialog goes (a finished hold, or Esc) belongs to that hold: its
+    // repeats and its release must not press whatever focus moved to (Pause, or Purify again).
+    for (const type of ['keydown', 'keypress', 'keyup']) {
+      listen(document, type, (e) => {
+        if (!hold.key || e.key !== hold.key) return;
+        if (!modal) { e.preventDefault(); e.stopPropagation(); }
+        if (type === 'keyup') hold.key = null;
+      }, true);
+    }
+    listen(window, 'blur', () => { hold.key = null; }); // its release happened somewhere else
     // Esc keeps you safe even if focus wandered out of the dialog.
     listen(document, 'keydown', (e) => {
       if (modal && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeDialog(false); }
     }, true);
     root.addEventListener('keydown', (e) => {
       if (modal && e.key === 'Escape') { e.preventDefault(); closeDialog(false); }
+      else if (e.key === 'Escape') escapeFrom(root.activeElement);
       trapFocus(e);
+      trapWelcome(e);
     });
-    $('.modal-layer').addEventListener('pointerdown', (e) => {
+    const modalLayer = $('.modal-layer');
+    modalLayer.addEventListener('pointerdown', (e) => {
       if (!modal) return;
-      if (e.target.classList.contains('modal-layer')) {
+      if (e.target === modalLayer && e.offsetX >= modalLayer.clientWidth) return; // its scrollbar, not the backdrop
+      if (e.target === modalLayer) {
         if (performance.now() - modal.openedAt > 350) closeDialog(false); // ignore the second half of a double-click
       } else if (!e.target.closest('button')) {
         $('.modal').focus(); // keep focus (and Esc/Tab) inside the dialog
       }
     });
     $('[data-role="filter"]').addEventListener('input', (e) => { state.filter = e.target.value; applyFilter(); });
+    for (const type of ['wheel', 'pointerdown', 'keydown']) {
+      $('[data-role="body"]').addEventListener(type, () => { lastUserScroll = performance.now(); }, { passive: true });
+    }
     listen(window, 'resize', () => {
       const home = homePosition();
       placeShell(home.x, home.y);
@@ -2173,7 +2982,8 @@
     wire();
     renderMute();
     clearLog();
-    switchTab(prefs.tab, { initial: true });
+    // Opened on a chat, the panel opens on that chat; elsewhere it remembers the last tab.
+    switchTab(routeTarget() ? 'current' : prefs.tab, { initial: true });
     const pos = homePosition();
     placeShell(pos.x, pos.y);
     setOpen(prefs.open, { initial: true });
@@ -2211,11 +3021,12 @@
       run.controller.abort();
     }
     if (state.scanAbort) state.scanAbort.abort();
+    clearInterval(waitTick);
     for (const undo of disposers.splice(0)) {
       try { undo(); } catch { /* already gone */ }
     }
     cancelAnimationFrame(wob.raf);
-    cancelAnimationFrame(hold.raf);
+    clearTimeout(hold.timer);
     clearTimeout(dialogTimer);
     flushPrefs();
     if (sound.ctx) sound.ctx.close().catch(() => {});

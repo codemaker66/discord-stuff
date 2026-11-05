@@ -23,10 +23,10 @@ and asks before updating itself.
 
 ## What it does
 
-- **Scan** any chat to see how many of your messages are in it and how long a purge takes.
+- **Open a chat, press Purify** — it counts your messages first, so the confirm says exactly how many.
 - **Hold to purify** — no accidental clicks.
-- **Batch**: tick DMs, groups and server channels (threads and forum posts included), then purge them in one go.
-- **Shield** anyone and their chat is immune. Bardo is shielded from the start ♡
+- **Many chats**: tick DMs, groups and server channels (threads and forum posts included), then purge them in one go.
+- **Shield** anyone and their chat is immune. Bardo and Dopa are shielded from the start ♡
 - Paces itself to Discord's rate limits (about 40 messages a minute), pauses and resumes,
   and tells you honestly what was skipped.
 
