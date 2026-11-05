@@ -69,7 +69,7 @@
   .brand { display: flex; align-items: center; gap: 14px; }
   .brand img { width: 64px; height: 64px; border-radius: 20px; box-shadow: 0 0 0 1px rgba(255, 122, 169, .4), 0 14px 32px -12px rgba(255, 90, 150, .7); }
   .brand span { font: 700 13px/1.2 var(--font); letter-spacing: .14em; text-transform: uppercase; color: var(--rose-300); }
-  h1 { margin: 22px 0 14px; font: 800 clamp(40px, 5.4vw, 58px)/1.02 var(--font); letter-spacing: -.035em; text-wrap: balance; }
+  h1 { margin: 22px 0 14px; font: 800 clamp(34px, 4.4vw, 52px)/1.04 var(--font); letter-spacing: -.035em; text-wrap: balance; }
   h1 em { font-style: normal; color: var(--rose-300); }
   .lead { margin: 0; max-width: 34ch; font-size: 19px; color: var(--t2); }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
@@ -162,7 +162,8 @@
 
   /* desktop + faq */
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .panel { display: flex; flex-direction: column; padding: 24px; border-radius: 22px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
+  .panel { min-width: 0; display: flex; flex-direction: column; padding: 24px; border-radius: 22px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
+  .panel p, .panel li, .panel h3 { overflow-wrap: anywhere; }
   .panel > .btn { margin-top: auto; align-self: flex-start; }
   .panel h3 { margin: 0 0 8px; font: 700 19px/1.3 var(--font); }
   .panel p, .panel li { color: var(--t2); font-size: 15px; }
@@ -521,7 +522,14 @@
     $('.meta').insertAdjacentHTML('beforeend', ` · <span class="nb">Safari's helper app costs $2.99</span>`);
     $('#install .sub').append(' On Safari it costs $2.99; Chrome, Edge and Firefox are free.');
   }
-  $('.trust a[href="#faq-safe"]').addEventListener('click', () => { $('#faq-safe').open = true; });
+  $('.trust a[href="#faq-safe"]').addEventListener('click', (e) => {
+    // Open first, then scroll the expanded answer to the top — opening mid-jump would move the target.
+    e.preventDefault();
+    const d = $('#faq-safe');
+    d.open = true;
+    d.scrollIntoView({ block: 'start', behavior: 'instant' }); // a far jump reads better snapped than smooth-scrolled
+    try { history.replaceState(null, '', '#faq-safe'); } catch {}
+  });
 
   // Phones read "use your computer" first, and the rose button lands right on that note. The computer
   // steps wait behind a button, except on Firefox for Android, which really can run it.

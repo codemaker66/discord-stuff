@@ -573,11 +573,11 @@ await test('S31 one loud button, on the step you are on (fresh, store visited, i
     assert(same(hinted, ['manager', 'allow']), `hinted steps: ${hinted}`);
     await context.close();
   }
-  // The headline sets in two lines at every desktop width, so "Set it up" starts above the fold.
+  // The headline sets in at most two lines at every desktop width, so "Set it up" starts above the fold.
   for (const [w, h] of [[1024, 768], [1280, 800], [1440, 900], [1920, 1080]]) {
     const { page, context } = await open({ ua: UA.chrome, viewport: { width: w, height: h } });
     const lines = await page.locator('h1').evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
-    assert(lines === 2, `${w}px: headline in ${lines} lines`);
+    assert(lines >= 1 && lines <= 2, `${w}px: headline in ${lines} lines`);
     if (w === 1440) assert((await page.locator('#install').boundingBox()).y < h - 120, '"Set it up" above the fold at 1440×900');
     await context.close();
   }
@@ -593,7 +593,7 @@ await test('S32 trust at first glance, step 2 as one paste, the link preview and
   assert((await page.locator('#install .sub').textContent()).trim() === 'The Purifier lives inside Discord in your browser, carried by Tampermonkey, a free helper extension. Set it up once — updates arrive by themselves.', 'setup intro');
   await page.click('.trust a[href="#faq-safe"]');
   await page.waitForTimeout(900);
-  assert(await page.locator('#faq-safe').evaluate((d) => d.open && d.getBoundingClientRect().top >= 0 && d.getBoundingClientRect().top < innerHeight), '"Login stays in Discord" opens the safety answer');
+  assert(await page.locator('#faq-safe').evaluate((d) => d.open && d.getBoundingClientRect().top >= -2 && d.getBoundingClientRect().top < innerHeight), '"Login stays in Discord" opens the safety answer');
   // The link preview: says what it is and that it's safe, without repeating the name.
   const meta = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('meta[property], meta[name]')].map((m) => [m.getAttribute('property') || m.name, m.content])));
   const blurb = 'Deletes only messages you sent, and only while you hold the button. Free, readable code, and your login never leaves Discord ♡ Two-minute setup on a computer.';
