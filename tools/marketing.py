@@ -148,7 +148,7 @@ def main(shots, img):
     draw.text((72, 312), 'Purifier', font=font('bold', 64), fill=(255, 160, 194))
     draw.text((72, 410), 'Wipe your own messages from any', font=font('medium', 30), fill=(207, 179, 193))
     draw.text((72, 450), 'DM, group or server — in a few clicks~', font=font('medium', 30), fill=(207, 179, 193))
-    draw.text((72, 520), 'Free  ·  runs in your browser  ·  open source', font=font('medium', 24), fill=(160, 131, 147))
+    draw.text((72, 520), 'Free  ·  runs in your browser  ·  only your messages', font=font('medium', 24), fill=(160, 131, 147))
     info = PngImagePlugin.PngInfo()
     info.add_text('Description', stamp)
     og.save(img / 'og.png', 'PNG', optimize=True, pnginfo=info)
