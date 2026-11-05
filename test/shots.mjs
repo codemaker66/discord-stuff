@@ -27,17 +27,24 @@ async function boot(path, opts = {}) {
   await env.page.addStyleTag({ content: '.chat .txt, .chat .who { color: transparent !important; text-shadow: 0 0 7px rgba(219,222,225,.55); } .chat .ts { display: none; }' });
   await env.page.addScriptTag({ content: source });
   await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' });
-  await env.page.waitForFunction(`${sr}.querySelector('[data-role="target-name"]').textContent !== 'detecting…'`);
+  // The ring leaves 'lookup' once the open chat is known (or known to be none), whatever the card's copy says.
+  await env.page.waitForFunction(`((s) => s && s !== 'lookup')(${sr}.querySelector('.hero').dataset.state)`);
   await env.page.waitForTimeout(700);
   return env;
 }
-// Where the panel sits in each picture (device pixels), so tools/marketing.py can lift it out cleanly.
-const panels = { dpr: Number(DPR), boxes: {} };
+// Where the panel and the log window sit in each picture (device pixels), and their corner radii
+// (CSS px), so tools/marketing.py can lift them out cleanly.
+const panels = { dpr: Number(DPR), boxes: {}, terms: {}, radius: {} };
 async function shot(page, name, clip) {
   await page.screenshot({ path: `${OUT}/${name}.png`, ...(clip ? { clip } : {}) });
-  const b = await page.locator('.panel').boundingBox();
   const at = clip || { x: 0, y: 0 };
-  if (b) panels.boxes[name] = [b.x - at.x, b.y - at.y, b.x - at.x + b.width, b.y - at.y + b.height].map((v) => Math.round(v * panels.dpr));
+  const box = (b) => [b.x - at.x, b.y - at.y, b.x - at.x + b.width, b.y - at.y + b.height].map((v) => Math.round(v * panels.dpr));
+  for (const [sel, key, into] of [['.panel', 'panel', panels.boxes], ['.term', 'term', panels.terms]]) {
+    const el = page.locator(sel);
+    if (!(await el.isVisible())) continue;
+    into[name] = box(await el.boundingBox());
+    panels.radius[key] ??= await el.evaluate((e) => parseFloat(getComputedStyle(e).borderTopLeftRadius));
+  }
 }
 async function panelClip(page, pad = 40, extra = {}) {
   const b = await page.locator('.panel').boundingBox();
