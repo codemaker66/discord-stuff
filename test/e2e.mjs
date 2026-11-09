@@ -849,13 +849,17 @@ await test('T40 sliding off the hold button cancels the purge, mouse and touch',
       await page.waitForTimeout(1000);
       await page.mouse.up();
     } else {
+      // A finger lifting off goes to one place and stays there. Synthetic touch moves are delivered
+      // late and coalesced under CDP, so every move sits well past the button's left edge: whichever
+      // lands first cancels, instead of a trail of still-inside points keeping the hold alive.
       const cdp = await context.newCDPSession(page);
+      const off = [c.x - 48, from[1]];
       const at = ([x, y]) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(from) });
-      await page.waitForTimeout(150);
-      for (let i = 1; i <= 5; i++) {
-        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at([from[0] + ((to[0] - from[0]) * i) / 5, from[1]]) });
-        await page.waitForTimeout(20);
+      await page.waitForTimeout(120);
+      for (let i = 0; i < 6; i++) {
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(off) });
+        await page.waitForTimeout(30);
       }
       await page.waitForTimeout(1000);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
@@ -1637,6 +1641,8 @@ await test('T64 first run: the welcome card takes focus, and Tab never lands beh
       await page.keyboard.press('Tab');
       stops.push(await focused(page));
     }
+    // A null stop means focus left the shadow root entirely — onto Discord's own page behind the card.
+    assert(stops.every(Boolean), `Tab escaped the card into Discord: ${JSON.stringify(stops)}`);
     const inside = stops.filter(Boolean);
     assert(inside.every((f) => !f.behind), `Tab reached controls under the card: ${JSON.stringify(inside)}`);
     assert(inside.some((f) => f.id === 'welcome-batch'), `Tab reaches both card buttons: ${JSON.stringify(inside)}`);
@@ -3848,7 +3854,11 @@ await test('T126 a finished hold seals: the bar stays full until the dialog is g
   const commit = s.sealedAt - s.pressedAt;
   // Never early, and within about a frame (it used to wait for a frame, and land 20-50ms late).
   assert(commit >= 850 && commit < 850 + 20, `commit at ${Math.round(commit)}ms`);
-  assert(s.frames.length >= 4, `${s.frames.length} frames between the commit and the dialog going`);
+  // The seal holds for a real fade, not an instant vanish; the frame count is a loose floor, since
+  // rAF sampling thins out under parallel load even while the setTimeout fade runs its full length.
+  const fade = s.hiddenAt - s.sealedAt;
+  assert(fade >= 120 && fade < 900, `the dialog went in ${Math.round(fade)}ms, not a held fade`);
+  assert(s.frames.length >= 2, `${s.frames.length} frames between the commit and the dialog going`);
   const low = s.frames.filter((f) => f.fill < f.button - 1);
   assert(!low.length, `the bar drained while the dialog faded: ${JSON.stringify(low.slice(0, 3))}`);
   assert(s.hiddenAt - s.sealedAt >= 200 && s.hiddenAt - s.sealedAt < 450, `the dialog left after ${Math.round(s.hiddenAt - s.sealedAt)}ms`);

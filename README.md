@@ -23,10 +23,10 @@ and asks before updating itself.
 
 ## What it does
 
-- **Purify** any chat: it counts your messages first and says how long it takes.
+- **Open a chat, press Purify** — it counts your messages first, so you know how many and how long before you confirm.
 - **Hold to purify** — no accidental clicks.
 - **Many chats**: pick DMs, groups and server channels (threads and forum posts included), then purify them in one go.
-- **Shield** anyone and your DM with them is immune. Bardo & Dopa are shielded from the start ♡
+- **Shield** anyone and your DM with them is immune. Bardo and Dopa are shielded from the start ♡
 - Paces itself to Discord's rate limits (about 40 messages a minute), pauses and resumes,
   and tells you honestly what was skipped.
 
