@@ -1,0 +1,197 @@
+# The desktop release: official Vencord with the purifier built in, plus the installer, as one
+# GitHub release. A friend's Vencord updates itself from this repository's latest release (it
+# compares the hash ending the release name with its own build hash), so whatever is released
+# here reaches them the same day. A push to main that changes the purifier releases it; a daily
+# run follows official Vencord and releases when official users got a new build, or when main has
+# changes that no release carries yet (a push whose run was dropped or failed). release.mjs never
+# releases a commit that the latest release already contains, so a run that waited behind a newer
+# one cannot take friends back.
+# How it fits together, and how to release by hand: desktop/README.md.
+name: desktop
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/**
+      - tools/build.mjs
+      - dist/vencord/**
+      - desktop/**
+      - package.json
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release main now, even if official Vencord has not moved
+        type: boolean
+        default: false
+
+# One release at a time; a run that is waiting never cancels one that is releasing.
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Daily, and by hand: move desktop/vencord.json to what official Vencord users get today (the
+  # hash ending the name of Vendicated/Vencord's latest release). The pin commit is pushed with
+  # the workflow token, which starts no new run, so this run goes on to build and release it.
+  sync:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      release: ${{ steps.follow.outputs.release }}
+      sha: ${{ steps.follow.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          # All of main's history, to compare main with the commit the latest release was built from.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: follow official Vencord
+        id: follow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          moved=false
+          for attempt in 1 2 3; do
+            GITHUB_OUTPUT= node desktop/build-vencord.mjs --follow --write
+            if git diff --quiet -- desktop/vencord.json; then break; fi
+            label=$(node -p "require('./desktop/vencord.json').vencord.label")
+            ref=$(node -p "require('./desktop/vencord.json').vencord.ref")
+            git commit -q -m "Follow Vencord to $label" \
+              -m "Official Vencord users now get Vendicated/Vencord@$ref, so friends' builds follow it today." \
+              -- desktop/vencord.json
+            if git push -q origin HEAD:main; then moved=true; break; fi
+            if [ "$attempt" = 3 ]; then echo "::error::main kept moving, so the new pin was not pushed"; exit 1; fi
+            echo "main moved while this ran; trying again on the new main"
+            git fetch -q origin main
+            git reset -q --hard FETCH_HEAD
+          done
+          # A push that never got released is released now. GitHub drops a waiting run when a newer
+          # one queues behind it, and a failed run releases nothing. So: when the hash ending the
+          # latest release's name is not main's, and main differs from that commit in the paths a
+          # push releases for (on.push.paths above, keep them the same), release main.
+          unreleased=false
+          head=$(git rev-parse HEAD)
+          if name=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .name 2>"$RUNNER_TEMP/latest.err"); then
+            released=${name##* }
+            if [ "$released" != "${head:0:7}" ]; then
+              if base=$(git rev-parse -q --verify "$released^{commit}") \
+                && git diff --quiet "$base" HEAD -- src tools/build.mjs dist/vencord desktop package.json; then
+                echo "main moved past $released, but nothing a release carries changed"
+              else
+                unreleased=true
+              fi
+            fi
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/latest.err"; then
+            unreleased=true
+          else
+            echo "::warning::could not read the latest release: $(cat "$RUNNER_TEMP/latest.err")"
+          fi
+          release=false
+          if [ "$moved" = true ] || [ "$FORCE" = true ] || [ "$unreleased" = true ]; then release=true; fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "sha=$head" >> "$GITHUB_OUTPUT"
+          echo "Vencord pin: $(node -p "require('./desktop/vencord.json').vencord.label") · moved today: $moved · main unreleased: $unreleased · releasing: $release" >> "$GITHUB_STEP_SUMMARY"
+
+  # Official Vencord at the pin with dist/vencord/dopasPurifier/ inside, built standalone with this
+  # repository as its update source and the released commit's 7-char sha as its build hash. The
+  # script runs the exact pnpm from Vencord's packageManager (through npx).
+  vencord:
+    needs: sync
+    if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || needs.sync.outputs.release == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.sync.outputs.sha || github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: the plugin in dist/ matches src/
+        run: node tools/build.mjs --check
+      - name: build Vencord with the purifier inside
+        env:
+          REMOTE: ${{ github.repository }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          node desktop/build-vencord.mjs --hash "${sha:0:7}" --remote "$REMOTE" --work "$RUNNER_TEMP/vencord" --out desktop/out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vencord
+          path: desktop/out
+          if-no-files-found: error
+
+  # The installer friends download: desktop/installer, a Tauri v2 app built to a single exe.
+  installer:
+    needs: sync
+    if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || needs.sync.outputs.release == 'true') }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop/installer
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.sync.outputs.sha || github.sha }}
+      - name: Rust stable (MSVC)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/installer/src-tauri
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/installer/package-lock.json
+      - run: npm ci
+      - run: npm run build:exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: desktop/installer/dist-exe/DopasPurifierSetup.exe
+          if-no-files-found: error
+
+  # One release with everything: the Vencord files, build.json, the installer and SHA256SUMS.txt.
+  release:
+    needs: [sync, vencord, installer]
+    if: ${{ !cancelled() && needs.vencord.result == 'success' && needs.installer.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.sync.outputs.sha || github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          name: vencord
+          path: desktop/out
+      - uses: actions/download-artifact@v8
+        with:
+          name: installer
+          path: desktop/out
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node desktop/release.mjs --out desktop/out --exe desktop/out/DopasPurifierSetup.exe

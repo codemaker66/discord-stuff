@@ -376,7 +376,6 @@
     crown: 'M3.2 8.2l4.6 3.9L12 5l4.2 7.1 4.6-3.9-1.9 10.4H5.1z',
     drop: 'M12 3.2c3 4.4 6.2 7.5 6.2 11a6.2 6.2 0 0 1-12.4 0c0-3.5 3.2-6.6 6.2-11z',
     megaphone: 'M3 11l18-5v12L3 14zM11.6 16.8a3 3 0 1 1-5.8-1.6',
-    share: 'M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1',
     forum: 'M4 5h16v10H9l-5 4z',
     group: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
     dagger: 'M12 1.8l2.1 3.4v9.4H9.9V5.2zM6.8 14.6h10.4v2.2H6.8zM10.9 16.8h2.2v3.4h-2.2zM12 20a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z',
@@ -577,7 +576,6 @@
           h('div', { class: 'title', title: `Dopa's Purifier v${VERSION}` }, h('span', { text: "Dopa's Purifier" })),
           h('div', { class: 'mood', 'data-role': 'mood', text: 'awaiting orders, princess~' })),
         h('div', { class: 'head-tools' },
-          h('button', { class: 'icon-btn', 'data-act': 'share', 'aria-label': 'Copy the install link', title: 'Copy the install link for a friend ♡' }, icon('share')),
           h('button', { class: 'icon-btn', 'data-act': 'mute', 'aria-label': 'Mute sound', title: 'Sound' }, icon('sound')),
           h('button', { class: 'icon-btn', 'data-act': 'minimize', title: 'Minimise' }, icon('minimize')))),
       h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'What to purify' },
@@ -2811,12 +2809,11 @@
     $('[data-role="term-body"]').replaceChildren(...logBanner());
   }
 
-  // wrap: a line worth reading whole (a link to copy) wraps instead of ending in an ellipsis.
-  function addLog(text, tone = 'info', { scrub, wrap = false } = {}) {
+  function addLog(text, tone = 'info', { scrub } = {}) {
     const body = $('[data-role="term-body"]');
     const pinned = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
     const time = new Date().toTimeString().slice(0, 8);
-    const line = h('div', { class: `line ${tone}${wrap ? ' wrap' : ''}` },
+    const line = h('div', { class: `line ${tone}` },
       h('span', { class: 'line-time', text: time }),
       linePrefix(tone, LOG_PREFIX[tone] || '›'),
       h('span', { class: 'line-msg', text }));
@@ -3293,7 +3290,7 @@
     btn.title = prefs.muted ? 'Unmute sound' : 'Mute sound';
   }
 
-  // ── Welcome & share ─────────────────────────────────────
+  // ── Welcome ─────────────────────────────────────────────
 
   // The card covers the tabs, body and footer, so Tab must not wander behind it. It takes focus
   // only from the bare page, never from Discord's message box.
@@ -3318,20 +3315,6 @@
     w.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-out' }).finished.then(gone, gone);
     prefs.welcomed = true;
     savePrefs('welcomed');
-  }
-
-  async function shareLink() {
-    const text = `Dopa's Discord Purifier — wipe your own Discord messages in a few clicks~ ✨ ${SHARE_URL}`;
-    try {
-      await navigator.clipboard.writeText(text);
-      addLog(`share link: ${SHARE_URL}`, 'info');
-      setStatus('Install link copied~ send it to a friend', 'success', { flair: '♡' });
-    } catch {
-      // Discord can lock the clipboard: the link waits in the log, whole, to select and copy.
-      addLog(`share link: ${SHARE_URL}`, 'info', { wrap: true });
-      setStatus("Couldn't copy~ the link is waiting in Logs", 'info', { flair: '♡' });
-      toggleLog(true);
-    }
   }
 
   // ── Run events → UI ─────────────────────────────────────
@@ -3647,7 +3630,6 @@
     'close-log': () => { handFocus('[data-act="logs"]'); toggleLog(false); },
     'copy-log': copyLog,
     minimize: () => { handFocus('.orb'); setOpen(false); },
-    share: () => shareLink(),
     'welcome-ok': () => hideWelcome(),
     'welcome-batch': () => { switchTab('batch'); hideWelcome(); },
     'go-batch': () => { handFocus('.tab[data-tab="batch"]'); switchTab('batch'); },

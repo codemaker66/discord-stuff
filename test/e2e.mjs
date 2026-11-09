@@ -10,6 +10,7 @@ import { openDiscord, injectUserscript, installMockDiscord, buildWorld, withTimi
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(process.argv[2] || path.join(here, '../dist/dopas-discord-purifier.user.js'));
 const PLUGIN = path.join(path.dirname(SRC), 'DopasPurifier.plugin.js');
+const VENCORD_PLUGIN = path.join(path.dirname(SRC), 'vencord/dopasPurifier/index.js');
 const OUT = process.argv[3] || path.join(here, 'out/e2e');
 fs.mkdirSync(OUT, { recursive: true });
 const source = fs.readFileSync(SRC, 'utf8');
@@ -333,13 +334,17 @@ await test('T12 SPA navigation updates the target', async () => {
 });
 
 await test('T13 minimise keeps the run going and restores', async () => {
-  const { page, stats, world, context } = await boot('/channels/4001/5002', { latencyMs: 60 });
+  // 40 of yours, so the run is still going when the panel folds away: at test pace the default 10 can
+  // all go inside the 1.1 s hold, and a run that ended in the open panel rightly leaves a plain orb.
+  const { page, stats, world, context } = await boot('/channels/4001/5002', { latencyMs: 60, world: buildWorld({ bulk: { 5002: 30 } }) });
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await page.click('[data-act="minimize"]');
+  assert(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.run !== 'idle'), 'the run is still going when the panel folds away');
   await page.locator('.orb').waitFor({ state: 'visible', timeout: 3000 });
-  // The orb appears while the panel is still folding into it, then the panel goes.
-  await page.locator('.panel').waitFor({ state: 'hidden', timeout: 1000 });
+  // The orb appears while the panel is still folding into it, then the panel goes (the 320 ms fold can
+  // run several times slower in headless WebKit on CI, so this waits for the end, not for a deadline).
+  await page.locator('.panel').waitFor({ state: 'hidden', timeout: 5000 });
   await waitEnd(page);
   assert(mine(world, '5002').length === 0, 'run completed while minimised');
   assert(await page.locator('.orb[data-live="done"]').count() === 1, 'orb shows the finished run');
@@ -648,16 +653,6 @@ await test('T31 first run: welcome card explains the three steps, "Got it" stick
   await context.close();
 });
 
-await test('T32 Share copies the install link', async () => {
-  const { page, context } = await boot('/channels/4001/5001', { permissions: ['clipboard-read', 'clipboard-write'] });
-  await page.click('[data-act="share"]');
-  await page.waitForTimeout(200);
-  const clip = await page.evaluate(() => navigator.clipboard.readText());
-  assert(/https:\/\/\S+/.test(clip) && /Purifier/.test(clip), `clipboard: ${clip}`);
-  assert(/copied/.test(await status(page)), await status(page));
-  await context.close();
-});
-
 await test('T33 shields: protect a DM, it persists, Bardo can be released', async () => {
   const { page, stats, context } = await boot('/channels/4001/5001');
   await page.click('.tab[data-tab="batch"]');
@@ -705,6 +700,44 @@ await test('T34 BetterDiscord plugin: start, stop mid-purge cleans up, start aga
   assert(env.pageErrors.length === 0, `errors after stop: ${env.pageErrors.join('; ')}`);
   await page.evaluate(() => window.__bd.start());
   await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]').textContent === 'art-share');
+  await env.context.close();
+});
+
+// The Vencord userplugin: Vencord's build bundles dist/vencord/dopasPurifier/index.js as an ES module whose
+// only import is @utils/types, so here definePlugin is the identity and the default export lands on a global.
+await test('T289 Vencord userplugin: defined right, starts once, stops clean, starts again', async () => {
+  const code = fs.readFileSync(VENCORD_PLUGIN, 'utf8');
+  assert(code.split('import definePlugin from "@utils/types";').length === 2, 'one @utils/types import');
+  assert(code.split('export default definePlugin(').length === 2, 'one default export');
+  const plugin = code
+    .replace('import definePlugin from "@utils/types";', 'const definePlugin = (p) => p;')
+    .replace('export default definePlugin(', 'window.__vencordPlugin = definePlugin(');
+  const env = await openDiscord(browser, '/channels/4001/5001');
+  const { page } = env;
+  await page.addScriptTag({ content: plugin });
+  const def = await page.evaluate(() => { const p = window.__vencordPlugin; return { name: p.name, on: p.enabledByDefault, author: p.authors[0].name, idType: typeof p.authors[0].id, start: typeof p.start, stop: typeof p.stop, none: !document.querySelector('#dopa-purifier-host') && !window.__dopaPurifier }; });
+  assert(def.name === 'DopasPurifier' && def.on === true, `definition ${JSON.stringify(def)}`);
+  assert(def.author && def.idType === 'bigint', `authors[0] ${JSON.stringify(def)}`);
+  assert(def.start === 'function' && def.stop === 'function' && def.none, `lifecycle ${JSON.stringify(def)}`);
+  const hosts = () => page.evaluate(() => document.querySelectorAll('#dopa-purifier-host').length);
+  const named = (name) => page.waitForFunction((n) => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === n, name);
+  await page.evaluate(() => window.__vencordPlugin.start());
+  await named('general');
+  assert(await hosts() === 1, 'one host after start');
+  const first = await page.evaluate(() => window.__dopaPurifier === window.__vencordPlugin.app);
+  assert(first, 'the global is the running purifier');
+  await page.evaluate(() => window.__vencordPlugin.start());
+  await page.waitForTimeout(200);
+  assert(await hosts() === 1, 'a second start() mounted something new');
+  assert(await page.evaluate(() => window.__dopaPurifier === window.__vencordPlugin.app), 'a second start() replaced the purifier');
+  await page.evaluate(() => window.__vencordPlugin.stop());
+  assert(await page.evaluate(() => !document.querySelector('#dopa-purifier-host') && !window.__dopaPurifier), 'stop() left the host or the global');
+  await page.evaluate(() => window.__vencordPlugin.stop()); // a stop with nothing running is harmless
+  await page.evaluate(() => window.__vencordPlugin.start());
+  await named('general');
+  assert(await hosts() === 1, 'one host after start again');
+  await page.evaluate(() => window.__vencordPlugin.stop());
+  assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
   await env.context.close();
 });
 
@@ -3472,8 +3505,7 @@ await test('T250 marks show in forced colours; light Discord gets a light shadow
   {
     const { page, context } = await boot('/channels/4001/5001');
     await page.emulateMedia({ forcedColors: 'active' });
-    await page.evaluate(() => { navigator.clipboard.writeText = async () => {}; });
-    await page.click('[data-act="share"]');
+    await page.click('[data-act="scan"]'); // a count's verdict is a success line
     await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').dataset.tone === 'success');
     const dot = await rectOf(page, '.status-dot');
     const px = (await shotPixels(page, { x: dot.left, y: dot.top, width: dot.width, height: dot.height })).flat();
@@ -4628,17 +4660,6 @@ await test('T153 the footer speaks words, not emoji, and the small lines are kin
   const found = await statusParts(page);
   assert(found.flair === '' && found.words === "Counted~ press Purify when you're ready" && !/\p{Extended_Pictographic}/u.test(await page.locator('[data-role="status"]').ariaSnapshot()), `found ${JSON.stringify(found)}`);
   assert(await page.evaluate(() => window.__dp.preview({ content: '', attachments: [] })) === '[sticker or embed]', 'a message with no words');
-  // Discord can lock the clipboard: the link waits in the log, whole.
-  await page.evaluate(() => { navigator.clipboard.writeText = () => Promise.reject(new DOMException('locked', 'NotAllowedError')); });
-  await page.click('[data-act="share"]');
-  await untilStatus(page, /^Couldn't copy~ the link is waiting in Logs/);
-  const share = await page.evaluate(() => {
-    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
-    const line = [...r.querySelectorAll('.line.wrap .line-msg')].pop();
-    return { open: !r.querySelector('.term').hidden, text: line && line.textContent, whole: !!line && line.scrollWidth <= line.clientWidth };
-  });
-  assert(share.open && /^share link: https:\/\/\S+$/.test(share.text) && share.whole, `share fallback ${JSON.stringify(share)}`);
-  assert((await statusParts(page)).flair === ' ♡', 'said kindly');
   // An account switch says what to do next, and asks Discord nothing for it.
   await page.evaluate(() => localStorage.setItem('token', JSON.stringify('mock-token.b')));
   await page.click('[data-act="scan"]');
@@ -7827,6 +7848,44 @@ await test('T267 a batch Discord is still searching ends calmly with when to com
   assert(await text(page, '[data-role="hero-sub"]') === 'Discord may find older ones later~', `verdict "${await text(page, '[data-role="hero-sub"]')}"`);
   const done = await statusParts(page);
   assert(done.words === '1 chat needs another go later~ Discord is still searching' && done.tone === 'calm', `footer ${JSON.stringify(done)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// The purifier is passed privately between a few friends: the panel has nothing to share or copy a link with.
+await test('T290 the panel offers no share or copy-link control anywhere', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001', { firstRun: true });
+  await page.waitForSelector('[data-role="welcome"]');
+  const look = async () => jPanel(page, (r) => {
+    const els = [...r.querySelectorAll('*')];
+    const said = els.flatMap((el) => [el.getAttribute('aria-label'), el.getAttribute('title')]).filter(Boolean);
+    const text = els.filter((el) => !el.closest('style')).flatMap((el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent)).join(' ');
+    return {
+      share: r.querySelectorAll('[data-act="share"]').length,
+      acts: [...new Set(els.map((el) => el.dataset.act).filter(Boolean))],
+      head: [...r.querySelectorAll('.head button')].map((b) => b.dataset.act),
+      words: [text, ...said].filter((t) => /install link|copy the link|for a friend|send it to a friend|share/i.test(t.replace(/art-share/g, ''))),
+    };
+  });
+  const seen = [await look()];
+  await page.click('[data-act="welcome-ok"]');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.click('[data-act="logs"]');
+  seen.push(await look());
+  for (const s of seen) {
+    assert(s.share === 0 && !s.acts.some((a) => /share|link/i.test(a)), `a share control: ${JSON.stringify(s.acts)}`);
+    assert(s.head.join() === 'poke,mute,minimize', `the header holds ${s.head.join()}`);
+    assert(s.words.length === 0, `share words: ${JSON.stringify(s.words).slice(0, 300)}`);
+  }
+  // The header's keyboard order is Dopa, then Sound, then Minimise.
+  await page.locator('[data-act="poke"]').focus();
+  const order = [];
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.press('Tab');
+    order.push(await jPanel(page, (r) => r.activeElement && r.activeElement.dataset.act));
+  }
+  assert(order.join() === 'mute,minimize', `Tab from Dopa goes ${order.join()}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });
