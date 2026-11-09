@@ -5497,7 +5497,11 @@ await test('T252 switches for the tests to come: Discord\'s light theme, offline
     const { page, world, context } = await boot('/channels/4001/5002');
     await page.click('[data-act="scan"]');
     await untilStatus(page, /^10 messages found/);
-    const now = BigInt(await page.evaluate(() => String((BigInt(Date.now()) - 1420070400000n) << 22n)));
+    const pageMs = await page.evaluate(() => Date.now());
+    const now = (BigInt(pageMs) - 1420070400000n) << 22n;
+    // The mock stamps with this process's clock, which can trail Chromium's by a millisecond on
+    // Windows: send once it has passed the page's reading, as a message sent after a cut-off is.
+    while (Date.now() <= pageMs) await new Promise((r) => setTimeout(r, 1));
     const [sent] = addMine(world, '5002');
     assert(BigInt(sent.id) > now && world.messages['5002'].every((m) => m === sent || BigInt(m.id) < BigInt(sent.id)), `sent ${sent.id}, now ${now}`);
     assert(world.channels['5002'].last_message_id === sent.id, 'the chat\'s newest message is the one just sent');
@@ -7102,6 +7106,8 @@ await test('T213 a press on a half-shown server line opens it where it is; arrow
   const { page, context } = await boot('/channels/4001/5001', { world: longWorld(), viewport: { width: 1100, height: 760 } });
   await page.click('.tab[data-tab="batch"]');
   await page.waitForSelector('.guild-head');
+  // The DMs land after the servers and push them down: measure once they are drawn.
+  await page.waitForSelector('[data-key="c:3002"]');
   // Cozy Corner's line just peeking in at the bottom of the panel.
   const peek = await page.evaluate(() => {
     const r = document.querySelector('#dopa-purifier-host').shadowRoot;
