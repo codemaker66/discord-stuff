@@ -7,6 +7,8 @@
 //   done             like fresh; an install finishes
 //   already          the Purifier is installed in Stable and PTB, and a newer build is out
 //   up-to-date       like already, with no newer build
+//   self-updated     like already, but Vencord updated itself to the newest build: patcher.js says
+//                    so, build.json (which only the installer writes) still names the old one
 //   uninstalling     like already; an uninstall stops halfway
 //   uninstalled      like already; an uninstall finishes
 //   no-release       there's no desktop release yet, so the welcome can't install
@@ -84,12 +86,13 @@
     install('ptb', 'Discord PTB', '1.0.1231', 'ours'),
   ];
 
-  const isAlready = ['already', 'up-to-date', 'uninstalling', 'uninstalled'].includes(scenario);
+  const isAlready = ['already', 'up-to-date', 'self-updated', 'uninstalling', 'uninstalled'].includes(scenario);
   const noRelease = scenario === 'no-release';
   const detection = {
     installs: scenario === 'no-discord' ? [] : isAlready ? ourInstalls() : scenario === 'many' ? manyInstalls() : showcase ? showcaseInstalls() : freshInstalls(),
     vencordDir: `${ROAMING}\\Vencord`,
     installedBuild: isAlready ? INSTALLED : null,
+    installedHash: isAlready ? (scenario === 'self-updated' ? LATEST.hash : INSTALLED.hash) : null,
     latest: scenario === 'error-offline' || noRelease ? null : LATEST,
     network: scenario === 'error-offline' ? 'offline' : noRelease ? 'no-release' : 'ok',
     backups: [],

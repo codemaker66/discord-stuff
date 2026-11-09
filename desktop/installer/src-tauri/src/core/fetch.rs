@@ -204,8 +204,9 @@ fn read_build(dir: &Path) -> Result<Value, OpError> {
 /// make it update in a loop, so it is refused (release.mjs checks the same).
 /// Returns the hash.
 fn check_build_hash(title: &str, build: &Value, stage: &Path) -> Result<String, OpError> {
-    let damaged =
-        |detail: String| OpError::new(FailCode::Invalid, "The release looks damaged, so nothing was installed.", detail);
+    let damaged = |detail: String| {
+        OpError::new(FailCode::Invalid, "The release looks damaged, so nothing was installed.", detail)
+    };
     let h = title_hash(title)
         .ok_or_else(|| damaged(format!("the release title {title:?} does not end with a build hash")))?;
     let b = build.get("hash").and_then(Value::as_str).unwrap_or("");

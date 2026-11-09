@@ -781,20 +781,26 @@
     const add = (k, v, wide) => {
       if (v) facts.append(el('div', { class: wide ? 'wide' : null }, el('dt', {}, k), el('dd', {}, v)));
     };
-    add('Purifier', b.purifier ? `v${b.purifier}` : null);
-    add('Vencord', b.vencord || null);
-    add('Build', b.hash || null);
+    // Vencord updates itself by replacing patcher.js and the rest, never our build.json, so the
+    // hash on patcher.js's first line (installedHash) is the build that runs. Once it has moved on,
+    // build.json's versions are old: the latest release's title names them when that is what runs.
+    const same = (x, y) => Boolean(x && y && String(x).toLowerCase() === String(y).toLowerCase());
+    const installedHash = d.installedHash || b.hash || null;
+    const latestHash = d.latest?.hash;
+    const latest = latestInfo(d);
+    const running = !b.hash || same(installedHash, b.hash) ? b : same(installedHash, latestHash) && latest ? latest : {};
+    add('Purifier', running.purifier ? `v${running.purifier}` : null);
+    add('Vencord', running.vencord || null);
+    add('Build', installedHash);
     add('Installed', b.installedAt ? formatDate(b.installedAt) : null);
     $('#already-lead').textContent = where.length ? `Running in ${joinAnd(where)}.` : 'The Purifier is in your Discord.';
 
-    const latestHash = d.latest?.hash;
-    const outdated = Boolean(latestHash && b.hash && latestHash.toLowerCase() !== String(b.hash).toLowerCase());
-    const latest = latestInfo(d);
+    const outdated = Boolean(latestHash && installedHash && !same(latestHash, installedHash));
     const note = $('#update-note');
     note.hidden = !outdated;
     if (outdated) {
       $('#update-title').textContent = latest ? `Update ready: v${latest.purifier}` : 'An update is ready';
-      $('#update-sub').textContent = [b.purifier ? `You have v${b.purifier}` : null, latest?.vencord ? `brings Vencord ${latest.vencord}` : null].filter(Boolean).join(' · ');
+      $('#update-sub').textContent = [running.purifier ? `You have v${running.purifier}` : null, latest?.vencord ? `brings Vencord ${latest.vencord}` : null].filter(Boolean).join(' · ');
     }
     const repair = $('#repair-btn');
     repair.dataset.mode = outdated ? 'update' : 'repair';
@@ -1111,6 +1117,8 @@
         listen('plan', (e) => renderPlan(e.payload)),
         listen('progress', (e) => onProgress(e.payload)),
         listen('log', (e) => onLog(e.payload.line)),
+        // Alt+F4 or the taskbar's "Close window" while working: the backend keeps the window open.
+        listen('close-blocked', () => toast('Hang on until it finishes~')),
       ]);
     } catch (e) {
       console.error('event wiring failed', e);

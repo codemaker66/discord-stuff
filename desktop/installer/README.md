@@ -131,6 +131,9 @@ type Detection = {
   installs: InstallInfo[];            // Stable, PTB, Canary order; [] when Discord isn't installed
   vencordDir: string;                 // %APPDATA%\Vencord
   installedBuild: BuildJson | null;   // our build.json when installed
+  installedHash: string | null;       // the hash on dist\patcher.js's first line ("// Vencord <hash>"):
+                                      // the build that runs. Vencord's updater keeps it current, never
+                                      // build.json, so "Update ready" compares this with latest.hash.
   latest: { title: string; tag: string | null; hash: string | null; url: string | null;
             source: "github" | "local"; build: BuildJson | null } | null;
   network: "ok" | "offline" | "no-release" | "local";
@@ -179,6 +182,7 @@ PTB); `unknown` is anything else (a stub requiring something odd, or an `_app.as
 | `plan` | `{ id, label }[]` | once, at the start of an install or uninstall: the steps in order |
 | `progress` | `{ step, state: "active" \| "done" \| "skipped" \| "error", detail, pct }` | every step change; `pct` is overall progress 0–100 and never goes back |
 | `log` | `{ line }` | every log line, including the CLI's own output |
+| `close-blocked` | `null` | the window was asked to close (Alt+F4, the taskbar, the title bar) while an install or uninstall runs; it stays open and the UI shows its "hang on" toast |
 
 Install step ids: `close`, `fetch-installer`, `fetch-build`, `place`, `patch:<branch>`…, `start`.
 Uninstall: `close`, `fetch-installer`, `vencord:<branch>`… + `tidy` (keep Vencord) or `unpatch:<branch>`… +
@@ -197,8 +201,8 @@ restyling, or update `preview.mjs` with them.
 
 `ui/mock-tauri.js` replaces `window.__TAURI__` when the page is not inside Tauri. Open
 `ui/index.html?scenario=<name>` from any static server (add `&speed=4` to hurry it):
-`fresh`, `installing`, `done`, `already`, `error-offline`, `error-checksum`, `error-cli`, `no-discord`,
-`uninstalling`, `uninstalled`. `node preview.mjs [names…]` serves `ui/`, clicks through each scenario
+`fresh`, `installing`, `done`, `already`, `self-updated`, `error-offline`, `error-checksum`, `error-cli`,
+`no-discord`, `uninstalling`, `uninstalled`. `node preview.mjs [names…]` serves `ui/`, clicks through each scenario
 and writes `screens/<name>@1x.png` and `@2x.png` at 960×600 (plus `uninstall-choice`). It fails when a page
 logs an error or a scenario never reaches its screen.
 
@@ -213,7 +217,8 @@ logs an error or a scenario never reaches its screen.
 
 - The exe is not code-signed, so SmartScreen may warn on first run ("More info" → "Run anyway").
 - It needs the WebView2 runtime, which ships with Windows 11 and current Windows 10.
-- Window: 960×600, no native frame (custom title bar), shadow, not resizable, centred; strict CSP
+- Window: 960×600, no native frame (custom title bar), shadow, not resizable, centred; it refuses to
+  close while an install or uninstall runs (`on_window_event` in `lib.rs`); strict CSP
   (`default-src 'self'`, no inline script or style, IPC only); `freezePrototype` on.
 - `productName` uses a typographic apostrophe (Dopa’s): tauri-winres escapes `'` as `\'`, which `rc.exe`
   keeps literally, so the exe's Properties showed `Dopa\'s`.

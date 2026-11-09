@@ -88,6 +88,20 @@ pub fn installed_build(env: &Env) -> Option<Value> {
     read_build_json(&env.dist()).filter(is_ours)
 }
 
+/// The build hash on patcher.js's first line (`// Vencord 8061a9b`), lowercase.
+/// Vencord's own updater replaces patcher.js and the other files but never our
+/// build.json, so this is the build that actually runs.
+pub fn patcher_hash(patcher: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(128);
+    fs::File::open(patcher).ok()?.take(128).read_to_end(&mut head).ok()?;
+    let text = String::from_utf8_lossy(&head);
+    let line = text.lines().next()?.trim_end_matches('\r');
+    let hash = line.strip_prefix("// Vencord ")?.trim();
+    (hash.len() >= 7 && hash.len() <= 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| hash.to_ascii_lowercase())
+}
+
 /// Classifies one `resources` folder.
 pub fn classify(env: &Env, resources: &Path) -> (State, Option<String>, bool) {
     let app = resources.join("app.asar");
@@ -156,6 +170,9 @@ pub struct Detection {
     pub vencord_dir: String,
     /// Our build.json from %APPDATA%\Vencord\dist, when installed.
     pub installed_build: Option<Value>,
+    /// The hash on %APPDATA%\Vencord\dist\patcher.js's first line: the build
+    /// that runs, kept current by Vencord's updater (build.json is not).
+    pub installed_hash: Option<String>,
     pub latest: Option<LatestRelease>,
     /// "ok", "offline", "no-release" or "local".
     pub network: String,
@@ -210,6 +227,7 @@ pub fn detect(env: &Env) -> Detection {
         installs: scan(env),
         vencord_dir: env.vencord_base().to_string_lossy().to_string(),
         installed_build: installed_build(env),
+        installed_hash: patcher_hash(&env.our_patcher()),
         latest,
         network,
         backups: super::place::list_backups(env).into_iter().map(|p| p.to_string_lossy().to_string()).collect(),

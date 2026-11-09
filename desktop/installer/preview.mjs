@@ -42,6 +42,8 @@ const SCENARIOS = [
   { name: 'showcase-done', scenario: 'done', query: 'showcase=1', steps: ['install'], screen: 'done', at: 560 },
   { name: 'already', screen: 'already' },
   { name: 'up-to-date', screen: 'already' },
+  // Vencord updated itself: build.json is old, patcher.js is the latest, so no "Update ready".
+  { name: 'self-updated', screen: 'already', ready: '#repair-btn[data-mode="repair"]' },
   { name: 'choose-apps', scenario: 'up-to-date', steps: ['show-welcome'], screen: 'welcome' },
   { name: 'uninstall-choice', scenario: 'already', steps: ['show-uninstall'], screen: 'already', ready: '#uninstall-box:not([hidden])' },
   { name: 'uninstalling', steps: ['show-uninstall', 'uninstall-remove'], screen: 'installing', ready: '.step[data-step^="unpatch:"][data-state="active"]' },

@@ -229,6 +229,41 @@ fn unknown_states_and_missing_installs() {
 }
 
 #[test]
+fn installed_hash_comes_from_the_patcher_banner() {
+    let sb = sandbox("detect-patcher-hash");
+    let env = Env::sandboxed(sb, None, Arc::new(OfflineFetcher));
+    assert_eq!(detect::detect(&env).installed_hash, None, "no dist yet");
+    // Vencord's updater replaced patcher.js (and the rest) but not our build.json.
+    write_dist(
+        &env,
+        &[
+            ("patcher.js", "// Vencord 94F9601\n// Standalone: true\n\"use strict\";var we=\"94f9601\";"),
+            ("build.json", r#"{"purifier":"4.1.0","hash":"6298341","by":"dopas-purifier"}"#),
+        ],
+    );
+    let d = detect::detect(&env);
+    assert_eq!(d.installed_hash.as_deref(), Some("94f9601"));
+    assert_eq!(d.installed_build.unwrap()["hash"], "6298341", "build.json is still read for the rest");
+    assert_eq!(detect::patcher_hash(&env.dist().join("patcher.js")).as_deref(), Some("94f9601"));
+
+    for (text, want) in [
+        ("// Vencord 8061a9b\r\n", Some("8061a9b")),
+        ("// Vencord 8061a9b", Some("8061a9b")),
+        ("// Vencord abc\n", None),
+        ("// Vencord not-a-hash\n", None),
+        ("\"use strict\";// Vencord 8061a9b\n", None),
+        ("", None),
+    ] {
+        write_dist(&env, &[("patcher.js", text)]);
+        assert_eq!(detect::patcher_hash(&env.dist().join("patcher.js")).as_deref(), want, "{text:?}");
+    }
+    // Only the start of the file is read: a real patcher.js is hundreds of KB.
+    let big = format!("// Vencord 1234567\n{}", "x".repeat(2_000_000));
+    write_dist(&env, &[("patcher.js", &big)]);
+    assert_eq!(detect::patcher_hash(&env.dist().join("patcher.js")).as_deref(), Some("1234567"));
+}
+
+#[test]
 fn local_build_is_reported_as_latest() {
     let sb = sandbox("detect-local");
     let env = Env::sandboxed(sb, Some(fixture_build()), Arc::new(OfflineFetcher));
@@ -478,8 +513,12 @@ fn github_build_whose_hashes_disagree_is_refused() {
     let res = fake_discord(&env, Branch::Stable, "1.0.1", Fake::Clean);
     let before = fs::read(res.join("app.asar")).unwrap();
     seed_cli(&env);
-    let f = ops::install(&env, &InstallRequest { branches: vec![Branch::Stable], ..Default::default() }, &Recorder::default())
-        .unwrap_err();
+    let f = ops::install(
+        &env,
+        &InstallRequest { branches: vec![Branch::Stable], ..Default::default() },
+        &Recorder::default(),
+    )
+    .unwrap_err();
     assert_eq!((f.code, f.step.as_deref()), (FailCode::Invalid, Some("fetch-build")));
     assert!(!env.dist().exists());
     assert_eq!(fs::read(res.join("app.asar")).unwrap(), before);
@@ -633,7 +672,7 @@ fn failed_swap_puts_a_foreign_dist_back_and_makes_no_backup() {
     let now = chrono::Local.with_ymd_and_hms(2026, 11, 9, 9, 43, 0).unwrap();
     let refuse_stage = |from: &Path, to: &Path| {
         if from.ends_with(place::STAGE_NAME) {
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "simulated: There is not enough space on the disk"))
+            Err(std::io::Error::other("simulated: There is not enough space on the disk"))
         } else {
             fs::rename(from, to)
         }

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::{
     detect, ops, Branch, Detection, Env, FailCode, Failure, InstallRequest, OpError, PlanStep, ProgressEvent, Reporter,
@@ -143,7 +143,7 @@ async fn detect(state: State<'_, AppState>) -> Result<Detection, String> {
     let env = state.env.clone();
     let d = tauri::async_runtime::spawn_blocking(move || detect::detect(&env)).await.map_err(|e| e.to_string())?;
     state.log.line(&format!(
-        "detect(): {} install(s) [{}], network {}, latest {}, installed build {}",
+        "detect(): {} install(s) [{}], network {}, latest {}, installed build {} (patcher.js {})",
         d.installs.len(),
         d.installs
             .iter()
@@ -153,6 +153,7 @@ async fn detect(state: State<'_, AppState>) -> Result<Detection, String> {
         d.network,
         d.latest.as_ref().map(|l| l.title.as_str()).unwrap_or("none"),
         d.installed_build.as_ref().and_then(|b| b.get("hash")).and_then(|h| h.as_str()).unwrap_or("none"),
+        d.installed_hash.as_deref().unwrap_or("none"),
     ));
     Ok(d)
 }
@@ -309,6 +310,19 @@ pub fn run() {
                 .build()?;
             setup_log.line(&format!("Window created (WebView2 data in {})", webview_dir.display()));
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Alt+F4, the taskbar's "Close window" and the title bar's button all ask first. While
+            // an install or uninstall runs the answer is no (closing would kill it half-way), and
+            // the UI shows its "hang on" toast.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                if state.busy.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    state.log.line("Close requested while working; the window stays open");
+                    let _ = window.emit("close-blocked", ());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![app_info, detect, install, uninstall, open_url, launch_discord])
         .run(tauri::generate_context!());
