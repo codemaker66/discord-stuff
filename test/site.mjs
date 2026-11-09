@@ -588,7 +588,7 @@ await test('S32 trust at first glance, step 2 as one paste, the link preview and
   const { page, context, errors } = await open({ ua: UA.chrome });
   assert(await page.locator('.cta + .trust + .meta').count() === 1, 'trust row between the buttons and the meta line');
   const trust = await page.$$eval('.trust li', (els) => els.map((li) => ({ text: li.textContent.trim(), top: Math.round(li.getBoundingClientRect().top) })));
-  assert(same(trust.map((t) => t.text), ['Only your messages', 'Login stays in Discord', 'Free & readable code']), JSON.stringify(trust));
+  assert(same(trust.map((t) => t.text), ['Only your messages', 'Login stays in Discord', 'Free & open source']), JSON.stringify(trust));
   assert(new Set(trust.map((t) => t.top)).size === 1, 'trust row on one line at 1440');
   assert((await page.locator('.meta').textContent()).trim() === `v${latest} · two-minute setup on a computer · no sign-up`, await page.locator('.meta').textContent());
   assert((await page.locator('#install .sub').textContent()).trim() === 'The Purifier lives inside Discord in your browser, carried by Tampermonkey, a free helper extension. Set it up once — updates arrive by themselves.', 'setup intro');
@@ -597,10 +597,10 @@ await test('S32 trust at first glance, step 2 as one paste, the link preview and
   assert(await page.locator('#faq-safe').evaluate((d) => d.open && d.getBoundingClientRect().top >= -2 && d.getBoundingClientRect().top < innerHeight), '"Login stays in Discord" opens the safety answer');
   // The link preview: says what it is and that it's safe, without repeating the name.
   const meta = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('meta[property], meta[name]')].map((m) => [m.getAttribute('property') || m.name, m.content])));
-  const blurb = 'Deletes only messages you sent, and only while you hold the button. Free, readable code, and your login never leaves Discord ♡ Two-minute setup on a computer.';
+  const blurb = 'Deletes only messages you sent, and only while you hold the button. Free, open source, and your login never leaves Discord ♡ Two-minute setup on a computer.';
   assert(meta['og:title'] === 'Wipe your Discord messages, gently ✨', meta['og:title']);
   assert(meta['og:description'] === blurb && meta.description === blurb, meta['og:description']);
-  assert(/^The Purifier panel inside Discord: 40 messages/.test(meta['og:image:alt'] || ''), 'og:image:alt');
+  assert(/^Dopa's Discord Purifier, now in the Discord app/.test(meta['og:image:alt'] || '') && /\/img\/share-desktop\.png$/.test(meta['og:image'] || ''), 'og:image and its alt: the Discord-app share card');
   assert(meta['og:site_name'] === "Dopa's Discord Purifier" && meta['twitter:card'] === 'summary_large_image' && meta['theme-color'] === '#ff7aa9', 'site name, card and colour kept');
   // Step 2 on Chrome: copy the address, flip the switch; the Developer-mode fallback is fine print.
   const how = await page.$$eval('[data-step="allow"] .how li', (els) => els.filter((li) => li.offsetParent).map((li) => li.textContent.replace(/\s+/g, ' ').trim()));
