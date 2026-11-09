@@ -20,7 +20,6 @@
 
 (function () {
   const VERSION = '@@VERSION@@';
-  const SHARE_URL = '@@HOMEPAGE@@';
 
   // On the install page, just say hello so it can show "installed ✓".
   if (!/(^|\.)discord\.com$/.test(location.hostname)) {
