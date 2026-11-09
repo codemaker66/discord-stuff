@@ -1,0 +1,15 @@
+{
+  "vencord": {
+    "repo": "Vendicated/Vencord",
+    "ref": "383409e6a6ec9008ee8a7496500f1e75f17824d1",
+    "label": "v1.15.16"
+  },
+  "installer": {
+    "repo": "Vencord/Installer",
+    "tag": "v1.4.2",
+    "asset": "VencordInstallerCli.exe",
+    "size": 8215552,
+    "sha256": "15268aba25625797bf562187dd87ddadf42882e079c7b6192880ad3e83353ef5",
+    "url": "https://github.com/Vencord/Installer/releases/download/v1.4.2/VencordInstallerCli.exe"
+  }
+}
