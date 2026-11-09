@@ -3,167 +3,360 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dopa's Discord Purifier Setup</title>
+  <title>Dopa’s Discord Purifier Setup</title>
+  <link rel="preload" href="fonts/Inter-Bold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
   <!-- Stand-in for window.__TAURI__ in a plain browser (?scenario=...); does nothing inside the app. -->
   <script src="mock-tauri.js"></script>
   <script src="app.js" defer></script>
 </head>
 <body>
-  <div id="app" data-screen="loading">
+  <!-- Icons, drawn once and reused with <use>. -->
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-bang" viewBox="0 0 24 24"><path d="M12 6.5v7M12 17.5v.01"/></symbol>
+    <symbol id="i-q" viewBox="0 0 24 24"><path d="M9.2 9.2a2.9 2.9 0 1 1 4 2.7c-.8.3-1.2 1-1.2 1.8v.5M12 17.5v.01"/></symbol>
+    <symbol id="i-dash" viewBox="0 0 24 24"><path d="M8 12h8"/></symbol>
+    <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M11 5.5L6.5 9H3.5v6h3l4.5 3.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18.3 6.3a8 8 0 0 1 0 11.4"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M11 5.5L6.5 9H3.5v6h3l4.5 3.5z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.01"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.5H15"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+    <symbol id="i-app" viewBox="0 0 24 24"><path d="M20 14.5a2 2 0 0 1-2 2H8.5L4 20V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/><path d="M8.5 9.5h7M8.5 12.5h4.5"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8z"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 19.5s-7-4.3-7-9.6A3.9 3.9 0 0 1 12 7.6a3.9 3.9 0 0 1 7 2.3c0 5.3-7 9.6-7 9.6z"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 0 0 13 5M19.5 12a7.5 7.5 0 0 0-13-5"/><path d="M6.5 3.5V7H10M17.5 20.5V17H14"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14.5L4.5 10 9 5.5"/><path d="M4.5 10H14a5.5 5.5 0 0 1 0 11h-3"/></symbol>
+    <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M3.5 3.5l17 17M8.5 16.2a5 5 0 0 1 7 0M5 12.6a10 10 0 0 1 4-2.4M19 12.6a10 10 0 0 0-4.6-2.6M2 9a14.5 14.5 0 0 1 3.8-2.6M22 9a14.5 14.5 0 0 0-10-4M12 19.5v.01"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5l7 2.8v5.4c0 4.3-3 7.6-7 8.8-4-1.2-7-4.5-7-8.8V6.3z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></symbol>
+    <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.5 5.5a4.5 4.5 0 0 0 4.9 6l-8.6 8.6a2.1 2.1 0 0 1-3-3l8.6-8.6a4.5 4.5 0 0 1-1.9-3z"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9h17"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5M9.5 13.5l5 5M14.5 13.5l-5 5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 15.5H3z"/><path d="M12 10v4.5M12 17.3v.01"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5L11 13M17.5 14v4a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8A1.5 1.5 0 0 1 6 6.5h4"/></symbol>
+  </svg>
+
+  <div id="app" data-screen="loading" data-intro="pending" data-ring="loading">
+    <!-- The backdrop: a slow aurora, a few drifting motes, film grain. -->
+    <div class="backdrop" aria-hidden="true">
+      <div class="aurora a1"></div>
+      <div class="aurora a2"></div>
+      <div class="aurora a3"></div>
+      <div class="aurora a4"></div>
+      <div class="motes" id="motes"></div>
+      <div class="grain"></div>
+      <div class="vignette"></div>
+    </div>
+
     <header class="titlebar" data-tauri-drag-region>
-      <img class="titlebar-icon" src="img/icon-64.png" alt="" data-tauri-drag-region>
-      <span class="titlebar-name" data-tauri-drag-region>Dopa's Discord Purifier <span class="titlebar-sub" data-tauri-drag-region>Setup</span></span>
-      <span class="titlebar-badge" id="sandbox-badge" hidden>Sandbox</span>
-      <div class="titlebar-buttons">
+      <img class="tb-mark" src="img/icon-64.png" alt="" data-tauri-drag-region>
+      <span class="tb-name" data-tauri-drag-region>Dopa’s Discord Purifier <span class="tb-sub" data-tauri-drag-region>Setup</span></span>
+      <span class="tb-badge" id="sandbox-badge" hidden>Sandbox</span>
+      <div class="tb-buttons">
+        <button class="tb-btn" data-action="toggle-sound" id="sound-btn" aria-pressed="true" aria-label="Sounds" title="Sounds on">
+          <svg class="ico ico-on" aria-hidden="true"><use href="#i-sound"/></svg>
+          <svg class="ico ico-off" aria-hidden="true"><use href="#i-mute"/></svg>
+        </button>
         <button class="tb-btn" data-action="minimize" aria-label="Minimise" title="Minimise">
-          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5h8"/></svg>
+          <svg class="ico" aria-hidden="true"><use href="#i-min"/></svg>
         </button>
         <button class="tb-btn tb-close" data-action="close" aria-label="Close" title="Close">
-          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+          <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
         </button>
       </div>
     </header>
 
-    <div class="body">
-      <aside class="brand">
-        <div class="brand-glow" aria-hidden="true"></div>
-        <img class="brand-art" src="img/emote.webp" alt="Dopa">
-        <h1 class="brand-title">Dopa's Discord<br>Purifier</h1>
-        <p class="brand-tag">Bulk-delete your messages, right inside the Discord app.</p>
-        <ul class="brand-points">
-          <li>Built on Vencord, installed for you</li>
-          <li>Survives Discord updates</li>
-          <li>Undo any time from this window</li>
+    <!-- The stage: Dopa inside the panel's 270° ring. It stays put while the screens change. -->
+    <aside class="stage" data-tauri-drag-region>
+      <div class="emblem" id="emblem" data-tauri-drag-region>
+        <div class="halo" aria-hidden="true"></div>
+        <svg class="orbit" viewBox="0 0 240 240" aria-hidden="true">
+          <circle class="orbit-dots" cx="120" cy="120" r="117"/>
+          <circle class="orbit-arc" cx="120" cy="120" r="117" pathLength="360" stroke-dasharray="26 334"/>
+        </svg>
+        <svg class="ring" viewBox="0 0 240 240" aria-hidden="true">
+          <defs>
+            <linearGradient id="ring-rose" gradientUnits="userSpaceOnUse" x1="30" y1="210" x2="210" y2="40">
+              <stop offset="0" stop-color="#e9478a"/>
+              <stop offset="1" stop-color="#ffb3cf"/>
+            </linearGradient>
+            <radialGradient id="ring-dial">
+              <stop offset="0" stop-color="#ff7aa9" stop-opacity=".12"/>
+              <stop offset="1" stop-color="#ff7aa9" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <circle class="r-dial" cx="120" cy="120" r="96" fill="url(#ring-dial)"/>
+          <circle class="r-track" id="r-track" cx="120" cy="120" r="104" transform="rotate(135 120 120)"/>
+          <g class="r-glow">
+            <circle class="r-fill" id="r-fill" cx="120" cy="120" r="104" transform="rotate(135 120 120)" stroke="url(#ring-rose)"/>
+            <circle class="r-head" id="r-head" cx="120" cy="120" r="104" transform="rotate(135 120 120)"/>
+          </g>
+          <circle class="r-fail" id="r-fail" cx="120" cy="120" r="104" transform="rotate(135 120 120)"/>
+        </svg>
+        <svg class="sweep" viewBox="0 0 240 240" aria-hidden="true">
+          <circle cx="120" cy="120" r="104" transform="rotate(135 120 120)" pathLength="360" stroke="url(#ring-rose)" stroke-dasharray="40 320"/>
+        </svg>
+        <div class="core">
+          <div class="avatar" id="avatar">
+            <img src="img/emote.webp" alt="Dopa" draggable="false">
+            <span class="avatar-badge" aria-hidden="true">
+              <svg class="ico b-check"><use href="#i-check"/></svg>
+              <svg class="ico b-bang"><use href="#i-bang"/></svg>
+              <svg class="ico b-q"><use href="#i-q"/></svg>
+            </span>
+          </div>
+          <div class="readout" aria-hidden="true">
+            <div class="readout-num"><span id="ring-pct">0</span><span class="readout-sign">%</span></div>
+            <div class="readout-label" id="ring-label">Installing</div>
+          </div>
+        </div>
+        <div class="ring-caption" id="ring-caption" aria-hidden="true"></div>
+        <div class="burst" id="burst" aria-hidden="true"></div>
+      </div>
+      <div class="wordmark" aria-hidden="true">
+        <span class="wm-eyebrow">Dopa’s Discord</span>
+        <span class="wm-wrap"><span class="wm-word">Purifier</span><span class="wm-shine"><span class="wm-shine-text">Purifier</span></span></span>
+      </div>
+      <p class="mood" id="mood">awaiting orders, princess~</p>
+      <footer class="stage-foot">
+        <span id="foot-version">Setup</span>
+        <span class="dot-sep" aria-hidden="true"></span>
+        <button class="link-btn" data-href="https://codemaker66.github.io/discord-stuff/">Website</button>
+        <span class="dot-sep" aria-hidden="true"></span>
+        <button class="link-btn" data-href="https://github.com/codemaker66/discord-stuff">Source</button>
+      </footer>
+    </aside>
+
+    <main class="panel" id="panel">
+      <!-- Looking for Discord -->
+      <section class="screen" data-screen="loading" aria-labelledby="h-loading">
+        <div class="eyebrow-row"><span class="eyebrow">One sec~</span></div>
+        <h2 id="h-loading">Looking for Discord…</h2>
+        <p class="lead">Checking which Discord apps live on this PC.</p>
+        <ul class="skeleton" aria-hidden="true"><li></li><li></li></ul>
+      </section>
+
+      <!-- Welcome: pick installs -->
+      <section class="screen" data-screen="welcome" aria-labelledby="h-welcome">
+        <div class="eyebrow-row">
+          <span class="eyebrow">Install into Discord</span>
+          <span class="pill" id="latest-pill" hidden></span>
+          <button class="link-btn eyebrow-back" data-action="show-already" hidden>
+            <svg class="ico" aria-hidden="true"><use href="#i-back"/></svg>Back
+          </button>
+        </div>
+        <h2 id="h-welcome">Ready when you are~</h2>
+        <p class="lead">Pick where the Purifier goes. Discord closes for a moment and reopens with it inside.</p>
+        <ul class="installs" id="installs" aria-label="Discord apps on this PC"></ul>
+        <p class="hint" id="install-hint" aria-live="polite"></p>
+        <p class="notice" id="net-note" hidden></p>
+        <div class="actions">
+          <button class="btn btn-quiet btn-icon-left" data-action="show-about" aria-expanded="false" aria-controls="about-sheet">
+            <svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>
+            <span>What does this do?</span>
+          </button>
+          <button class="btn btn-primary btn-lg" data-action="install" id="install-btn">
+            <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
+            <span>Install</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Working: the timeline and the log -->
+      <section class="screen" data-screen="installing" aria-labelledby="h-run">
+        <div class="eyebrow-row">
+          <span class="eyebrow eyebrow-live"><span class="live-dot" aria-hidden="true"></span><span id="run-title">Installing</span></span>
+        </div>
+        <h2 id="h-run"><span id="run-step">Starting…</span></h2>
+        <p class="lead" id="run-detail">Getting ready~</p>
+        <div class="run-body">
+          <ol class="steps" id="steps" aria-label="Steps"></ol>
+          <pre class="log" id="log" tabindex="0" aria-label="Details" hidden></pre>
+        </div>
+        <div class="actions actions-run">
+          <button class="btn btn-quiet btn-sm" data-action="toggle-log" aria-expanded="false" aria-controls="log">Show details</button>
+          <span class="run-note">Keep this window open until it's done~</span>
+        </div>
+        <p class="sr" id="run-live" aria-live="polite"></p>
+      </section>
+
+      <!-- Finished install -->
+      <section class="screen" data-screen="done" aria-labelledby="h-done">
+        <div class="eyebrow-row"><span class="eyebrow eyebrow-ok"><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Installed</span></div>
+        <h2 class="display" id="h-done">You’re all set~</h2>
+        <p class="lead" id="done-lead">Discord is reopening with the Purifier inside.</p>
+        <div class="howto">
+          <div class="howto-title" id="howto-title">Next, in Discord</div>
+          <ol class="next" aria-labelledby="howto-title">
+            <li><span class="next-n">1</span><span>Open any chat</span></li>
+            <li><span class="next-n">2</span><span>Press <b>Purify</b> on Dopa’s panel</span></li>
+            <li><span class="next-n">3</span><span>Hold the red button, and it’s gone~</span></li>
+          </ol>
+        </div>
+        <ul class="summary" id="done-summary" aria-label="What changed"></ul>
+        <div class="actions">
+          <button class="btn btn-quiet" data-action="close-app">Close</button>
+          <button class="btn btn-primary btn-lg" data-action="open-discord">
+            <svg class="ico" aria-hidden="true"><use href="#i-external"/></svg>
+            <span>Open Discord</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Already installed: repair or update, uninstall -->
+      <section class="screen" data-screen="already" aria-labelledby="h-already">
+        <div class="eyebrow-row"><span class="eyebrow eyebrow-ok"><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Installed</span></div>
+        <h2 id="h-already">Already purified~</h2>
+        <p class="lead" id="already-lead">The Purifier is in your Discord.</p>
+        <div class="callout callout-update" id="update-note" hidden>
+          <span class="callout-ico" aria-hidden="true"><svg class="ico"><use href="#i-up"/></svg></span>
+          <span class="callout-text"><b id="update-title">An update is ready</b><span id="update-sub"></span></span>
+        </div>
+        <dl class="facts" id="installed-facts"></dl>
+        <div class="actions">
+          <button class="link-btn" data-action="show-welcome">Choose Discord apps</button>
+          <span class="spacer"></span>
+          <button class="btn btn-quiet" data-action="show-uninstall" aria-expanded="false" aria-controls="uninstall-box">Uninstall…</button>
+          <button class="btn btn-primary btn-lg" data-action="repair" id="repair-btn">
+            <svg class="ico ico-repair" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <svg class="ico ico-update" aria-hidden="true"><use href="#i-up"/></svg>
+            <span id="repair-label">Repair</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Finished uninstall -->
+      <section class="screen" data-screen="uninstalled" aria-labelledby="uninstalled-title">
+        <div class="eyebrow-row"><span class="eyebrow eyebrow-calm">Uninstalled</span></div>
+        <h2 id="uninstalled-title">All removed~</h2>
+        <p class="lead" id="uninstalled-lead">Discord is back to how it ships.</p>
+        <ul class="summary" id="uninstalled-summary" aria-label="What changed"></ul>
+        <p class="aside-note">Changed your mind? Open this app again any time.</p>
+        <div class="actions">
+          <button class="btn btn-quiet" data-action="close-app">Close</button>
+          <button class="btn btn-primary btn-lg" data-action="open-discord">
+            <svg class="ico" aria-hidden="true"><use href="#i-external"/></svg>
+            <span>Open Discord</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- No Discord installed -->
+      <section class="screen" data-screen="no-discord" aria-labelledby="h-nodiscord">
+        <div class="eyebrow-row"><span class="eyebrow eyebrow-calm">No Discord found</span></div>
+        <h2 id="h-nodiscord">Discord isn’t here yet</h2>
+        <p class="lead">The Purifier lives inside the Discord app. Install it, open it once, then come back here~</p>
+        <div class="howto">
+          <div class="howto-title" id="nd-title">What to do</div>
+          <ol class="next" aria-labelledby="nd-title">
+            <li><span class="next-n">1</span><span>Get Discord for Windows</span></li>
+            <li><span class="next-n">2</span><span>Open it once</span></li>
+            <li><span class="next-n">3</span><span>Press <b>Check again</b></span></li>
+          </ol>
+        </div>
+        <div class="actions">
+          <button class="btn btn-quiet" data-action="recheck">
+            <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>Check again</span>
+          </button>
+          <button class="btn btn-primary btn-lg" data-action="download-discord">
+            <svg class="ico" aria-hidden="true"><use href="#i-external"/></svg>
+            <span>Get Discord</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Something went wrong -->
+      <section class="screen" data-screen="error" aria-labelledby="error-title">
+        <div class="eyebrow-row"><span class="eyebrow eyebrow-bad"><span class="err-ico" id="error-ico" aria-hidden="true"></span><span id="error-eyebrow">Stopped</span></span></div>
+        <h2 id="error-title">Something went wrong</h2>
+        <p class="lead" id="error-message"></p>
+        <p class="error-detail" id="error-detail" tabindex="0"></p>
+        <div class="howto tips" id="error-tips-box">
+          <div class="howto-title" id="tips-title">Try this</div>
+          <ul class="tip-list" id="error-tips" aria-labelledby="tips-title"></ul>
+        </div>
+        <div class="actions">
+          <button class="btn btn-quiet btn-icon-left" data-action="back">
+            <svg class="ico" aria-hidden="true"><use href="#i-back"/></svg>
+            <span>Back</span>
+          </button>
+          <span class="spacer"></span>
+          <button class="btn btn-quiet" data-action="copy-log" id="copy-log-btn">
+            <svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>Copy log</span>
+          </button>
+          <button class="btn btn-primary btn-lg" data-action="retry">
+            <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>Try again</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- What the install does: a sheet over the welcome screen -->
+      <div class="sheet" id="about-sheet" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+        <div class="sheet-head">
+          <h3 id="about-title">What this does</h3>
+          <button class="icon-btn" data-action="hide-about" aria-label="Close">
+            <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+          </button>
+        </div>
+        <ul class="about">
+          <li><span class="about-ico"><svg class="ico" aria-hidden="true"><use href="#i-sparkle"/></svg></span>
+            <span>Installs <b>Vencord</b>, a popular Discord mod, with Dopa’s Purifier built in.</span></li>
+          <li><span class="about-ico"><svg class="ico" aria-hidden="true"><use href="#i-restart"/></svg></span>
+            <span>Discord closes for a moment and reopens by itself.</span></li>
+          <li><span class="about-ico"><svg class="ico" aria-hidden="true"><use href="#i-heart"/></svg></span>
+            <span>Your Discord and Vencord settings are kept, and every download is checked against its fingerprint.</span></li>
+          <li><span class="about-ico"><svg class="ico" aria-hidden="true"><use href="#i-undo"/></svg></span>
+            <span>Uninstall any time: open this app again and pick <b>Uninstall</b>.</span></li>
+          <li class="about-honest"><span class="about-ico"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></span>
+            <span>Honest heads-up: client mods like Vencord are against Discord’s Terms of Service. Lots of people use them anyway; it’s your call.</span></li>
         </ul>
-      </aside>
+        <div class="sheet-foot">
+          <button class="link-btn" data-href="https://codemaker66.github.io/discord-stuff/">More on the website</button>
+          <span class="spacer"></span>
+          <button class="btn btn-quiet" data-action="hide-about">Got it</button>
+        </div>
+      </div>
 
-      <main class="content">
-        <!-- Looking for Discord -->
-        <section class="screen" data-screen="loading" aria-live="polite">
-          <div class="center-block">
-            <div class="spinner" aria-hidden="true"></div>
-            <p class="muted">Looking for Discord on this PC…</p>
-          </div>
-        </section>
+      <!-- Uninstall: a sheet over the already-installed screen -->
+      <div class="sheet" id="uninstall-box" role="dialog" aria-modal="true" aria-labelledby="uninstall-title" hidden>
+        <div class="sheet-head">
+          <h3 id="uninstall-title">How should Discord look afterwards?</h3>
+          <button class="icon-btn" data-action="hide-uninstall" aria-label="Close">
+            <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+          </button>
+        </div>
+        <div class="choices">
+          <button class="choice" data-action="uninstall-keep">
+            <span class="choice-ico"><svg class="ico" aria-hidden="true"><use href="#i-heart"/></svg></span>
+            <span class="choice-text"><strong>Keep Vencord</strong><span>Switch to official Vencord. Your Vencord settings stay.</span></span>
+            <svg class="ico choice-go" aria-hidden="true"><use href="#i-chevron"/></svg>
+          </button>
+          <button class="choice choice-danger" data-action="uninstall-remove">
+            <span class="choice-ico"><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg></span>
+            <span class="choice-text"><strong>Remove everything</strong><span>Take Vencord out too and put Discord back exactly as it ships.</span></span>
+            <svg class="ico choice-go" aria-hidden="true"><use href="#i-chevron"/></svg>
+          </button>
+        </div>
+        <div class="sheet-foot">
+          <span class="muted">Either way, Discord restarts by itself.</span>
+          <span class="spacer"></span>
+          <button class="btn btn-quiet" data-action="hide-uninstall">Cancel</button>
+        </div>
+      </div>
+    </main>
 
-        <!-- Welcome: pick installs -->
-        <section class="screen" data-screen="welcome">
-          <h2>Install into Discord</h2>
-          <p class="lead">Pick the Discord apps to set up. They'll close for a moment and reopen with the Purifier inside.</p>
-          <ul class="installs" id="installs" aria-label="Discord installs"></ul>
-          <p class="notice" id="net-note" hidden></p>
-          <div class="actions">
-            <button class="btn btn-primary" data-action="install" id="install-btn">Install</button>
-            <span class="muted small" id="install-hint"></span>
-          </div>
-        </section>
-
-        <!-- Working: steps, progress, log -->
-        <section class="screen" data-screen="installing">
-          <h2 id="run-title">Installing</h2>
-          <div class="progress" aria-hidden="true"><div class="progress-bar" id="progress-bar"></div></div>
-          <div class="progress-meta">
-            <span id="run-detail" class="muted">Starting…</span>
-            <span id="run-pct" class="pct">0%</span>
-          </div>
-          <ol class="steps" id="steps"></ol>
-          <div class="log-wrap">
-            <button class="link-btn" data-action="toggle-log" aria-expanded="false" aria-controls="log">Show details</button>
-            <pre class="log" id="log" hidden></pre>
-          </div>
-        </section>
-
-        <!-- Finished install -->
-        <section class="screen" data-screen="done">
-          <div class="result-mark ok" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-          </div>
-          <h2>You're all set</h2>
-          <p class="lead" id="done-lead">Discord is reopening with the Purifier inside. Open any chat and press Purify.</p>
-          <ul class="summary" id="done-summary"></ul>
-          <div class="actions">
-            <button class="btn btn-primary" data-action="open-discord">Open Discord</button>
-            <button class="btn btn-ghost" data-action="close-app">Close</button>
-          </div>
-        </section>
-
-        <!-- Already installed: repair or uninstall -->
-        <section class="screen" data-screen="already">
-          <h2>The Purifier is installed</h2>
-          <dl class="facts" id="installed-facts"></dl>
-          <p class="notice ok" id="update-note" hidden></p>
-          <div class="actions">
-            <button class="btn btn-primary" data-action="repair" id="repair-btn">Repair</button>
-            <button class="btn btn-ghost" data-action="show-uninstall" aria-expanded="false" aria-controls="uninstall-box">Uninstall…</button>
-            <button class="link-btn" data-action="show-welcome">Choose Discord apps</button>
-          </div>
-          <div class="uninstall-box" id="uninstall-box" hidden>
-            <p class="small">How should Discord look afterwards?</p>
-            <div class="choice-row">
-              <button class="choice" data-action="uninstall-keep">
-                <strong>Keep Vencord</strong>
-                <span>Switch to official Vencord and keep your Vencord settings.</span>
-              </button>
-              <button class="choice danger" data-action="uninstall-remove">
-                <strong>Remove everything</strong>
-                <span>Put Discord back exactly as it ships.</span>
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <!-- Finished uninstall -->
-        <section class="screen" data-screen="uninstalled">
-          <div class="result-mark ok" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-          </div>
-          <h2 id="uninstalled-title">Removed</h2>
-          <p class="lead" id="uninstalled-lead">Discord is back to normal.</p>
-          <ul class="summary" id="uninstalled-summary"></ul>
-          <div class="actions">
-            <button class="btn btn-primary" data-action="open-discord">Open Discord</button>
-            <button class="btn btn-ghost" data-action="close-app">Close</button>
-          </div>
-        </section>
-
-        <!-- No Discord installed -->
-        <section class="screen" data-screen="no-discord">
-          <div class="result-mark warn" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 7v6M12 16.5v.5"/></svg>
-          </div>
-          <h2>Discord isn't installed yet</h2>
-          <p class="lead">Install the Discord app, open it once, then come back here.</p>
-          <div class="actions">
-            <button class="btn btn-primary" data-action="download-discord">Get Discord</button>
-            <button class="btn btn-ghost" data-action="recheck">Check again</button>
-          </div>
-        </section>
-
-        <!-- Something went wrong -->
-        <section class="screen" data-screen="error">
-          <div class="result-mark bad" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
-          </div>
-          <h2 id="error-title">Something went wrong</h2>
-          <p class="lead" id="error-message"></p>
-          <p class="error-detail" id="error-detail"></p>
-          <div class="actions">
-            <button class="btn btn-primary" data-action="retry">Try again</button>
-            <button class="btn btn-ghost" data-action="copy-log" id="copy-log-btn">Copy log</button>
-            <button class="link-btn" data-action="back">Back</button>
-          </div>
-        </section>
-
-        <footer class="foot">
-          <span class="muted small" id="foot-version">Setup</span>
-          <span class="foot-links">
-            <button class="link-btn small" data-href="https://codemaker66.github.io/discord-stuff/">Website</button>
-            <button class="link-btn small" data-href="https://github.com/codemaker66/discord-stuff">Source</button>
-          </span>
-        </footer>
-      </main>
-    </div>
     <div class="toast" id="toast" role="status" hidden></div>
   </div>
 </body>
