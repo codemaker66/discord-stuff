@@ -339,8 +339,9 @@ await test('T13 minimise keeps the run going and restores', async () => {
   await holdConfirm(page);
   await page.click('[data-act="minimize"]');
   await page.locator('.orb').waitFor({ state: 'visible', timeout: 3000 });
-  // The orb appears while the panel is still folding into it, then the panel goes.
-  await page.locator('.panel').waitFor({ state: 'hidden', timeout: 1000 });
+  // The orb appears while the panel is still folding into it, then the panel goes (the 320 ms fold can
+  // run several times slower in headless WebKit on CI, so this waits for the end, not for a deadline).
+  await page.locator('.panel').waitFor({ state: 'hidden', timeout: 5000 });
   await waitEnd(page);
   assert(mine(world, '5002').length === 0, 'run completed while minimised');
   assert(await page.locator('.orb[data-live="done"]').count() === 1, 'orb shows the finished run');
