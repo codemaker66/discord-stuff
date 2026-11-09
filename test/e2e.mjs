@@ -334,10 +334,13 @@ await test('T12 SPA navigation updates the target', async () => {
 });
 
 await test('T13 minimise keeps the run going and restores', async () => {
-  const { page, stats, world, context } = await boot('/channels/4001/5002', { latencyMs: 60 });
+  // 40 of yours, so the run is still going when the panel folds away: at test pace the default 10 can
+  // all go inside the 1.1 s hold, and a run that ended in the open panel rightly leaves a plain orb.
+  const { page, stats, world, context } = await boot('/channels/4001/5002', { latencyMs: 60, world: buildWorld({ bulk: { 5002: 30 } }) });
   await page.click('[data-act="purify"]');
   await holdConfirm(page);
   await page.click('[data-act="minimize"]');
+  assert(await page.evaluate(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.run !== 'idle'), 'the run is still going when the panel folds away');
   await page.locator('.orb').waitFor({ state: 'visible', timeout: 3000 });
   // The orb appears while the panel is still folding into it, then the panel goes (the 320 ms fold can
   // run several times slower in headless WebKit on CI, so this waits for the end, not for a deadline).
