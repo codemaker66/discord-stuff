@@ -111,14 +111,6 @@ await test('S4 an older installed version is offered the update', async () => {
   await context.close();
 });
 
-await test('S5 share copies the page link', async () => {
-  const { page, context } = await open({ ua: UA.chrome, permissions: ['clipboard-read', 'clipboard-write'] });
-  await page.locator('[data-act="share"]').first().click();
-  await page.waitForTimeout(200);
-  assert((await page.evaluate(() => navigator.clipboard.readText())) === HOME, 'clipboard');
-  await context.close();
-});
-
 await test('S6 every local asset and download exists', async () => {
   const html = fs.readFileSync(path.join(root, 'docs/index.html'), 'utf8');
   const refs = [...html.matchAll(/(?:src|href)="((?:img|downloads)\/[^"]+)"/g)].map((m) => m[1]);
@@ -635,57 +627,52 @@ await test('S32 trust at first glance, step 2 as one paste, the link preview and
   }
 });
 
-await test('S33 copying says so on the button you pressed; a refused clipboard selects the link instead', async () => {
+await test('S33 copying says so on the button you pressed; a refused clipboard selects the text instead', async () => {
   {
     const { page, context } = await open({ ua: UA.chrome, permissions: ['clipboard-read', 'clipboard-write'] });
-    assert((await page.locator('[data-role="share-url"]').textContent()) === 'codemaker66.github.io/discord-stuff', 'the link reads without its https://');
-    const button = page.locator('.share [data-act="share"]');
-    await button.click();
-    await page.waitForTimeout(200);
-    assert((await button.textContent()).trim() === 'Copied ✓', `share button says "${(await button.textContent()).trim()}"`);
-    assert((await page.evaluate(() => navigator.clipboard.readText())) === HOME, 'the full link is copied');
-    assert(await page.locator('.toast.show').count() === 0 && /Link copied/.test(await page.locator('[data-role="toast"]').textContent()), 'no toast over the page, but screen readers hear it');
-    await page.waitForTimeout(1600);
-    assert((await button.textContent()).trim() === 'Copy link', 'the label comes back');
-    const hero = page.locator('.hero [data-act="share"]');
-    await hero.click();
-    await page.waitForTimeout(200);
-    assert((await hero.locator('span').textContent()) === 'Copied ✓' && await hero.locator('svg').count() === 1, 'hero swaps only its words');
     await page.click('[data-act="copy-ext"]');
     await page.waitForTimeout(200);
-    assert((await page.locator('[data-act="copy-ext"]').textContent()) === 'Copied ✓', 'extension address copy says so too');
+    assert((await page.locator('[data-act="copy-ext"]').textContent()) === 'Copied ✓', 'extension address copy says so');
+    assert((await page.evaluate(() => navigator.clipboard.readText())) === 'chrome://extensions', 'the address is copied');
+    assert(await page.locator('.toast.show').count() === 0 && /Copied — paste it/.test(await page.locator('[data-role="toast"]').textContent()), 'no toast over the page, but screen readers hear it');
+    await page.waitForTimeout(1600);
+    assert((await page.locator('[data-act="copy-ext"]').textContent()) === 'Copy', 'the label comes back');
     await context.close();
   }
   {
     const { page, context } = await open({ ua: UA.chrome, init: () => {
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) } });
     } });
-    await page.click('.hero [data-act="share"]');
-    await page.waitForTimeout(400);
-    assert((await page.evaluate(() => getSelection().toString())) === 'codemaker66.github.io/discord-stuff', 'the link is selected');
-    assert(await page.locator('.toast.show').count() === 1 && (await page.locator('[data-role="toast"]').textContent()) === 'Link selected~ press Ctrl+C (⌘C on Mac) ♡', 'and the toast says what to press');
-    const pasted = await page.evaluate(() => {
-      const data = new DataTransfer();
-      document.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }));
-      return data.getData('text/plain');
-    });
-    assert(pasted === HOME, `Ctrl+C on the shown link copies ${pasted}, which Discord would not make a link`);
+    await page.click('[data-act="copy-ext"]');
+    await page.waitForTimeout(300);
+    assert((await page.evaluate(() => getSelection().toString())) === 'chrome://extensions', 'the address is selected');
+    assert(await page.locator('.toast.show').count() === 1 && (await page.locator('[data-role="toast"]').textContent()) === 'Selected~ press Ctrl+C, then paste it in the address bar', 'address toast');
     await page.waitForTimeout(2800);
     assert(await page.locator('.toast.show').count() === 1, 'the toast stays long enough to act on');
     await page.waitForTimeout(1200);
     assert(await page.locator('.toast.show').count() === 0, 'then goes');
-    await page.click('[data-act="copy-ext"]');
-    await page.waitForTimeout(300);
-    assert((await page.evaluate(() => getSelection().toString())) === 'chrome://extensions', 'the address is selected');
-    assert((await page.locator('[data-role="toast"]').textContent()) === 'Selected~ press Ctrl+C, then paste it in the address bar', 'address toast');
     await context.close();
   }
-  // A phone that shares says Share; the link wraps instead of hiding its end.
+  // "Send me this link" on a phone with no share sheet: the clipboard says so on the button; a refused one says what to do.
   {
-    const { page, context } = await open({ ua: UA.android, viewport: PHONE, init: () => { navigator.share = async () => {}; } });
-    assert((await page.locator('.share [data-act="share"]').textContent()).trim() === 'Share link', 'share card on a phone');
-    const url = await page.locator('[data-role="share-url"]').evaluate((el) => ({ full: el.scrollWidth <= el.clientWidth + 1, text: el.textContent }));
-    assert(url.full, `link cut off at 390px: ${url.text}`);
+    const { page, context } = await open({ ua: UA.android, viewport: PHONE, init: () => {
+      Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t; } } });
+    } });
+    await page.click('[data-act="send-link"]');
+    await page.waitForTimeout(200);
+    assert((await page.evaluate(() => window.__copied)) === HOME, 'the page link is copied');
+    assert((await page.locator('[data-act="send-link"]').textContent()) === 'Copied ✓' && /open it on your computer/.test(await page.locator('[data-role="toast"]').textContent()), 'button and status line say so');
+    await context.close();
+  }
+  {
+    const { page, context } = await open({ ua: UA.android, viewport: PHONE, init: () => {
+      Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) } });
+    } });
+    await page.click('[data-act="send-link"]');
+    await page.waitForTimeout(300);
+    assert(await page.locator('.toast.show').count() === 1 && /address bar/.test(await page.locator('[data-role="toast"]').textContent()), 'a refused clipboard says where to copy it from');
     await context.close();
   }
 });
@@ -780,7 +767,7 @@ await test('S37 reduced motion keeps the toast\'s fade and drops only movement',
   assert(!/transform/.test(props.toast) && !/transform/.test(props.btn), `movement still transitions: ${JSON.stringify(props)}`);
   const samples = await page.evaluate(() => new Promise((resolve) => {
     const t = document.querySelector('.toast'); const seen = [];
-    document.querySelector('.hero [data-act="share"]').click();
+    document.querySelector('[data-act="copy-ext"]').click();
     const t0 = performance.now();
     (function frame() { seen.push(Number(getComputedStyle(t).opacity)); if (performance.now() - t0 < 400) requestAnimationFrame(frame); else resolve(seen); })();
   }));
@@ -991,6 +978,21 @@ await test('S44 the app route reflows at 320px with no sideways scroll', async (
       wide: [...document.querySelectorAll('#app *')].filter((el) => el.offsetParent && el.getBoundingClientRect().right > innerWidth + 0.5).map((el) => el.className || el.tagName).slice(0, 5),
     }));
     assert(r.overflow <= 0 && r.wide.length === 0, `${name}: ${JSON.stringify(r)}`);
+    await context.close();
+  }
+});
+
+// The purifier goes to a few friends by hand, so the page has nothing to share onward.
+await test('S45 no share-with-a-friend control or section, on a computer and on a phone', async () => {
+  for (const [name, opts] of [['Windows desktop', { ua: UA.chrome, viewport: { width: 1366, height: 768 } }], ['iPhone', { ua: UA.iphone, viewport: PHONE }]]) {
+    const { page, context, errors } = await open(opts);
+    assert(await page.locator('[data-act="share"]').count() === 0, `${name}: a [data-act="share"] element is still there`);
+    assert(await page.locator('[data-role="share-url"], .share, #share-title').count() === 0, `${name}: the share card is still there`);
+    const text = (await page.locator('body').textContent()).replace(/\s+/g, ' ');
+    assert(!/Share with a friend|Send this to a friend|send it to a friend|Share link/i.test(text), `${name}: the page still talks about sharing it`);
+    const actions = await page.locator('.hero .cta > *').count();
+    assert(actions === 1, `${name}: the hero has ${actions} buttons, wanted just the one`);
+    assert(errors.length === 0, errors.join('; '));
     await context.close();
   }
 });
