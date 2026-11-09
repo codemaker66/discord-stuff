@@ -286,6 +286,11 @@
     .app-steps li { padding: 8px 6px; }
     .app-steps li:not(:last-child)::after { left: 21px; top: 44px; bottom: -8px; }
   }
+  @media (max-width: 380px) {
+    /* A label that can't fit on one line (a wide fallback font at 320px) wraps instead of pushing the page sideways. */
+    .btn { height: auto; min-height: 52px; padding: 12px 18px; white-space: normal; text-wrap: balance; text-align: center; line-height: 1.25; }
+    .btn-lg { min-height: 56px; }
+  }
   @media (max-width: 440px) {
     .ss-pair { grid-template-columns: minmax(0, 1fr); }
     .ss-box { min-height: 0; }
