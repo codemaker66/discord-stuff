@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/codemaker66/discord-stuff/releases/latest/download/DopasPurifierSetup.exe">
-    <img src="https://raw.githubusercontent.com/codemaker66/discord-stuff/main/docs/img/share-desktop.png" alt="Dopa's Discord Purifier, now in the Discord app: one download for Windows" width="820">
+    <img src="https://raw.githubusercontent.com/codemaker66/discord-stuff/desktop-v{{VERSION}}-{{HASH}}/docs/img/share-desktop.png" alt="Dopa's Discord Purifier, now in the Discord app: one download for Windows" width="820">
   </a>
 </p>
 
