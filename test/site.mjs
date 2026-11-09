@@ -578,7 +578,8 @@ await test('S31 one loud button, on the step you are on (fresh, store visited, i
     const { page, context } = await open({ ua: UA.chrome, viewport: { width: w, height: h } });
     const lines = await page.locator('h1').evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
     assert(lines >= 1 && lines <= 2, `${w}px: headline in ${lines} lines`);
-    if (w === 1440) assert((await page.locator('#install').boundingBox()).y < h - 120, '"Set it up" above the fold at 1440×900');
+    // Windows leads with the Discord app route (S41); the browser route's own fold check moved to S42.
+    if (w === 1440) assert((await page.locator('#app').boundingBox()).y < h - 120, 'the Discord app route starts above the fold at 1440×900');
     await context.close();
   }
 });
@@ -796,7 +797,8 @@ await test('S38 one name per idea on the page and in the README: open a chat, Pu
   assert(/Bardo and Dopa are shielded from the start~ ♡ Shields cover one-to-one DMs, not group chats\./.test(await faq("Can it delete other people's messages?")), 'shield answer');
   assert(/press Install \(or Reinstall\) in step 3\./.test(await faq('How do updates work?')), 'updates answer names the button as it reads');
   assert((await page.locator('.feature p').nth(3).textContent()) === "Tap the shield on anyone's DM and it's never purged, until you say so.", 'shield card');
-  const text = await page.locator('body').textContent();
+  // The drawn SmartScreen box and its FAQ quote Windows' own words, which aren't the shield's name.
+  const text = (await page.locator('body').textContent()).replace(/protected your PC/g, '');
   for (const word of [/forever/i, /Current channel/i, /\bBatch\b/, /\bProtect/i]) assert(!word.test(text), `page still says ${word}`);
   await context.close();
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
@@ -852,6 +854,141 @@ await test('S39 the hero picture and icon come out of tools/marketing.py the siz
   assert(fs.readFileSync(path.join(out, 'purging.webp')).includes(stamp), 'purging.webp carries the pace stamp');
   assert(fs.readFileSync(path.join(out, 'og.png')).includes(stamp), 'og.png carries the pace stamp');
   fs.rmSync(shots, { recursive: true, force: true });
+});
+
+// ── The Discord app route (Windows installer) ──
+const APP_URL = 'https://github.com/codemaker66/discord-stuff/releases/latest/download/DopasPurifierSetup.exe';
+// GitHub stands in for the release: the click downloads a file, as the real link does.
+const fakeRelease = (page) => page.route('https://github.com/**', (route) => route.fulfill({
+  status: 200, headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename=DopasPurifierSetup.exe' }, body: 'MZ',
+}));
+const appState = (page) => page.evaluate(() => ({
+  current: [...document.querySelectorAll('[data-app-step].is-current')].map((li) => li.dataset.appStep),
+  done: [...document.querySelectorAll('[data-app-step].is-done')].map((li) => li.dataset.appStep),
+  loud: document.querySelector('[data-role="app-link"]').classList.contains('btn-primary'),
+}));
+
+await test('S40 the Discord app button: the stable link, a clear name, and an honest word on what it installs', async () => {
+  const html = fs.readFileSync(path.join(root, 'docs/index.html'), 'utf8');
+  assert(html.includes('<!-- installer-shots -->'), 'a place kept for the installer pictures');
+  assert(!/installer-(?:welcome|installing|done)\.webp/.test(html), 'installer pictures not referenced before they exist');
+  const { page, context, errors } = await open({ ua: UA.chrome, viewport: { width: 1366, height: 768 } });
+  const button = page.locator('#app').getByRole('link', { name: 'Get it for the Discord app', exact: true });
+  assert(await button.count() === 1, 'one link named "Get it for the Discord app" in the app section');
+  assert((await button.getAttribute('href')) === APP_URL, `href ${await button.getAttribute('href')}`);
+  assert((await button.getAttribute('target')) === null, 'downloads in place, no blank tab');
+  assert(/Windows 10\/11/.test(await page.locator('#app .app-meta').textContent()), 'says which Windows');
+  const app = (await page.locator('#app').textContent()).replace(/\s+/g, ' ');
+  assert(/Vencord, a popular Discord mod, with Dopa's Purifier built in/.test(app), 'what it installs');
+  assert(/settings and plugins are kept/.test(app) && /Run the same app again and press Uninstall/.test(app), 'settings kept, uninstall from the same app');
+  assert(/Honest note: client mods like Vencord are against Discord's terms, so like any tool of this kind it carries a small risk\. Use it at your own discretion\./.test(app), 'the honest terms line');
+  const steps = await page.$$eval('[data-app-step]', (els) => els.map((li) => li.querySelector('b').textContent));
+  assert(same(steps, ['Download', 'Run it', 'Discord reopens with the Purifier']), JSON.stringify(steps));
+  const faq = (await page.locator('details', { hasText: 'How do I remove it?' }).textContent()).replace(/\s+/g, ' ');
+  assert(/run DopasPurifierSetup\.exe again and press Uninstall/.test(faq), 'the FAQ says how to remove the app version');
+  assert(/against Discord's terms too/.test(await page.locator('details', { hasText: 'Could my account get in trouble?' }).textContent()), 'the risk answer covers client mods');
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert(readme.includes(APP_URL), 'README offers the stable link');
+  assert(errors.length === 0, errors.join('; '));
+  await context.close();
+});
+
+await test('S41 Windows visitors get the Discord app first, and the steps follow the download', async () => {
+  for (const key of ['chrome', 'edge', 'firefox']) {
+    const { page, context, errors } = await open({ ua: UA[key], viewport: { width: 1366, height: 768 } });
+    const hero = page.locator('[data-role="hero-cta"]');
+    assert((await hero.textContent()).trim() === 'Get it for the Discord app' && (await hero.getAttribute('href')) === APP_URL, `${key}: hero is the download`);
+    const order = await page.evaluate(() => ({
+      next: document.querySelector('header.hero').nextElementSibling.id,
+      before: !!(document.querySelector('#app').compareDocumentPosition(document.querySelector('#install')) & Node.DOCUMENT_POSITION_FOLLOWING),
+      rose: [...document.querySelectorAll('.btn-primary')].filter((b) => b.offsetParent).slice(0, 2).map((b) => b.dataset.role),
+    }));
+    assert(order.next === 'app' && order.before, `${key}: the app section comes straight after the hero: ${JSON.stringify(order)}`);
+    assert(same(order.rose, ['hero-cta', 'app-link']), `${key}: the first rose buttons are the download: ${order.rose}`);
+    assert(!(await page.locator('[data-role="app-other"]').isVisible()), `${key}: no "Windows only" note on Windows`);
+    assert(await page.locator('[data-role="smartscreen"]').isVisible(), `${key}: the SmartScreen help shows`);
+    assert((await page.locator('#app').boundingBox()).y < 768, `${key}: the app section starts on the first screen at 1366×768`);
+    assert(same(await appState(page), { current: ['download'], done: [], loud: true }), `${key}: fresh ${JSON.stringify(await appState(page))}`);
+    assert(await page.locator('#install .step').first().isVisible() && await page.locator('a[href="downloads/DopasPurifier.plugin.js"]').isVisible(), `${key}: browser and BetterDiscord routes stay reachable`);
+    assert(errors.length === 0, errors.join('; '));
+    await context.close();
+  }
+  // Pressed in the hero: it downloads, glides to the app section, and "Run it" is the step you're on.
+  {
+    const { page, context, errors } = await open({ ua: UA.chrome, viewport: { width: 1366, height: 768 } });
+    await fakeRelease(page);
+    const download = page.waitForEvent('download', { timeout: 5000 });
+    await page.click('[data-role="hero-cta"]');
+    assert((await download).suggestedFilename() === 'DopasPurifierSetup.exe', 'the installer downloads');
+    await page.waitForTimeout(1200);
+    assert(same(await appState(page), { current: ['run'], done: ['download'], loud: false }), `after download ${JSON.stringify(await appState(page))}`);
+    assert((await page.locator('[data-role="app-link"]').textContent()).trim() === 'Download it again', 'the button quiets to Download it again');
+    const top = (await page.locator('#app').boundingBox()).y;
+    assert(Math.abs(top) < 80, `the app section glides into view (top ${Math.round(top)}px)`);
+    await page.reload();
+    await page.waitForTimeout(300);
+    assert(same((await appState(page)).current, ['run']), 'the step holds for the rest of the visit');
+    assert(errors.length === 0, errors.join('; '));
+    await context.close();
+  }
+  // The Purifier already running in this browser: that route is theirs, so the app route stays quiet.
+  {
+    const { page, context } = await open({ ua: UA.chrome, withScript: userscript });
+    await page.waitForSelector('[data-role="installed"]:not([hidden])', { timeout: 3000 });
+    assert(same(await appState(page), { current: [], done: [], loud: false }), `installed: ${JSON.stringify(await appState(page))}`);
+    await context.close();
+  }
+});
+
+await test('S42 Mac, Linux and phones are told it is Windows only for now, with the browser route first', async () => {
+  const linux = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  const macChrome = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  for (const [name, ua] of [['safari', UA.safari], ['mac chrome', macChrome], ['linux', linux]]) {
+    const { page, context, errors } = await open({ ua, viewport: { width: 1440, height: 900 } });
+    const note = page.locator('[data-role="app-other"]');
+    assert(await note.isVisible() && /^Windows only for now~ On a Mac or Linux, use Discord in your browser instead/.test((await note.textContent()).trim()), `${name}: ${await note.textContent()}`);
+    const hero = page.locator('[data-role="hero-cta"]');
+    assert((await hero.textContent()).trim() === 'Get it free' && (await hero.getAttribute('href')) === '#install', `${name}: hero leads to the browser setup`);
+    assert(await page.evaluate(() => !!(document.querySelector('#install').compareDocumentPosition(document.querySelector('#app')) & Node.DOCUMENT_POSITION_FOLLOWING)), `${name}: the browser setup comes first`);
+    assert((await page.locator('#install').boundingBox()).y < 900 - 120, `${name}: "Set it up" above the fold at 1440×900`);
+    const link = page.locator('[data-role="app-link"]');
+    assert(!(await link.evaluate((el) => el.classList.contains('btn-primary'))) && (await link.textContent()).trim() === 'Download for Windows' && (await link.getAttribute('href')) === APP_URL, `${name}: a quiet Windows download remains`);
+    assert(!(await page.locator('[data-role="app-steps"]').isVisible()) && !(await page.locator('[data-role="smartscreen"]').isVisible()), `${name}: no Windows steps`);
+    assert((await page.locator('#app-title').textContent()) === 'The Discord app version', `${name}: heading`);
+    assert(errors.length === 0, errors.join('; '));
+    await context.close();
+  }
+  for (const key of ['iphone', 'android']) {
+    const { page, context } = await open({ ua: UA[key], viewport: PHONE });
+    assert(/^Windows only for now~ Use the Discord app on a Windows PC\? Open this page there/.test((await page.locator('[data-role="app-other"]').textContent()).trim()), `${key}: phone note`);
+    assert(!(await page.locator('[data-role="app-link"]').isVisible()), `${key}: no .exe offered to a phone`);
+    await context.close();
+  }
+});
+
+await test('S43 the drawn SmartScreen box reads as text to screen readers', async () => {
+  const { page, context } = await open({ ua: UA.chrome });
+  const fig = page.getByRole('figure', { name: /protected your PC.*More info, then Run anyway/ });
+  assert(await fig.count() === 1, 'a figure named by its caption');
+  const tree = await fig.ariaSnapshot();
+  for (const words of ['Windows protected your PC', 'More info', 'Run anyway', "Don't run", 'App: DopasPurifierSetup.exe']) assert(tree.includes(words), `"${words}" missing from ${tree}`);
+  assert(!/\b(?:button|link)\b/.test(tree), `a drawing, not controls: ${tree}`);
+  const hidden = await fig.evaluate((el) => [...el.querySelectorAll('[aria-hidden="true"]')].filter((n) => n.textContent.trim()).length);
+  assert(hidden === 0, 'no words hidden from screen readers');
+  assert(await page.locator('.ss img, .ss svg').count() === 0, 'drawn with HTML and CSS, no logo or screenshot');
+  await context.close();
+});
+
+await test('S44 the app route reflows at 320px with no sideways scroll', async () => {
+  for (const [name, ua] of [['windows', UA.chrome], ['mac', UA.safari], ['iphone', UA.iphone]]) {
+    const { page, context } = await open({ ua, viewport: { width: 320, height: 640 } });
+    const r = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      wide: [...document.querySelectorAll('#app *')].filter((el) => el.offsetParent && el.getBoundingClientRect().right > innerWidth + 0.5).map((el) => el.className || el.tagName).slice(0, 5),
+    }));
+    assert(r.overflow <= 0 && r.wide.length === 0, `${name}: ${JSON.stringify(r)}`);
+    await context.close();
+  }
 });
 
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2));

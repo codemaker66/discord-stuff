@@ -12,6 +12,12 @@ Nothing else is touched.
 That page works out which browser you're on, walks you through the two-minute setup,
 and ticks itself off once the purifier is installed. It's also the link to send a friend.
 
+**Use the Discord app on Windows 10/11?**
+[Download `DopasPurifierSetup.exe`](https://github.com/codemaker66/discord-stuff/releases/latest/download/DopasPurifierSetup.exe) —
+it sets up Vencord, a popular Discord mod, with the purifier built in, keeps your settings, and
+uninstalls from the same app. If Windows says it protected your PC, press **More info**, then
+**Run anyway**. Client mods are against Discord's terms, so use it at your own discretion.
+
 Already have Tampermonkey or Violentmonkey?
 [Install the script directly](https://raw.githubusercontent.com/codemaker66/discord-stuff/main/dist/dopas-discord-purifier.user.js) —
 it updates itself from the same link.
