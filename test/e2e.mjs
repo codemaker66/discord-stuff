@@ -2088,7 +2088,7 @@ await test('T84 a chat shielded mid-run drops out of the run total', async () =>
 
 // The shared helpers every package builds on live inside the userscript's closure: this build also
 // hands the named ones to the page, so a test can call them directly.
-const HOOK = 'return { start, destroy, busy: () => run.active, whenIdle };';
+const HOOK = 'return { start, destroy, busy: () => run.active || starting, whenIdle };';
 async function bootProbe(path, names, opts = {}) {
   assert(source.includes(HOOK), 'the build still ends its closure the way the probe expects');
   const env = await openDiscord(browser, path, opts);

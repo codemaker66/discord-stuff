@@ -1745,7 +1745,10 @@
     starting = true;
     const ours = await takeRunLock();
     starting = false;
+    // The panel went away while the lock was asked for (a plugin reload): start nothing, hold nothing.
+    if (destroying) { if (ours) freeRunLock(); settleIdle(); return; }
     if (!ours) {
+      settleIdle();
       // Another tab started first: nothing was sent, and focus goes back to Purify.
       handFocus('[data-act="purify"]');
       setStatus(ELSEWHERE, 'calm');
@@ -3931,7 +3934,9 @@
   // For the BetterDiscord plugin, whose updates wait for a purge to finish: busy() while one runs, and
   // whenIdle() resolves when it ends.
   const idleWaiters = [];
-  const whenIdle = () => (run.active ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
-  on('end', () => { for (const resolve of idleWaiters.splice(0)) resolve(); });
+  // A run that ends, or a start that never became one, lets the waiting update ask again.
+  function settleIdle() { for (const resolve of idleWaiters.splice(0)) resolve(); }
+  const whenIdle =() => (run.active || starting ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
+  on('end', settleIdle);
 
-  return { start, destroy, busy: () => run.active, whenIdle };
+  return { start, destroy, busy: () => run.active || starting, whenIdle };

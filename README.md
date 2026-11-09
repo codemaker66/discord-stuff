@@ -23,7 +23,7 @@ and asks before updating itself.
 
 ## What it does
 
-- **Open a chat, press Purify** — it counts your messages first, so you know how many and how long before you confirm.
+- **Open a chat, press Purify** — it counts your messages first, so the confirm says exactly how many.
 - **Hold to purify** — no accidental clicks.
 - **Many chats**: pick DMs, groups and server channels (threads and forum posts included), then purify them in one go.
 - **Shield** anyone and your DM with them is immune. Bardo and Dopa are shielded from the start ♡
