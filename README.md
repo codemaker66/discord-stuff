@@ -10,7 +10,7 @@ Nothing else is touched.
 **→ [codemaker66.github.io/discord-stuff](https://codemaker66.github.io/discord-stuff/)**
 
 That page works out which browser you're on, walks you through the two-minute setup,
-and ticks itself off once the purifier is installed. It's also the link to send a friend.
+and ticks itself off once the purifier is installed.
 
 **Use the Discord app on Windows 10/11?**
 [Download `DopasPurifierSetup.exe`](https://github.com/codemaker66/discord-stuff/releases/latest/download/DopasPurifierSetup.exe) —
