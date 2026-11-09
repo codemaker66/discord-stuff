@@ -12,13 +12,15 @@
 // Vencord <label> · <hash>". The title must END with the hash: a friend's Vencord updater
 // (src/main/updater/http.ts) reads releases/latest, takes the last word of its name as the
 // build hash and updates when it differs from its own. SHA256SUMS.txt is recomputed over every
-// asset, the installer included. A real run needs the gh CLI, signed in.
+// asset, the installer included. A real run needs the gh CLI, signed in. A commit that the latest
+// desktop release already contains is not released (exit 0): see release-order.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { releaseOrder } from './release-order.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
@@ -160,6 +162,21 @@ const ghArgs = ['release', 'create', tag, '--repo', repo, '--title', title, '--n
 const gh = capture('gh', ['--version']);
 if (!gh.ok) problem('the gh CLI is not available');
 else {
+  // Never put an older build back on top: a run that waited behind a newer release stops here.
+  if (!target) console.warn('! no target commit, so the order against the latest release was not checked');
+  else {
+    const order = releaseOrder({ repo, target, api: (endpoint, jq) => capture('gh', ['api', endpoint, '--jq', jq]) });
+    if (order.error) problem(`${order.error}: not releasing without knowing what is latest`);
+    else if (order.release) console.log(`Order: ${order.reason}.`);
+    else if (dry) console.warn(`! a real run would stop here and release nothing: ${order.reason}`);
+    else {
+      console.log(`\nrelease: not releasing ${tag}: ${order.reason}. Friends keep the newer build.`);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Not released: ${tag}\n\n${order.reason}, so friends keep the newer build.\n`);
+      }
+      process.exit(0);
+    }
+  }
   const existing = capture('gh', ['release', 'view', tag, '--repo', repo, '--json', 'url', '--jq', '.url']);
   if (existing.ok) problem(`release ${tag} already exists: ${existing.out}`);
   const pushed = capture('gh', ['api', `repos/${repo}/commits/${hash}`, '--jq', '.sha']);

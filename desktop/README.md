@@ -13,6 +13,7 @@ repository's releases, the same way official Vencord updates from Vendicated's.
 | `vencord.json` | The pin: the exact Vencord commit we build, and the pinned official Vencord installer CLI (v1.4.2, by URL, size and sha256). |
 | `build-vencord.mjs` | Builds Vencord at the pin with `dist/vencord/dopasPurifier/` inside. `--follow` checks and moves the pin. |
 | `release.mjs` | Publishes one GitHub release with everything in it. |
+| `release-order.mjs` | Tells `release.mjs` whether a commit may become the latest release (never one the latest already contains). Tested by `node --test desktop/release-order.test.mjs`. |
 | `RELEASE_NOTES.md` | The release notes template (`{{VERSION}}`, `{{VENCORD}}`, `{{HASH}}`, `{{DATE}}`). |
 | `installer/` | The installer app (Tauri v2), built to `installer/dist-exe/DopasPurifierSetup.exe`. |
 | `../.github/workflows/desktop.yml` | Runs all of the above on GitHub Actions. |
@@ -39,14 +40,21 @@ being released from this repository. `<label>` comes from `vencord.json`.
 - **Every day at 05:23 UTC**, the `sync` job checks whether official Vencord users got a new build.
   If they did, it moves the pin, commits `Follow Vencord to <label>` as github-actions[bot],
   pushes to main and releases that commit in the same run. A push made with the workflow token
-  starts no new run, which is why the same run carries on. If nothing moved, the run stops there.
+  starts no new run, which is why the same run carries on. It also releases main when main has
+  changes no release carries yet: the hash ending the latest release's name is not main's, and
+  main differs from that commit in the paths a push releases for. That catches a push whose run
+  GitHub dropped (a waiting run is cancelled when a newer one queues behind it) or that failed.
+  If none of that applies, the run stops there.
 - **By hand** (Actions → desktop → Run workflow), which runs the same sync. Tick *force* to
   release main even when Vencord has not moved.
 
 After `sync`, two jobs run side by side. `vencord` (Ubuntu) checks that `dist/` matches `src/`,
 then runs `build-vencord.mjs`. `installer` (Windows) runs `npm ci && npm run build:exe` in
 `desktop/installer`. When both succeed, `release` runs `release.mjs`. The concurrency group
-`desktop-release` keeps two runs from releasing at once.
+`desktop-release` keeps two runs from releasing at once, and `release.mjs` never releases a
+commit that the latest desktop release already contains (it says so and exits 0). Without that,
+a push that waited behind a daily sync would be released after the sync's newer "Follow Vencord"
+commit and take every friend back to the older build.
 
 ## Releasing by hand
 
@@ -77,7 +85,9 @@ node desktop/release.mjs --out desktop/out --exe desktop/installer/dist-exe/Dopa
   It also lists what a real run would refuse: a missing installer, an unpushed commit or an
   existing tag. Nothing is written or uploaded.
 - `release.mjs` refuses a build whose `patcher.js` does not carry this repository and the
-  build's hash, and an existing tag. It checks afterwards that `releases/latest` is the new release.
+  build's hash, and an existing tag. It releases nothing when the latest desktop release already
+  contains the commit (compared on GitHub, so a shallow clone is fine), and refuses when it
+  cannot find out. It checks afterwards that `releases/latest` is the new release.
 
 ## The pin and the daily sync
 

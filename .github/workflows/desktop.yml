@@ -2,7 +2,10 @@
 # GitHub release. A friend's Vencord updates itself from this repository's latest release (it
 # compares the hash ending the release name with its own build hash), so whatever is released
 # here reaches them the same day. A push to main that changes the purifier releases it; a daily
-# run follows official Vencord and releases only when official users got a new build.
+# run follows official Vencord and releases when official users got a new build, or when main has
+# changes that no release carries yet (a push whose run was dropped or failed). release.mjs never
+# releases a commit that the latest release already contains, so a run that waited behind a newer
+# one cannot take friends back.
 # How it fits together, and how to release by hand: desktop/README.md.
 name: desktop
 on:
@@ -48,6 +51,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: main
+          # All of main's history, to compare main with the commit the latest release was built from.
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -71,14 +76,35 @@ jobs:
             if git push -q origin HEAD:main; then moved=true; break; fi
             if [ "$attempt" = 3 ]; then echo "::error::main kept moving, so the new pin was not pushed"; exit 1; fi
             echo "main moved while this ran; trying again on the new main"
-            git fetch -q --depth 1 origin main
+            git fetch -q origin main
             git reset -q --hard FETCH_HEAD
           done
+          # A push that never got released is released now. GitHub drops a waiting run when a newer
+          # one queues behind it, and a failed run releases nothing. So: when the hash ending the
+          # latest release's name is not main's, and main differs from that commit in the paths a
+          # push releases for (on.push.paths above, keep them the same), release main.
+          unreleased=false
+          head=$(git rev-parse HEAD)
+          if name=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .name 2>"$RUNNER_TEMP/latest.err"); then
+            released=${name##* }
+            if [ "$released" != "${head:0:7}" ]; then
+              if base=$(git rev-parse -q --verify "$released^{commit}") \
+                && git diff --quiet "$base" HEAD -- src tools/build.mjs dist/vencord desktop package.json; then
+                echo "main moved past $released, but nothing a release carries changed"
+              else
+                unreleased=true
+              fi
+            fi
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/latest.err"; then
+            unreleased=true
+          else
+            echo "::warning::could not read the latest release: $(cat "$RUNNER_TEMP/latest.err")"
+          fi
           release=false
-          if [ "$moved" = true ] || [ "$FORCE" = true ]; then release=true; fi
+          if [ "$moved" = true ] || [ "$FORCE" = true ] || [ "$unreleased" = true ]; then release=true; fi
           echo "release=$release" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Vencord pin: $(node -p "require('./desktop/vencord.json').vencord.label") · moved today: $moved · releasing: $release" >> "$GITHUB_STEP_SUMMARY"
+          echo "sha=$head" >> "$GITHUB_OUTPUT"
+          echo "Vencord pin: $(node -p "require('./desktop/vencord.json').vencord.label") · moved today: $moved · main unreleased: $unreleased · releasing: $release" >> "$GITHUB_STEP_SUMMARY"
 
   # Official Vencord at the pin with dist/vencord/dopasPurifier/ inside, built standalone with this
   # repository as its update source and the released commit's 7-char sha as its build hash. The
