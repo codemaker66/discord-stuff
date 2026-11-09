@@ -2242,6 +2242,12 @@ await test('T91 shared contracts: type tokens, .sr, height tiers, ring faces, fo
   }
   // A drag 200px down never reshapes the panel under the cursor; the drop does.
   await page.setViewportSize({ width: 1280, height: 720 });
+  // The panel at rest before it is picked up: no wobble left, and a frame drawn in its new place.
+  await page.waitForFunction(() => {
+    const p = document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('.panel');
+    return p.getAnimations().length === 0 && !p.style.transform;
+  }, null, { timeout: 3000 });
+  await frame(page);
   const head = await page.locator('[data-role="drag"]').boundingBox();
   await page.mouse.move(head.x + 120, head.y + 20);
   await page.mouse.down();
@@ -2249,12 +2255,13 @@ await test('T91 shared contracts: type tokens, .sr, height tiers, ring faces, fo
   await page.mouse.move(head.x + 120, head.y + 220, { steps: 4 });
   assert(await fit() === 'full', `mid-drag ${await fit()}`);
   await page.mouse.up();
-  assert(await fit() === 'strip', `after the drop ${await fit()}`);
+  const fitBecomes = (tier) => page.waitForFunction((t) => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="layer"]').dataset.fit === t, tier, { timeout: 2000 }).then(() => true, () => false);
+  assert(await fitBecomes('strip'), `after the drop ${await fit()}`);
   await page.mouse.move(head.x + 120, head.y + 220);
   await page.mouse.down();
   await page.mouse.move(head.x + 120, head.y + 20, { steps: 6 });
   await page.mouse.up();
-  assert(await fit() === 'full', `dragged home ${await fit()}`);
+  assert(await fitBecomes('full'), `dragged home ${await fit()}`);
 
   // Ring faces: unscanned → counting → ready → the run and its last look → done.
   assert(await heroIs(page) === 'unscanned/icon', `idle ${await heroIs(page)}`);

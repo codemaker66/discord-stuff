@@ -2893,7 +2893,12 @@
     const term = $('.term');
     if (term.hidden) return;
     const panelEl = $('.panel');
-    const panel = panelEl.getBoundingClientRect();
+    // The panel's own box, not its wobble: a squash after a finish or a drop scales the drawn rect,
+    // and at a window where the room beside is just enough it would push the log over the panel.
+    const shellEl = $('[data-role="shell"]');
+    const left0 = shellEl.offsetLeft + panelEl.offsetLeft;
+    const top0 = shellEl.offsetTop + panelEl.offsetTop;
+    const panel = { left: left0, top: top0, width: panelEl.offsetWidth, right: left0 + panelEl.offsetWidth };
     const gap = 14;
     const MIN = 280;
     const roomL = panel.left - gap - 8;
