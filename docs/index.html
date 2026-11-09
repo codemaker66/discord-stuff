@@ -199,6 +199,11 @@
   .ss-press::after { content: attr(data-n) / ''; position: absolute; top: -12px; right: -16px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%;
     font: 800 11.5px/1 var(--font); color: var(--rose-ink); background: var(--rose-300); text-decoration: none; }
   .ss-link.ss-press { padding: 1px 4px; margin-left: -4px; }
+  .app-shots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0 0; padding: 0; list-style: none; }
+  .app-shots figure { margin: 0; padding: 10px 10px 16px; border-radius: 20px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
+  .app-shots img { display: block; width: 100%; height: auto; border-radius: 12px; }
+  .app-shots figcaption { margin: 12px 6px 0; font-size: 14.5px; color: var(--t2); }
+  .app-shots figcaption b { display: block; margin-bottom: 2px; font-size: 16px; color: var(--t1); }
   .app-below { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0 0; padding: 0; list-style: none; }
   .app-below li { padding: 18px 20px; border-radius: 20px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); font-size: 14.5px; color: var(--t2); }
   .app-below li > strong { display: block; margin-bottom: 4px; font-size: 16px; color: var(--t1); }
@@ -259,6 +264,7 @@
     .two { grid-template-columns: 1fr; }
     .app-card { grid-template-columns: minmax(0, 1fr); gap: 28px; }
     .app-below { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    .app-shots { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   }
   @media (max-width: 560px) {
     .setup { padding: 0; background: none; box-shadow: none; }
@@ -367,7 +373,11 @@
         </div>
       </figure>
     </div>
-    <!-- installer-shots -->
+    <ul class="app-shots" data-role="app-shots">
+      <li><figure><img src="img/installer-welcome.webp" alt="The installer's first screen: it has found Discord, ready, with one Install button" loading="lazy" width="960" height="600"><figcaption><b>Ready when you are~</b> It finds your Discord by itself.</figcaption></figure></li>
+      <li><figure><img src="img/installer-installing.webp" alt="The installer at work: a ring at 70 percent and six steps, from closing Discord to starting it again" loading="lazy" width="960" height="600"><figcaption><b>One click, then hands off</b> Discord closes for a moment.</figcaption></figure></li>
+      <li><figure><img src="img/installer-done.webp" alt="The installer's last screen: You're all set, with the three steps to purify a chat and an Open Discord button" loading="lazy" width="960" height="600"><figcaption><b>You're all set~</b> Discord reopens with the Purifier inside.</figcaption></figure></li>
+    </ul>
     <ul class="app-below" data-role="app-facts">
       <li><strong>What it installs</strong>Vencord, a popular Discord mod, with Dopa's Purifier built in. It stays through Discord's own updates.</li>
       <li><strong>Your settings stay</strong>Already on Vencord? Your settings and plugins are kept just as they are.</li>

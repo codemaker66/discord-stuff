@@ -36,6 +36,10 @@ const SCENARIOS = [
   { name: 'log-open', scenario: 'installing', steps: ['install', 'toggle-log'], screen: 'installing', ready: '#log:not([hidden])' },
   { name: 'done', steps: ['install'], screen: 'done' },
   { name: 'done-burst', scenario: 'done', steps: ['install'], screen: 'done', at: 560 },
+  // The install page's pictures (docs/img/installer-*.webp): one clean Discord, query adds &showcase=1.
+  { name: 'showcase-welcome', scenario: 'fresh', query: 'showcase=1', screen: 'welcome' },
+  { name: 'showcase-installing', scenario: 'installing', query: 'showcase=1', steps: ['install'], screen: 'installing', ready: '.step[data-step="patch:stable"][data-state="active"]' },
+  { name: 'showcase-done', scenario: 'done', query: 'showcase=1', steps: ['install'], screen: 'done', at: 560 },
   { name: 'already', screen: 'already' },
   { name: 'up-to-date', screen: 'already' },
   { name: 'choose-apps', scenario: 'up-to-date', steps: ['show-welcome'], screen: 'welcome' },
@@ -232,7 +236,7 @@ try {
       page.on('pageerror', (e) => problems.push(`${s.name}@${scale}x: ${e.message}`));
       page.on('console', (m) => { if (m.type() === 'error') problems.push(`${s.name}@${scale}x console: ${m.text()}`); });
       const t0 = Date.now();
-      await page.goto(`${base}/index.html?scenario=${s.scenario || s.name}&speed=4${s.intro ? '' : '&intro=0'}`);
+      await page.goto(`${base}/index.html?scenario=${s.scenario || s.name}&speed=4${s.intro ? '' : '&intro=0'}${s.query ? `&${s.query}` : ''}`);
       await page.evaluate(() => document.fonts.ready);
       if (s.fromLoad) {
         await page.waitForTimeout(Math.max(0, s.at - (Date.now() - t0)));

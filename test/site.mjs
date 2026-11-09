@@ -870,8 +870,12 @@ const appState = (page) => page.evaluate(() => ({
 
 await test('S40 the Discord app button: the stable link, a clear name, and an honest word on what it installs', async () => {
   const html = fs.readFileSync(path.join(root, 'docs/index.html'), 'utf8');
-  assert(html.includes('<!-- installer-shots -->'), 'a place kept for the installer pictures');
-  assert(!/installer-(?:welcome|installing|done)\.webp/.test(html), 'installer pictures not referenced before they exist');
+  // The installer's three screens, shown in #app: each one there on disk, sized, and described.
+  for (const shot of ['installer-welcome', 'installer-installing', 'installer-done']) {
+    const tag = (html.match(new RegExp(`<img src="img/${shot}\\.webp"[^>]*>`)) || [])[0] || '';
+    assert(tag && /alt="[^"]{20,}"/.test(tag) && /width="960" height="600"/.test(tag), `${shot}: referenced, described and sized (${tag})`);
+    assert(fs.existsSync(path.join(root, 'docs/img', `${shot}.webp`)), `${shot}.webp is on disk`);
+  }
   const { page, context, errors } = await open({ ua: UA.chrome, viewport: { width: 1366, height: 768 } });
   const button = page.locator('#app').getByRole('link', { name: 'Get it for the Discord app', exact: true });
   assert(await button.count() === 1, 'one link named "Get it for the Discord app" in the app section');

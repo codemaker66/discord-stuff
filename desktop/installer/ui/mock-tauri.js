@@ -19,6 +19,7 @@
 //   error-no-release the release vanishes between detection and install
 //   error-internal   the installer itself fails
 //   error-detect     detection itself fails
+// Add &showcase=1 for the pictures on the install page: one Discord, clean and open, nothing else.
 // Inside the real app (Tauri injects __TAURI_INTERNALS__ first) this file does nothing.
 (() => {
   'use strict';
@@ -26,6 +27,7 @@
 
   const params = new URLSearchParams(location.search);
   const scenario = params.get('scenario') || 'fresh';
+  const showcase = params.has('showcase');
   const speed = Math.max(0.1, Number(params.get('speed')) || 1);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms / speed));
   const never = () => new Promise(() => {});
@@ -37,7 +39,7 @@
   const ROAMING = 'C:\\Users\\friend\\AppData\\Roaming';
   const OUR_PATCHER = `${ROAMING}\\Vencord\\dist\\patcher.js`;
   const LATEST = {
-    title: "Dopa's Discord Purifier 4.2.0 for the Discord app · Vencord v1.14.1 · 94f9601",
+    title: "Dopa's Discord Purifier 4.2.0 for the Discord app · Vencord v1.15.16 · 94f9601",
     tag: 'desktop-v4.2.0-94f9601',
     hash: '94f9601',
     url: 'https://github.com/codemaker66/discord-stuff/releases/tag/desktop-v4.2.0-94f9601',
@@ -46,7 +48,7 @@
   };
   const INSTALLED = {
     purifier: scenario === 'up-to-date' ? '4.2.0' : '4.1.0',
-    vencord: scenario === 'up-to-date' ? 'v1.14.1' : 'v1.14.0',
+    vencord: scenario === 'up-to-date' ? 'v1.15.16' : 'v1.15.12',
     hash: scenario === 'up-to-date' ? '94f9601' : '6298341',
     builtAt: '2026-10-30T18:02:11.000Z',
     by: 'dopas-purifier',
@@ -71,6 +73,7 @@
     install('stable', 'Discord', '1.0.9267', 'clean', { running: true }),
     install('canary', 'Discord Canary', '1.0.1314', 'custom', { patcher: 'D:\\dev\\Vencord\\dist\\patcher.js' }),
   ];
+  const showcaseInstalls = () => [install('stable', 'Discord', '1.0.9267', 'clean', { running: true })];
   const manyInstalls = () => [
     install('stable', 'Discord', '1.0.9267', 'clean', { running: true }),
     install('ptb', 'Discord PTB', '1.0.1231', 'vencord'),
@@ -84,7 +87,7 @@
   const isAlready = ['already', 'up-to-date', 'uninstalling', 'uninstalled'].includes(scenario);
   const noRelease = scenario === 'no-release';
   const detection = {
-    installs: scenario === 'no-discord' ? [] : isAlready ? ourInstalls() : scenario === 'many' ? manyInstalls() : freshInstalls(),
+    installs: scenario === 'no-discord' ? [] : isAlready ? ourInstalls() : scenario === 'many' ? manyInstalls() : showcase ? showcaseInstalls() : freshInstalls(),
     vencordDir: `${ROAMING}\\Vencord`,
     installedBuild: isAlready ? INSTALLED : null,
     latest: scenario === 'error-offline' || noRelease ? null : LATEST,
@@ -206,7 +209,7 @@
       started: ['stable'],
       backup: null,
       restored: null,
-      build: { ...INSTALLED, purifier: '4.2.0', vencord: 'v1.14.1', hash: '94f9601' },
+      build: { ...INSTALLED, purifier: '4.2.0', vencord: 'v1.15.16', hash: '94f9601' },
       log: '(mock log)',
     };
   }
