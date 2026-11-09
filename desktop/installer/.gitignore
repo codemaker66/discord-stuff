@@ -1,0 +1,5 @@
+node_modules/
+dist-exe/
+screens/
+src-tauri/target/
+src-tauri/gen/

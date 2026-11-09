@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dopa's Discord Purifier Setup</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Stand-in for window.__TAURI__ in a plain browser (?scenario=...); does nothing inside the app. -->
+  <script src="mock-tauri.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="app" data-screen="loading">
+    <header class="titlebar" data-tauri-drag-region>
+      <img class="titlebar-icon" src="img/icon-64.png" alt="" data-tauri-drag-region>
+      <span class="titlebar-name" data-tauri-drag-region>Dopa's Discord Purifier <span class="titlebar-sub" data-tauri-drag-region>Setup</span></span>
+      <span class="titlebar-badge" id="sandbox-badge" hidden>Sandbox</span>
+      <div class="titlebar-buttons">
+        <button class="tb-btn" data-action="minimize" aria-label="Minimise" title="Minimise">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5h8"/></svg>
+        </button>
+        <button class="tb-btn tb-close" data-action="close" aria-label="Close" title="Close">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside class="brand">
+        <div class="brand-glow" aria-hidden="true"></div>
+        <img class="brand-art" src="img/emote.webp" alt="Dopa">
+        <h1 class="brand-title">Dopa's Discord<br>Purifier</h1>
+        <p class="brand-tag">Bulk-delete your messages, right inside the Discord app.</p>
+        <ul class="brand-points">
+          <li>Built on Vencord, installed for you</li>
+          <li>Survives Discord updates</li>
+          <li>Undo any time from this window</li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <!-- Looking for Discord -->
+        <section class="screen" data-screen="loading" aria-live="polite">
+          <div class="center-block">
+            <div class="spinner" aria-hidden="true"></div>
+            <p class="muted">Looking for Discord on this PC…</p>
+          </div>
+        </section>
+
+        <!-- Welcome: pick installs -->
+        <section class="screen" data-screen="welcome">
+          <h2>Install into Discord</h2>
+          <p class="lead">Pick the Discord apps to set up. They'll close for a moment and reopen with the Purifier inside.</p>
+          <ul class="installs" id="installs" aria-label="Discord installs"></ul>
+          <p class="notice" id="net-note" hidden></p>
+          <div class="actions">
+            <button class="btn btn-primary" data-action="install" id="install-btn">Install</button>
+            <span class="muted small" id="install-hint"></span>
+          </div>
+        </section>
+
+        <!-- Working: steps, progress, log -->
+        <section class="screen" data-screen="installing">
+          <h2 id="run-title">Installing</h2>
+          <div class="progress" aria-hidden="true"><div class="progress-bar" id="progress-bar"></div></div>
+          <div class="progress-meta">
+            <span id="run-detail" class="muted">Starting…</span>
+            <span id="run-pct" class="pct">0%</span>
+          </div>
+          <ol class="steps" id="steps"></ol>
+          <div class="log-wrap">
+            <button class="link-btn" data-action="toggle-log" aria-expanded="false" aria-controls="log">Show details</button>
+            <pre class="log" id="log" hidden></pre>
+          </div>
+        </section>
+
+        <!-- Finished install -->
+        <section class="screen" data-screen="done">
+          <div class="result-mark ok" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+          </div>
+          <h2>You're all set</h2>
+          <p class="lead" id="done-lead">Discord is reopening with the Purifier inside. Open any chat and press Purify.</p>
+          <ul class="summary" id="done-summary"></ul>
+          <div class="actions">
+            <button class="btn btn-primary" data-action="open-discord">Open Discord</button>
+            <button class="btn btn-ghost" data-action="close-app">Close</button>
+          </div>
+        </section>
+
+        <!-- Already installed: repair or uninstall -->
+        <section class="screen" data-screen="already">
+          <h2>The Purifier is installed</h2>
+          <dl class="facts" id="installed-facts"></dl>
+          <p class="notice ok" id="update-note" hidden></p>
+          <div class="actions">
+            <button class="btn btn-primary" data-action="repair" id="repair-btn">Repair</button>
+            <button class="btn btn-ghost" data-action="show-uninstall" aria-expanded="false" aria-controls="uninstall-box">Uninstall…</button>
+            <button class="link-btn" data-action="show-welcome">Choose Discord apps</button>
+          </div>
+          <div class="uninstall-box" id="uninstall-box" hidden>
+            <p class="small">How should Discord look afterwards?</p>
+            <div class="choice-row">
+              <button class="choice" data-action="uninstall-keep">
+                <strong>Keep Vencord</strong>
+                <span>Switch to official Vencord and keep your Vencord settings.</span>
+              </button>
+              <button class="choice danger" data-action="uninstall-remove">
+                <strong>Remove everything</strong>
+                <span>Put Discord back exactly as it ships.</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Finished uninstall -->
+        <section class="screen" data-screen="uninstalled">
+          <div class="result-mark ok" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+          </div>
+          <h2 id="uninstalled-title">Removed</h2>
+          <p class="lead" id="uninstalled-lead">Discord is back to normal.</p>
+          <ul class="summary" id="uninstalled-summary"></ul>
+          <div class="actions">
+            <button class="btn btn-primary" data-action="open-discord">Open Discord</button>
+            <button class="btn btn-ghost" data-action="close-app">Close</button>
+          </div>
+        </section>
+
+        <!-- No Discord installed -->
+        <section class="screen" data-screen="no-discord">
+          <div class="result-mark warn" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 7v6M12 16.5v.5"/></svg>
+          </div>
+          <h2>Discord isn't installed yet</h2>
+          <p class="lead">Install the Discord app, open it once, then come back here.</p>
+          <div class="actions">
+            <button class="btn btn-primary" data-action="download-discord">Get Discord</button>
+            <button class="btn btn-ghost" data-action="recheck">Check again</button>
+          </div>
+        </section>
+
+        <!-- Something went wrong -->
+        <section class="screen" data-screen="error">
+          <div class="result-mark bad" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
+          </div>
+          <h2 id="error-title">Something went wrong</h2>
+          <p class="lead" id="error-message"></p>
+          <p class="error-detail" id="error-detail"></p>
+          <div class="actions">
+            <button class="btn btn-primary" data-action="retry">Try again</button>
+            <button class="btn btn-ghost" data-action="copy-log" id="copy-log-btn">Copy log</button>
+            <button class="link-btn" data-action="back">Back</button>
+          </div>
+        </section>
+
+        <footer class="foot">
+          <span class="muted small" id="foot-version">Setup</span>
+          <span class="foot-links">
+            <button class="link-btn small" data-href="https://codemaker66.github.io/discord-stuff/">Website</button>
+            <button class="link-btn small" data-href="https://github.com/codemaker66/discord-stuff">Source</button>
+          </span>
+        </footer>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </div>
+</body>
+</html>
