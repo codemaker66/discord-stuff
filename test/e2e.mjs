@@ -650,16 +650,6 @@ await test('T31 first run: welcome card explains the three steps, "Got it" stick
   await context.close();
 });
 
-await test('T32 Share copies the install link', async () => {
-  const { page, context } = await boot('/channels/4001/5001', { permissions: ['clipboard-read', 'clipboard-write'] });
-  await page.click('[data-act="share"]');
-  await page.waitForTimeout(200);
-  const clip = await page.evaluate(() => navigator.clipboard.readText());
-  assert(/https:\/\/\S+/.test(clip) && /Purifier/.test(clip), `clipboard: ${clip}`);
-  assert(/copied/.test(await status(page)), await status(page));
-  await context.close();
-});
-
 await test('T33 shields: protect a DM, it persists, Bardo can be released', async () => {
   const { page, stats, context } = await boot('/channels/4001/5001');
   await page.click('.tab[data-tab="batch"]');
@@ -3512,8 +3502,7 @@ await test('T250 marks show in forced colours; light Discord gets a light shadow
   {
     const { page, context } = await boot('/channels/4001/5001');
     await page.emulateMedia({ forcedColors: 'active' });
-    await page.evaluate(() => { navigator.clipboard.writeText = async () => {}; });
-    await page.click('[data-act="share"]');
+    await page.click('[data-act="scan"]'); // a count's verdict is a success line
     await page.waitForFunction(() => document.querySelector('#dopa-purifier-host').shadowRoot.querySelector('[data-role="status"]').dataset.tone === 'success');
     const dot = await rectOf(page, '.status-dot');
     const px = (await shotPixels(page, { x: dot.left, y: dot.top, width: dot.width, height: dot.height })).flat();
@@ -4668,17 +4657,6 @@ await test('T153 the footer speaks words, not emoji, and the small lines are kin
   const found = await statusParts(page);
   assert(found.flair === '' && found.words === "Counted~ press Purify when you're ready" && !/\p{Extended_Pictographic}/u.test(await page.locator('[data-role="status"]').ariaSnapshot()), `found ${JSON.stringify(found)}`);
   assert(await page.evaluate(() => window.__dp.preview({ content: '', attachments: [] })) === '[sticker or embed]', 'a message with no words');
-  // Discord can lock the clipboard: the link waits in the log, whole.
-  await page.evaluate(() => { navigator.clipboard.writeText = () => Promise.reject(new DOMException('locked', 'NotAllowedError')); });
-  await page.click('[data-act="share"]');
-  await untilStatus(page, /^Couldn't copy~ the link is waiting in Logs/);
-  const share = await page.evaluate(() => {
-    const r = document.querySelector('#dopa-purifier-host').shadowRoot;
-    const line = [...r.querySelectorAll('.line.wrap .line-msg')].pop();
-    return { open: !r.querySelector('.term').hidden, text: line && line.textContent, whole: !!line && line.scrollWidth <= line.clientWidth };
-  });
-  assert(share.open && /^share link: https:\/\/\S+$/.test(share.text) && share.whole, `share fallback ${JSON.stringify(share)}`);
-  assert((await statusParts(page)).flair === ' ♡', 'said kindly');
   // An account switch says what to do next, and asks Discord nothing for it.
   await page.evaluate(() => localStorage.setItem('token', JSON.stringify('mock-token.b')));
   await page.click('[data-act="scan"]');
@@ -7867,6 +7845,44 @@ await test('T267 a batch Discord is still searching ends calmly with when to com
   assert(await text(page, '[data-role="hero-sub"]') === 'Discord may find older ones later~', `verdict "${await text(page, '[data-role="hero-sub"]')}"`);
   const done = await statusParts(page);
   assert(done.words === '1 chat needs another go later~ Discord is still searching' && done.tone === 'calm', `footer ${JSON.stringify(done)}`);
+  assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
+  await context.close();
+});
+
+// The purifier is passed privately between a few friends: the panel has nothing to share or copy a link with.
+await test('T290 the panel offers no share or copy-link control anywhere', async () => {
+  const { page, pageErrors, context } = await boot('/channels/4001/5001', { firstRun: true });
+  await page.waitForSelector('[data-role="welcome"]');
+  const look = async () => jPanel(page, (r) => {
+    const els = [...r.querySelectorAll('*')];
+    const said = els.flatMap((el) => [el.getAttribute('aria-label'), el.getAttribute('title')]).filter(Boolean);
+    const text = els.filter((el) => !el.closest('style')).flatMap((el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent)).join(' ');
+    return {
+      share: r.querySelectorAll('[data-act="share"]').length,
+      acts: [...new Set(els.map((el) => el.dataset.act).filter(Boolean))],
+      head: [...r.querySelectorAll('.head button')].map((b) => b.dataset.act),
+      words: [text, ...said].filter((t) => /install link|copy the link|for a friend|send it to a friend|share/i.test(t.replace(/art-share/g, ''))),
+    };
+  });
+  const seen = [await look()];
+  await page.click('[data-act="welcome-ok"]');
+  await page.click('.tab[data-tab="batch"]');
+  await page.waitForSelector('[data-key="c:3002"]');
+  await page.click('[data-act="logs"]');
+  seen.push(await look());
+  for (const s of seen) {
+    assert(s.share === 0 && !s.acts.some((a) => /share|link/i.test(a)), `a share control: ${JSON.stringify(s.acts)}`);
+    assert(s.head.join() === 'poke,mute,minimize', `the header holds ${s.head.join()}`);
+    assert(s.words.length === 0, `share words: ${JSON.stringify(s.words).slice(0, 300)}`);
+  }
+  // The header's keyboard order is Dopa, then Sound, then Minimise.
+  await page.locator('[data-act="poke"]').focus();
+  const order = [];
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.press('Tab');
+    order.push(await jPanel(page, (r) => r.activeElement && r.activeElement.dataset.act));
+  }
+  assert(order.join() === 'mute,minimize', `Tab from Dopa goes ${order.join()}`);
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
   await context.close();
 });

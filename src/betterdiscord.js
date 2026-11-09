@@ -8,7 +8,6 @@
  */
 
 const VERSION = '@@VERSION@@';
-const SHARE_URL = '@@HOMEPAGE@@';
 // BetterDiscord only updates plugins from its own store, and this one isn't listed there.
 const PLUGIN_URL = '@@PLUGIN_URL@@';
 

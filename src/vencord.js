@@ -13,7 +13,6 @@
 import definePlugin from "@utils/types";
 
 const VERSION = '@@VERSION@@';
-const SHARE_URL = '@@HOMEPAGE@@';
 
 export default definePlugin({
   name: "DopasPurifier",

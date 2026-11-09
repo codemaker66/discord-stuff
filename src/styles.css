@@ -579,7 +579,7 @@
 .line-msg { overflow: hidden; text-overflow: ellipsis; }
 .line-msg q { quotes: '\201C' '\201D'; color: #f6dfe8; }
 /* Lines are read whole; only the Deleted lines and the banner keep to one line. */
-.line:is(.error, .wrap, .info, .warn, .skip) .line-msg { white-space: normal; overflow-wrap: anywhere; }
+.line:is(.error, .info, .warn, .skip) .line-msg { white-space: normal; overflow-wrap: anywhere; }
 .line-time { color: #9a7f8e; font-variant-numeric: tabular-nums; }
 .line-pfx { text-align: center; }
 .line.info { color: #b89dab; }
