@@ -458,6 +458,156 @@ fn place_backs_up_a_foreign_dist_once() {
     assert!(place::list_backups(&env).is_empty());
 }
 
+/// Every file under `dir`, by relative path, with its bytes.
+fn snapshot(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+        for e in fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                out.insert(p.strip_prefix(root).unwrap().to_string_lossy().to_string(), fs::read(&p).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// The fixture build with one more file listed than the staging folder has,
+/// so placing it fails part-way through (after some files were written).
+fn build_that_fails_midway(env: &Env) -> fetch::BuildFiles {
+    let mut b = fetch::fetch_build(env, &mut |_, _| {}, &|_| {}).unwrap();
+    assert_eq!(b.files, vec!["patcher.js", "preload.js", "renderer.css", "renderer.js"]);
+    b.files.insert(3, "renderer.css.map".into());
+    b
+}
+
+#[test]
+fn failed_place_leaves_a_foreign_dist_exactly_as_it_was() {
+    let sb = sandbox("place-fail-foreign");
+    let env = Env::sandboxed(sb, Some(fixture_build()), Arc::new(OfflineFetcher));
+    write_dist(&env, &[("patcher.js", "// Vencord official1"), ("renderer.js", "official"), ("extra.txt", "keep me")]);
+    fs::create_dir_all(env.dist().join("sub")).unwrap();
+    fs::write(env.dist().join("sub").join("x.txt"), "nested").unwrap();
+    let before = snapshot(&env.dist());
+
+    let bad = build_that_fails_midway(&env);
+    let now = chrono::Local.with_ymd_and_hms(2026, 11, 9, 9, 43, 0).unwrap();
+    let err = place::place(&env, &bad, now, &|_| {}).unwrap_err();
+    assert_eq!(err.code, FailCode::Io, "{err}");
+    assert!(err.detail.contains("renderer.css.map"), "{err}");
+
+    assert_eq!(snapshot(&env.dist()), before, "dist is byte-identical to before");
+    assert!(place::list_backups(&env).is_empty(), "no backup was made");
+    let left: Vec<String> =
+        fs::read_dir(env.vencord_base()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
+    assert_eq!(left, vec!["dist"], "nothing else is left in the Vencord folder");
+}
+
+fn vencord_folder_names(env: &Env) -> Vec<String> {
+    let mut v: Vec<String> =
+        fs::read_dir(env.vencord_base()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn failed_place_over_our_own_build_keeps_it() {
+    let sb = sandbox("place-fail-ours");
+    let env = Env::sandboxed(sb, Some(fixture_build()), Arc::new(OfflineFetcher));
+    write_dist(&env, &[("patcher.js", "// Vencord official1")]);
+    let good = fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap();
+    let first = chrono::Local.with_ymd_and_hms(2026, 11, 9, 9, 0, 0).unwrap();
+    place::place(&env, &good, first, &|_| {}).unwrap();
+    fs::write(env.dist().join("notes.txt"), "a friend's own file").unwrap();
+    let before = snapshot(&env.dist());
+    let names = vencord_folder_names(&env);
+    assert_eq!(names, vec!["dist", "dist-backup-20261109-090000"]);
+
+    // Staging fails part-way (an update or a repair).
+    let later = chrono::Local.with_ymd_and_hms(2026, 11, 9, 10, 0, 0).unwrap();
+    let bad = build_that_fails_midway(&env);
+    assert_eq!(place::place(&env, &bad, later, &|_| {}).unwrap_err().code, FailCode::Io);
+    assert_eq!(snapshot(&env.dist()), before);
+    assert_eq!(vencord_folder_names(&env), names, "no new backup, no leftovers");
+    assert!(detect::installed_build(&env).is_some(), "still reads as ours");
+
+    // The swap itself fails: moving the new folder in is refused, so ours comes back.
+    let refuse_stage = |from: &Path, to: &Path| {
+        if from.ends_with(place::STAGE_NAME) {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated: Access is denied"))
+        } else {
+            fs::rename(from, to)
+        }
+    };
+    let err = place::place_with(&env, &good, later, &|_| {}, &refuse_stage).unwrap_err();
+    assert_eq!(err.code, FailCode::Io);
+    assert!(err.detail.contains("simulated"), "{err}");
+    assert_eq!(snapshot(&env.dist()), before);
+    assert_eq!(vencord_folder_names(&env), names);
+
+    // A good place over ours keeps the friend's own file and makes no backup.
+    let ok = place::place(&env, &good, later, &|_| {}).unwrap();
+    assert!(ok.backup.is_none());
+    assert_eq!(fs::read_to_string(env.dist().join("notes.txt")).unwrap(), "a friend's own file");
+    assert_eq!(vencord_folder_names(&env), names);
+}
+
+#[test]
+fn failed_swap_puts_a_foreign_dist_back_and_makes_no_backup() {
+    let sb = sandbox("place-fail-swap");
+    let env = Env::sandboxed(sb, Some(fixture_build()), Arc::new(OfflineFetcher));
+    write_dist(&env, &[("patcher.js", "// Vencord official1"), ("renderer.js", "official")]);
+    let before = snapshot(&env.dist());
+    let good = fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap();
+    let now = chrono::Local.with_ymd_and_hms(2026, 11, 9, 9, 43, 0).unwrap();
+    let refuse_stage = |from: &Path, to: &Path| {
+        if from.ends_with(place::STAGE_NAME) {
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "simulated: There is not enough space on the disk"))
+        } else {
+            fs::rename(from, to)
+        }
+    };
+    let err = place::place_with(&env, &good, now, &|_| {}, &refuse_stage).unwrap_err();
+    assert_eq!(err.code, FailCode::Io);
+    assert_eq!(snapshot(&env.dist()), before);
+    assert!(place::list_backups(&env).is_empty());
+    assert_eq!(vencord_folder_names(&env), vec!["dist"]);
+
+    // Moving the old folder aside is refused: nothing changes either.
+    let refuse_dist = |from: &Path, to: &Path| {
+        if from.ends_with("dist") {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated: in use"))
+        } else {
+            fs::rename(from, to)
+        }
+    };
+    assert!(place::place_with(&env, &good, now, &|_| {}, &refuse_dist).is_err());
+    assert_eq!(snapshot(&env.dist()), before);
+    assert_eq!(vencord_folder_names(&env), vec!["dist"]);
+}
+
+#[test]
+fn place_recovers_from_a_run_that_stopped_half_way() {
+    let sb = sandbox("place-recover");
+    let env = Env::sandboxed(sb, Some(fixture_build()), Arc::new(OfflineFetcher));
+    let good = fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap();
+    let now = chrono::Local.with_ymd_and_hms(2026, 11, 9, 9, 0, 0).unwrap();
+    place::place(&env, &good, now, &|_| {}).unwrap();
+    // As if the power went out between moving our dist aside and moving the new one in.
+    let base = env.vencord_base();
+    fs::rename(env.dist(), base.join(place::ASIDE_NAME)).unwrap();
+    fs::create_dir_all(base.join(place::STAGE_NAME)).unwrap();
+    fs::write(base.join(place::STAGE_NAME).join("patcher.js"), "half").unwrap();
+    let bad = build_that_fails_midway(&env);
+    assert!(place::place(&env, &bad, now, &|_| {}).is_err());
+    assert!(detect::installed_build(&env).is_some(), "our previous build came back");
+    assert_eq!(fs::read(env.dist().join("patcher.js")).unwrap(), fs::read(fixture_build().join("patcher.js")).unwrap());
+    assert_eq!(vencord_folder_names(&env), vec!["dist"]);
+}
+
 // ---------------------------------------------------------------- full flow
 
 /// Puts a verified copy of the pinned CLI into the sandbox's cache,
