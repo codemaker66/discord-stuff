@@ -1,2 +1,4 @@
 node_modules/
 test/out/
+desktop/out/
+desktop/work/
