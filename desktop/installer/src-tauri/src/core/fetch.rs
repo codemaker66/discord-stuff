@@ -198,6 +198,28 @@ fn read_build(dir: &Path) -> Result<Value, OpError> {
         .ok_or_else(|| OpError::new(FailCode::Invalid, "The release looks damaged.", "build.json is not a JSON object"))
 }
 
+/// A friend's Vencord takes the build hash from the last word of the release
+/// title and updates whenever it differs from the hash built into its
+/// patcher.js. A release whose title, build.json and patcher.js disagree would
+/// make it update in a loop, so it is refused (release.mjs checks the same).
+/// Returns the hash.
+fn check_build_hash(title: &str, build: &Value, stage: &Path) -> Result<String, OpError> {
+    let damaged =
+        |detail: String| OpError::new(FailCode::Invalid, "The release looks damaged, so nothing was installed.", detail);
+    let h = title_hash(title)
+        .ok_or_else(|| damaged(format!("the release title {title:?} does not end with a build hash")))?;
+    let b = build.get("hash").and_then(Value::as_str).unwrap_or("");
+    if !b.eq_ignore_ascii_case(&h) {
+        return Err(damaged(format!("build.json says hash {b:?}, the release title says {h}")));
+    }
+    let patcher = fs::read(stage.join("patcher.js")).map_err(|e| OpError::io("read patcher.js", e))?;
+    let quoted = format!("\"{h}\"");
+    if !patcher.windows(quoted.len()).any(|w| w.eq_ignore_ascii_case(quoted.as_bytes())) {
+        return Err(damaged(format!("patcher.js was not built with hash {h} (no {quoted} in it)")));
+    }
+    Ok(h)
+}
+
 /// Fetches and verifies the build: from DOPA_LOCAL_BUILD when set, otherwise
 /// from the latest GitHub release.
 pub fn fetch_build(env: &Env, progress: &mut dyn FnMut(f64, &str), log: &dyn Fn(&str)) -> Result<BuildFiles, OpError> {
@@ -326,11 +348,8 @@ fn fetch_github(env: &Env, progress: &mut dyn FnMut(f64, &str), log: &dyn Fn(&st
         progress(done_bytes as f64 / total as f64, name);
     }
     let build = read_build(&stage)?;
-    if let (Some(h), Some(b)) = (title_hash(&title), build.get("hash").and_then(Value::as_str)) {
-        if !b.eq_ignore_ascii_case(&h) {
-            log(&format!("Note: build.json says hash {b}, the release title says {h}"));
-        }
-    }
+    let hash = check_build_hash(&title, &build, &stage)?;
+    log(&format!("Build {hash}: the release title, build.json and patcher.js agree"));
     Ok(BuildFiles {
         dir: stage,
         files: wanted.into_iter().filter(|n| n != BUILD_JSON).collect(),

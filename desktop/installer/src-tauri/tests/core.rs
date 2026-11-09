@@ -417,6 +417,74 @@ fn github_build_is_verified_and_tampering_refused() {
     assert_eq!(fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap_err().code, FailCode::Offline);
 }
 
+/// A fake GitHub release whose title ends with `title_word`: the fixture
+/// build with `patcher` as its patcher.js, checksums recomputed so they match.
+fn fake_release_with(env: &Env, title_word: &str, patcher: &[u8]) -> Arc<FakeFetcher> {
+    let base = "https://github.com/codemaker66/discord-stuff/releases/download/test";
+    let mut files: Vec<(&str, Vec<u8>)> = ["preload.js", "renderer.js", "renderer.css", "build.json"]
+        .iter()
+        .map(|n| (*n, fs::read(fixture_build().join(n)).unwrap()))
+        .collect();
+    files.push(("patcher.js", patcher.to_vec()));
+    let sums_text: String = files.iter().map(|(n, b)| format!("{}  {n}\n", sums::sha256_bytes(b))).collect();
+    files.push(("SHA256SUMS.txt", sums_text.into_bytes()));
+    let assets: Vec<serde_json::Value> = files
+        .iter()
+        .map(|(n, b)| serde_json::json!({ "name": n, "browser_download_url": format!("{base}/{n}"), "size": b.len() }))
+        .collect();
+    let release = serde_json::json!({
+        "name": format!("Dopa's Discord Purifier 4.2.0 for the Discord app · Vencord v1.14.1 · {title_word}"),
+        "tag_name": format!("desktop-v4.2.0-{title_word}"),
+        "assets": assets,
+    });
+    let mut entries: Vec<(String, Result<Vec<u8>, NetError>)> =
+        vec![(env.latest_release_url(), Ok(release.to_string().into_bytes()))];
+    for (n, b) in files {
+        entries.push((format!("{base}/{n}"), Ok(b)));
+    }
+    Arc::new(FakeFetcher { map: Mutex::new(entries.into_iter().collect()) })
+}
+
+#[test]
+fn github_build_whose_hashes_disagree_is_refused() {
+    let probe = Env::sandboxed(sandbox("hash-probe"), None, Arc::new(OfflineFetcher));
+    let good_patcher = fs::read(fixture_build().join("patcher.js")).unwrap();
+    assert!(String::from_utf8_lossy(&good_patcher).contains("\"f1a2b3c\""), "the fixture carries its hash");
+
+    // The fixture as released: title, build.json and patcher.js agree.
+    let env = Env::sandboxed(sandbox("hash-ok"), None, fake_release_with(&probe, "f1a2b3c", &good_patcher));
+    fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap();
+
+    // The title's hash is not build.json's: friends would update forever.
+    let env = Env::sandboxed(sandbox("hash-title"), None, fake_release_with(&probe, "1234567", &good_patcher));
+    let err = fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap_err();
+    assert_eq!(err.code, FailCode::Invalid, "{err}");
+    assert!(err.detail.contains("1234567") && err.detail.contains("f1a2b3c"), "{err}");
+
+    // patcher.js was built with another hash (or none).
+    let other = b"// Vencord f1a2b3c\nmodule.exports = { gitHash: \"7654321\" };\n";
+    let env = Env::sandboxed(sandbox("hash-patcher"), None, fake_release_with(&probe, "f1a2b3c", other));
+    let err = fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap_err();
+    assert_eq!(err.code, FailCode::Invalid, "{err}");
+    assert!(err.detail.contains("patcher.js"), "{err}");
+
+    // A title that does not end with a hash at all.
+    let env = Env::sandboxed(sandbox("hash-none"), None, fake_release_with(&probe, "final", &good_patcher));
+    assert_eq!(fetch::fetch_build(&env, &mut |_, _| {}, &|_| {}).unwrap_err().code, FailCode::Invalid);
+
+    // A whole install stops there, before anything is changed.
+    let sb = sandbox("hash-install");
+    let env = Env::sandboxed(sb, None, fake_release_with(&probe, "f1a2b3c", other));
+    let res = fake_discord(&env, Branch::Stable, "1.0.1", Fake::Clean);
+    let before = fs::read(res.join("app.asar")).unwrap();
+    seed_cli(&env);
+    let f = ops::install(&env, &InstallRequest { branches: vec![Branch::Stable], ..Default::default() }, &Recorder::default())
+        .unwrap_err();
+    assert_eq!((f.code, f.step.as_deref()), (FailCode::Invalid, Some("fetch-build")));
+    assert!(!env.dist().exists());
+    assert_eq!(fs::read(res.join("app.asar")).unwrap(), before);
+}
+
 // ---------------------------------------------------------------- place
 
 #[test]
