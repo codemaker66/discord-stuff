@@ -153,6 +153,59 @@
   .hint:not(:empty) { margin-top: 10px; font-size: 14.5px; color: var(--ember-200); }
   .hint b { color: var(--t1); }
 
+  /* the Discord app route: one download, three tiny steps, and the blue box Windows may show first */
+  .app-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 456px); gap: 36px; align-items: center; padding: 32px; border-radius: 26px;
+    background: radial-gradient(520px 300px at 0% 0%, rgba(255, 122, 169, .13), transparent 70%), linear-gradient(180deg, rgba(255, 236, 244, .055), rgba(255, 236, 244, .025));
+    box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .22), inset 0 1px 0 var(--hi), 0 30px 60px -30px rgba(0, 0, 0, .7); }
+  .app-get { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+  .btn-lg { height: 60px; padding: 0 28px; font-size: 17.5px; border-radius: 16px; }
+  .btn-lg svg { width: 20px; height: 20px; }
+  .app-meta { margin: 0; font-size: 14px; color: var(--t3); }
+  .app-meta b { color: var(--t2); font-weight: 600; }
+  .app-steps { list-style: none; margin: 26px 0 0; padding: 0; display: grid; gap: 4px; counter-reset: app; }
+  .app-steps li { counter-increment: app; position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); column-gap: 14px; padding: 10px 12px; border-radius: 14px; transition: background-color .2s, box-shadow .2s; }
+  .app-steps li::before { content: counter(app); grid-row: span 2; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; font: 800 15px/1 var(--font);
+    color: var(--rose-200); background: rgba(255, 122, 169, .12); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .3); }
+  .app-steps li:not(:last-child)::after { content: ''; position: absolute; left: 27px; top: 46px; bottom: -10px; width: 2px; border-radius: 1px; background: rgba(255, 122, 169, .16); }
+  .app-steps li > b { font-size: 16px; line-height: 1.35; }
+  .app-steps li > span { font-size: 14.5px; color: var(--t2); }
+  .app-steps li > span b { color: var(--t1); font-weight: 600; }
+  .app-steps li.is-current { background: rgba(255, 122, 169, .06); box-shadow: inset 0 0 0 1px rgba(255, 122, 169, .4); }
+  .app-steps li.is-current::before { color: var(--rose-ink); background: var(--rose-300); box-shadow: 0 0 0 5px rgba(255, 122, 169, .12); }
+  .app-steps li.is-done::before { content: '✓'; color: #082416; background: var(--ok); box-shadow: none; }
+  .app-steps li.is-done > b { color: var(--t2); }
+  .app-other { margin: 0; font-size: 15.5px; color: var(--t2); }
+  .app-other b { color: var(--t1); }
+  .app-other:not([hidden]) + .app-get { margin-top: 18px; }
+  #app .sub[hidden] + .app-card { margin-top: 22px; }
+  /* SmartScreen, drawn: what Windows shows, then what to press, each press ringed in rose */
+  .ss { margin: 0; }
+  .ss figcaption { margin: 0 0 14px; font-size: 14.5px; color: var(--t2); }
+  .ss figcaption b { color: var(--t1); }
+  .ss-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .ss-box { position: relative; display: flex; flex-direction: column; min-height: 196px; padding: 14px 14px 12px; border-radius: 6px; color: #fff;
+    font: 400 11px/1.35 'Segoe UI', system-ui, sans-serif; background: linear-gradient(180deg, #1666c5, #0e5ab4);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .06), 0 18px 34px -16px rgba(0, 40, 110, .8); }
+  .ss-box > b { display: block; margin-bottom: 7px; font: 300 15.5px/1.15 'Segoe UI', system-ui, sans-serif; letter-spacing: -.01em; }
+  .ss-box p { margin: 0; color: rgba(255, 255, 255, .88); }
+  .ss-box p + p { margin-top: 3px; }
+  .ss-box .ss-dim { color: rgba(255, 255, 255, .7); }
+  .ss-bar { display: block; height: 5px; margin: 5px 0; border-radius: 3px; background: rgba(255, 255, 255, .3); }
+  .ss-bar + .ss-bar { width: 72%; }
+  .ss-link { align-self: flex-start; margin-top: 8px; text-decoration: underline; text-underline-offset: 2px; }
+  .ss-btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: auto; padding-top: 12px; }
+  .ss-btn { padding: 5px 8px; border: 1px solid rgba(255, 255, 255, .75); white-space: nowrap; }
+  .ss-press { position: relative; border-radius: 4px; box-shadow: 0 0 0 2px var(--rose-300), 0 0 0 6px rgba(255, 122, 169, .3); }
+  .ss-press::after { content: attr(data-n) / ''; position: absolute; top: -12px; right: -16px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%;
+    font: 800 11.5px/1 var(--font); color: var(--rose-ink); background: var(--rose-300); text-decoration: none; }
+  .ss-link.ss-press { padding: 1px 4px; margin-left: -4px; }
+  .app-below { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0 0; padding: 0; list-style: none; }
+  .app-below li { padding: 18px 20px; border-radius: 20px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); font-size: 14.5px; color: var(--t2); }
+  .app-below li > strong { display: block; margin-bottom: 4px; font-size: 16px; color: var(--t1); }
+  .app-below li b { color: var(--t1); }
+  #app .note { margin-top: 18px; }
+  .app-alt { margin: 14px 0 0; font-size: 14.5px; color: var(--t3); }
+
   /* features */
   .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
   .feature { margin: 0; padding: 14px 14px 18px; border-radius: 20px; background: var(--card); box-shadow: inset 0 0 0 1px var(--hair); }
@@ -204,6 +257,8 @@
     .hero { grid-template-columns: 1fr; padding-top: 44px; gap: 32px; }
     .features { grid-template-columns: repeat(2, 1fr); }
     .two { grid-template-columns: 1fr; }
+    .app-card { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+    .app-below { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   }
   @media (max-width: 560px) {
     .setup { padding: 0; background: none; box-shadow: none; }
@@ -219,6 +274,15 @@
     .share .linkbox code { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; padding: 4px 4px 6px; font-size: 13px; }
     .btn { width: 100%; }
     .cta { flex-direction: column; }
+    .app-card { padding: 20px; border-radius: 22px; }
+    .btn-lg { height: 56px; }
+    .app-steps { margin-top: 18px; }
+    .app-steps li { padding: 8px 6px; }
+    .app-steps li:not(:last-child)::after { left: 21px; top: 44px; bottom: -8px; }
+  }
+  @media (max-width: 440px) {
+    .ss-pair { grid-template-columns: minmax(0, 1fr); }
+    .ss-box { min-height: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     * { transition-property: opacity, color, background-color, box-shadow !important; }
@@ -231,6 +295,8 @@
     .setup, .step, details, .panel, .feature, .installed, .share, .linkbox, .toast { border: 1px solid CanvasText; }
     .step.is-current { outline: 2px solid Highlight; outline-offset: -2px; }
     .toggle-mock i { border: 1px solid CanvasText; }
+    .app-card, .app-below li, .ss-box, .ss-btn { border: 1px solid CanvasText; }
+    .ss-press, .app-steps li.is-current { outline: 2px solid Highlight; outline-offset: 2px; }
   }
 </style>
 </head>
@@ -262,9 +328,61 @@
     <div class="shot"><img src="img/purging.webp" alt="The purifier panel mid-purge next to its log window, inside Discord" width="1100" height="1000" fetchpriority="high" decoding="async"></div>
   </header>
 
+  <section id="app" aria-labelledby="app-title">
+    <div class="eyebrow">For the Discord app</div>
+    <h2 id="app-title">Put it right in your Discord app</h2>
+    <p class="sub" data-role="app-sub">One download for Windows. It sets up Vencord, a popular Discord mod, with the Purifier built in — then Discord reopens wearing it~ ♡</p>
+    <div class="app-card">
+      <div>
+        <p class="app-other" data-role="app-other" hidden><b>Windows only for now~</b> On a Mac or Linux, use Discord in your browser instead: same account, same chats. <a href="#install">The setup is up there ♡</a></p>
+        <div class="app-get" data-role="app-get">
+          <a class="btn btn-primary btn-lg" data-role="app-link" href="https://github.com/codemaker66/discord-stuff/releases/latest/download/DopasPurifierSetup.exe">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+            <span>Get it for the Discord app</span>
+          </a>
+          <p class="app-meta"><b>Windows 10/11</b> · free · no admin needed</p>
+        </div>
+        <ol class="app-steps" data-role="app-steps">
+          <li data-app-step="download"><b>Download</b><span>One small file, <b>DopasPurifierSetup.exe</b>.</span></li>
+          <li data-app-step="run"><b>Run it</b><span>Open it from your downloads. If Windows asks first, the blue box shows what to press ✨</span></li>
+          <li data-app-step="done"><b>Discord reopens with the Purifier</b><span>Look top-right for the panel, open any chat, then Purify.</span></li>
+        </ol>
+      </div>
+      <figure class="ss" data-role="smartscreen" aria-labelledby="ss-cap">
+        <figcaption id="ss-cap"><b>If Windows says it protected your PC:</b> that's normal for a new app it hasn't met yet. Press <b>More info</b>, then <b>Run anyway</b>.</figcaption>
+        <div class="ss-pair">
+          <div class="ss-box">
+            <b>Windows protected your PC</b>
+            <p>Microsoft Defender SmartScreen prevented an unrecognised app from starting.</p>
+            <span class="ss-bar" aria-hidden="true"></span><span class="ss-bar" aria-hidden="true"></span>
+            <span class="ss-link ss-press" data-n="1">More info</span>
+            <span class="ss-btns"><span class="ss-btn">Don't run</span></span>
+          </div>
+          <div class="ss-box">
+            <b>Windows protected your PC</b>
+            <p class="ss-dim">App: DopasPurifierSetup.exe</p>
+            <p class="ss-dim">Publisher: Unknown publisher</p>
+            <span class="ss-btns"><span class="ss-btn ss-press" data-n="2">Run anyway</span><span class="ss-btn">Don't run</span></span>
+          </div>
+        </div>
+      </figure>
+    </div>
+    <!-- installer-shots -->
+    <ul class="app-below" data-role="app-facts">
+      <li><strong>What it installs</strong>Vencord, a popular Discord mod, with Dopa's Purifier built in. It stays through Discord's own updates.</li>
+      <li><strong>Your settings stay</strong>Already on Vencord? Your settings and plugins are kept just as they are.</li>
+      <li><strong>Easy to undo</strong>Run the same app again and press <b>Uninstall</b> — Discord goes back to plain.</li>
+    </ul>
+    <div class="note" data-role="app-terms">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg>
+      <p><b>Honest note:</b> client mods like Vencord are against Discord's terms, so like any tool of this kind it carries a small risk. Use it at your own discretion.</p>
+    </div>
+    <p class="app-alt" data-role="app-alt">Rather use Discord in your browser? <a href="#install">Set it up there instead</a> — or <a href="#desktop-title">already on BetterDiscord</a>?</p>
+  </section>
+
   <section id="install" aria-labelledby="install-title">
     <div class="eyebrow">Two minutes, once</div>
-    <h2 id="install-title">Set it up</h2>
+    <h2 id="install-title">Set it up in your browser</h2>
     <p class="sub">The Purifier lives inside Discord in your browser, carried by Tampermonkey, a free helper extension. Set it up once — updates arrive by themselves.</p>
     <div class="setup">
       <div class="note" id="on-phone" data-role="mobile-note" hidden>
@@ -343,11 +461,11 @@
   </section>
 
   <section aria-labelledby="desktop-title">
-    <div class="eyebrow">Use the Discord app?</div>
-    <h2 id="desktop-title">Desktop app users</h2>
+    <div class="eyebrow">Other ways</div>
+    <h2 id="desktop-title">No installer, or BetterDiscord</h2>
     <div class="two">
       <div class="panel">
-        <h3>Easiest: use Discord in your browser</h3>
+        <h3>No installer: use Discord in your browser</h3>
         <p>Same account, same chats — just at <b>discord.com/app</b>. Set it up above, purge, and go back to the app whenever you like.</p>
         <a class="btn btn-quiet btn-sm" href="https://discord.com/app" target="_blank" rel="noopener">Open Discord in the browser</a>
       </div>
@@ -368,8 +486,12 @@
     <div class="eyebrow">Questions</div>
     <h2 id="faq-title">Good to know</h2>
     <details id="faq-safe"><summary>Is it safe? Does it send my login anywhere?</summary><div>
-      <p><b>You never paste a token, a password or any code.</b> It installs like any browser extension and runs entirely inside your own Discord tab (or the app, with BetterDiscord), using the session you're already logged in with — your login and messages never leave Discord.</p>
-      <p>The userscript talks to Discord and nothing else; Tampermonkey itself fetches new versions of it from GitHub. The BetterDiscord plugin also asks GitHub once each time it starts whether there's a new version. No servers of ours, no tracking~ ♡ The whole thing is <a href="https://github.com/codemaker66/discord-stuff">public on GitHub</a>, so anyone can check.</p>
+      <p><b>You never paste a token, a password or any code.</b> It installs like any browser extension and runs entirely inside your own Discord tab (or the Discord app, through Vencord or BetterDiscord), using the session you're already logged in with — your login and messages never leave Discord.</p>
+      <p>The userscript talks to Discord and nothing else; Tampermonkey itself fetches new versions of it from GitHub. The BetterDiscord plugin also asks GitHub once each time it starts whether there's a new version, and in the Discord app Vencord checks this project's GitHub releases for new builds. No servers of ours, no tracking~ ♡ The whole thing is <a href="https://github.com/codemaker66/discord-stuff">public on GitHub</a>, so anyone can check.</p>
+    </div></details>
+    <details><summary>Windows says it “protected your PC” — is the installer OK?</summary><div>
+      <p>That blue box is Microsoft Defender SmartScreen. It shows for new apps that Windows hasn't seen many people run yet — it doesn't mean anything was found. Press <b>More info</b>, then <b>Run anyway</b>.</p>
+      <p>Want to check first? Every release lists the installer's SHA-256 checksum, and all the code is <a href="https://github.com/codemaker66/discord-stuff">public on GitHub</a>.</p>
     </div></details>
     <details><summary>Can it delete other people's messages?</summary><div>
       <p>No. Discord only lets you delete your own messages, and the purifier only ever asks for yours. DMs with anyone you shield are left alone, even mid-purge, and Bardo and Dopa are shielded from the start~ ♡ Shields cover one-to-one DMs, not group chats.</p>
@@ -382,6 +504,7 @@
     </div></details>
     <details><summary>Could my account get in trouble?</summary><div>
       <p>Honest answer: Discord's terms don't allow automating your account, and any tool like this carries a small risk. The purifier works at a human-ish pace (about 40 messages a minute), slows down whenever Discord asks, and never runs on its own — you start every purge. Use it at your own discretion.</p>
+      <p>The Discord app version runs inside Vencord, a client mod, and client mods are against Discord's terms too — the same small risk, the same honest answer.</p>
     </div></details>
     <details><summary>How long does it take?</summary><div>
       <p>About 40 messages a minute, so 1,000 messages take around 25 minutes — a pace Discord is happy with, and slower whenever it asks for a break. A scan tells you the estimate up front; you can minimise the panel and keep chatting while it works. Keep the Discord tab open until it's done.</p>
@@ -389,9 +512,10 @@
     <details><summary>How do updates work?</summary><div>
       <p>Tampermonkey checks for new versions automatically. If you want it now: Tampermonkey icon → <b>Utilities</b> → <b>Check for userscript updates</b>, or press Install (or Reinstall) in step 3.</p>
       <p>On BetterDiscord, the plugin checks each time Discord starts and asks before it updates.</p>
+      <p>In the Discord app, Vencord fetches new builds from this project's releases by itself and tells you to restart Discord. It also puts itself back after Discord updates.</p>
     </div></details>
     <details><summary>How do I remove it?</summary><div>
-      <p>Tampermonkey icon → <b>Dashboard</b>, then the bin next to the Purifier. Or remove Tampermonkey itself. On BetterDiscord, delete the plugin file.</p>
+      <p>Tampermonkey icon → <b>Dashboard</b>, then the bin next to the Purifier. Or remove Tampermonkey itself. On BetterDiscord, delete the plugin file. In the Discord app, run <b>DopasPurifierSetup.exe</b> again and press <b>Uninstall</b>.</p>
     </div></details>
     <details><summary>Nothing shows up in Discord — help!</summary><div>
       <p>Nine times out of ten it's the Allow User Scripts step: on Chrome, Edge, Opera and Brave the <b>Allow User Scripts</b> switch (or Developer mode) must be on. Then make sure Tampermonkey is enabled, the script is switched on in its dashboard, and reload Discord. Still stuck? <a href="https://github.com/codemaker66/discord-stuff/issues">Open an issue</a>.</p>
@@ -458,6 +582,46 @@
   const ON_PHONE_ONLY = PHONE && detect() !== 'firefox';
   const START = ON_PHONE_ONLY ? 'chrome' : detect();
 
+  // ── The Discord app (Windows) ──
+  // Windows gets it first: the hero's rose button is the download and the app section leads the page.
+  // Anywhere else the section waits after the browser steps and says it's Windows only for now.
+  const APP_URL = 'https://github.com/codemaker66/discord-stuff/releases/latest/download/DopasPurifierSetup.exe';
+  const WINDOWS = !PHONE && /Windows NT/.test(navigator.userAgent);
+  const APP_GOT = 'dopa-app';
+  const appSection = $('#app');
+  const appLink = $('[data-role="app-link"]');
+  if (WINDOWS) {
+    const cta = $('[data-role="hero-cta"]');
+    cta.href = APP_URL;
+    cta.querySelector('span').textContent = 'Get it for the Discord app';
+  } else {
+    $('#install').after(appSection);
+    for (const role of ['app-sub', 'app-steps', 'smartscreen', 'app-facts', 'app-terms', 'app-alt']) $(`[data-role="${role}"]`).hidden = true;
+    const other = $('[data-role="app-other"]');
+    other.hidden = false;
+    $('#app-title').textContent = 'The Discord app version';
+    if (PHONE) {
+      other.innerHTML = '<b>Windows only for now~</b> Use the Discord app on a Windows PC? Open this page there — it\'s one download ♡';
+      $('[data-role="app-get"]').hidden = true;
+    } else {
+      appLink.querySelector('span').textContent = 'Download for Windows';
+    }
+  }
+  // Downloaded this visit: step 1 ticks, "Run it" wears the ring, and the button quiets down.
+  // A Purifier already running in this browser means the browser route is theirs, so nothing here is loud.
+  function setApp() {
+    let got = false;
+    try { got = sessionStorage.getItem(APP_GOT) === '1'; } catch {}
+    const lead = WINDOWS && !installed;
+    for (const li of $$('[data-app-step]')) {
+      li.classList.toggle('is-current', lead && li.dataset.appStep === (got ? 'run' : 'download'));
+      li.classList.toggle('is-done', lead && got && li.dataset.appStep === 'download');
+    }
+    appLink.classList.toggle('btn-primary', lead && !got);
+    appLink.classList.toggle('btn-quiet', !(lead && !got));
+    if (WINDOWS) appLink.querySelector('span').textContent = got ? 'Download it again' : 'Get it for the Discord app';
+  }
+
   // ── The step you're on ──
   // One step wears the ring and the one rose button: Tampermonkey first; Install once its store was
   // visited this session (unverified, so nothing is ticked); Open Discord once the Purifier says hello.
@@ -480,6 +644,7 @@
       link.classList.toggle('btn-quiet', role !== loud);
     }
     $('[data-role="install-link"]').textContent = !installed ? 'Install' : installed.outdated ? 'Update' : 'Reinstall';
+    setApp();
   }
 
   let chosen = START;
@@ -624,6 +789,12 @@
     const a = e.target.closest('a');
     if (!a) return;
     if (a.href === $('[data-role="install-link"]').href) setAwaiting(3);
+    if (a.href === APP_URL) {
+      try { sessionStorage.setItem(APP_GOT, '1'); } catch {}
+      setApp();
+      // From the hero, glide down to "Run it" and the blue box Windows may show next.
+      if (a.dataset.role === 'hero-cta') setTimeout(() => appSection.scrollIntoView({ block: 'start' }), 250);
+    }
     if (a.dataset.role === 'manager-link') {
       try { sessionStorage.setItem(VISITED, '1'); } catch {}
       setCurrent();
