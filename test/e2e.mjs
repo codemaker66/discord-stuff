@@ -10,6 +10,7 @@ import { openDiscord, injectUserscript, installMockDiscord, buildWorld, withTimi
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(process.argv[2] || path.join(here, '../dist/dopas-discord-purifier.user.js'));
 const PLUGIN = path.join(path.dirname(SRC), 'DopasPurifier.plugin.js');
+const VENCORD_PLUGIN = path.join(path.dirname(SRC), 'vencord/dopasPurifier/index.js');
 const OUT = process.argv[3] || path.join(here, 'out/e2e');
 fs.mkdirSync(OUT, { recursive: true });
 const source = fs.readFileSync(SRC, 'utf8');
@@ -705,6 +706,44 @@ await test('T34 BetterDiscord plugin: start, stop mid-purge cleans up, start aga
   assert(env.pageErrors.length === 0, `errors after stop: ${env.pageErrors.join('; ')}`);
   await page.evaluate(() => window.__bd.start());
   await page.waitForFunction(() => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]').textContent === 'art-share');
+  await env.context.close();
+});
+
+// The Vencord userplugin: Vencord's build bundles dist/vencord/dopasPurifier/index.js as an ES module whose
+// only import is @utils/types, so here definePlugin is the identity and the default export lands on a global.
+await test('T289 Vencord userplugin: defined right, starts once, stops clean, starts again', async () => {
+  const code = fs.readFileSync(VENCORD_PLUGIN, 'utf8');
+  assert(code.split('import definePlugin from "@utils/types";').length === 2, 'one @utils/types import');
+  assert(code.split('export default definePlugin(').length === 2, 'one default export');
+  const plugin = code
+    .replace('import definePlugin from "@utils/types";', 'const definePlugin = (p) => p;')
+    .replace('export default definePlugin(', 'window.__vencordPlugin = definePlugin(');
+  const env = await openDiscord(browser, '/channels/4001/5001');
+  const { page } = env;
+  await page.addScriptTag({ content: plugin });
+  const def = await page.evaluate(() => { const p = window.__vencordPlugin; return { name: p.name, on: p.enabledByDefault, author: p.authors[0].name, idType: typeof p.authors[0].id, start: typeof p.start, stop: typeof p.stop, none: !document.querySelector('#dopa-purifier-host') && !window.__dopaPurifier }; });
+  assert(def.name === 'DopasPurifier' && def.on === true, `definition ${JSON.stringify(def)}`);
+  assert(def.author && def.idType === 'bigint', `authors[0] ${JSON.stringify(def)}`);
+  assert(def.start === 'function' && def.stop === 'function' && def.none, `lifecycle ${JSON.stringify(def)}`);
+  const hosts = () => page.evaluate(() => document.querySelectorAll('#dopa-purifier-host').length);
+  const named = (name) => page.waitForFunction((n) => document.querySelector('#dopa-purifier-host')?.shadowRoot.querySelector('[data-role="target-name"]')?.textContent === n, name);
+  await page.evaluate(() => window.__vencordPlugin.start());
+  await named('general');
+  assert(await hosts() === 1, 'one host after start');
+  const first = await page.evaluate(() => window.__dopaPurifier === window.__vencordPlugin.app);
+  assert(first, 'the global is the running purifier');
+  await page.evaluate(() => window.__vencordPlugin.start());
+  await page.waitForTimeout(200);
+  assert(await hosts() === 1, 'a second start() mounted something new');
+  assert(await page.evaluate(() => window.__dopaPurifier === window.__vencordPlugin.app), 'a second start() replaced the purifier');
+  await page.evaluate(() => window.__vencordPlugin.stop());
+  assert(await page.evaluate(() => !document.querySelector('#dopa-purifier-host') && !window.__dopaPurifier), 'stop() left the host or the global');
+  await page.evaluate(() => window.__vencordPlugin.stop()); // a stop with nothing running is harmless
+  await page.evaluate(() => window.__vencordPlugin.start());
+  await named('general');
+  assert(await hosts() === 1, 'one host after start again');
+  await page.evaluate(() => window.__vencordPlugin.stop());
+  assert(env.pageErrors.length === 0, `page errors: ${env.pageErrors.join('; ')}`);
   await env.context.close();
 });
 

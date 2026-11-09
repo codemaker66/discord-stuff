@@ -1,6 +1,7 @@
 // Build everything from src/ + assets/:
 //   dist/dopas-discord-purifier.user.js  (Tampermonkey / Violentmonkey userscript)
 //   dist/DopasPurifier.plugin.js         (BetterDiscord plugin for the desktop app)
+//   dist/vencord/dopasPurifier/index.js  (Vencord userplugin; the desktop release builds it into Vencord)
 //   docs/                                (the install page, stamped with the version)
 // node tools/build.mjs            → writes dist/
 // node tools/build.mjs --check    → exits 1 if dist/ or docs/ is out of date (CI runs this)
@@ -43,6 +44,9 @@ const site = read('docs/index.html').replace(/data-latest="[^"]*"/, `data-latest
 const outputs = {
   'dist/dopas-discord-purifier.user.js': fill(read('src/userscript.js')),
   'dist/DopasPurifier.plugin.js': plugin,
+  // A .js userplugin is picked up by Vencord's build (esbuild resolves the folder's index.js and
+  // applies tsconfig paths such as @utils/types to every file it bundles), so no .ts copy is needed.
+  'dist/vencord/dopasPurifier/index.js': fill(read('src/vencord.js')),
   // The install page (GitHub Pages serves docs/) knows the latest version and hosts the
   // plugin same-origin so its download link really downloads.
   'docs/index.html': site,
