@@ -3435,7 +3435,7 @@ function createPurifier() {
   // open, it empties, so no stale milestone outlives the verdict.
   function wireMilestone() {
     on('end', (p) => {
-      const minimised = $('[data-role="shell"]').hidden;
+      const minimised = minimisedNow();
       $('[data-role="milestone"]').textContent = minimised && state.orbDone ? `Dopa's Purifier: ${endingWords(p).title}` : '';
     });
   }
@@ -3931,7 +3931,7 @@ function createPurifier() {
   }
 
   // A couple of drops fall from just outside the ring's leading edge, clear of the number.
-  const fxVisible = () => !document.hidden && !$('[data-role="shell"]').hidden;
+  const fxVisible = () => !document.hidden && !minimisedNow();
 
   function bleed() {
     const zone = $('.blood');
@@ -4139,6 +4139,9 @@ function createPurifier() {
   // cross-fade in place.
   const DRAWER = 'cubic-bezier(.32, .72, 0, 1)';
   let fold = null; // { open, anims }: the fold in flight, settled when its last animation ends
+  // Minimised, or on the way there: the shell only hides once the fold ends, and a finish that lands
+  // mid-fold belongs to the orb.
+  const minimisedNow = () => (fold ? !fold.open : $('[data-role="shell"]').hidden);
 
   function foldAnimations(open, panel, orb) {
     if (reducedMotion()) {
@@ -4399,7 +4402,7 @@ function createPurifier() {
         if (p.failures.length > shown.length) addLog(`…and ${fmt(p.failures.length - shown.length)} more`, 'error');
       }
       scrubLog();
-      const minimised = $('[data-role="shell"]').hidden;
+      const minimised = minimisedNow();
       const purged = plural(p.deleted, 'message');
       const problems = p.problems || [];
       const shielded = p.shielded || [];

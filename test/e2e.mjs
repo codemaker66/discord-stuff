@@ -349,6 +349,29 @@ await test('T13 minimise keeps the run going and restores', async () => {
   await context.close();
 });
 
+await test('T288 a run that ends while the panel folds into the orb leaves its finish on the orb', async () => {
+  // One message of yours in #off-topic, its delete held until the panel has started folding away.
+  const world = buildWorld();
+  let kept = false;
+  world.messages['5002'] = world.messages['5002'].filter((m) => m.author.id !== world.me.id || (m.type === 0 && !kept && (kept = true)));
+  const { page, context } = await boot('/channels/4001/5002', { world });
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route(/\/api\/v\d+\/channels\/\d+\/messages\/\d+$/, async (route) => {
+    if (route.request().method() === 'DELETE') await held;
+    await route.fallback();
+  });
+  await page.click('[data-act="purify"]');
+  await holdConfirm(page);
+  await page.click('[data-act="minimize"]');
+  release(); // the delete lands and the run ends inside the 320 ms fold
+  await waitEnd(page);
+  await page.locator('[data-role="shell"]').waitFor({ state: 'hidden', timeout: 3000 });
+  const live = await page.locator('.orb').getAttribute('data-live');
+  assert(live === 'done', `the orb after a finish mid-fold: ${live}`);
+  await context.close();
+});
+
 await test('T14 keyboard: Tab is trapped in dialog, Space-hold confirms', async () => {
   const { page, world, context } = await boot('/channels/4001/5002');
   await page.click('[data-act="purify"]');
