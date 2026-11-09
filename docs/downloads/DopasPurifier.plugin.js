@@ -2,12 +2,12 @@
  * @name DopasPurifier
  * @author Bardo & Dopa
  * @description Cute bulk message purifier for Discord~ ✨ Wipe your own messages from any DM, group or server.
- * @version 4.1.0
+ * @version 4.2.0
  * @website https://codemaker66.github.io/discord-stuff/
  * @source https://github.com/codemaker66/discord-stuff
  */
 
-const VERSION = '4.1.0';
+const VERSION = '4.2.0';
 const SHARE_URL = 'https://codemaker66.github.io/discord-stuff/';
 // BetterDiscord only updates plugins from its own store, and this one isn't listed there.
 const PLUGIN_URL = 'https://raw.githubusercontent.com/codemaker66/discord-stuff/main/dist/DopasPurifier.plugin.js';
@@ -213,6 +213,13 @@ function createPurifier() {
     try { return await res.json(); } catch { return null; }
   }
 
+  // Discord's clock, from the Date on its answers. Message ids carry Discord's time, so a run's cut-off
+  // (D64) is taken on it: a PC clock that runs fast would purge what you send after confirming, one that
+  // runs slow would leave what you sent before. The header is whole seconds and read once the answer
+  // has landed, so this never runs ahead of Discord: at worst a message from the last second is left.
+  let discordSkewMs = 0;
+  const discordNow = () => Math.floor(Date.now() + discordSkewMs);
+
   // Stop and Cancel drop a read at once. A DELETE or POST already sent is left to land, so
   // "after this one" and the counts stay true. The timeout bounds both: a dead connection
   // turns into a network error and takes the usual backoff instead of hanging for ever.
@@ -225,6 +232,8 @@ function createPurifier() {
     try {
       // Read the body here too, so a server that stalls mid-answer is covered as well.
       const res = await fetch(url, { ...init, signal: ctl.signal });
+      const served = Date.parse(res.headers.get('date') || '');
+      if (Number.isFinite(served)) discordSkewMs = served - Date.now();
       const body = await res.arrayBuffer();
       const empty = res.status === 204 || res.status === 205 || res.status === 304;
       return new Response(empty ? null : body, { status: res.status, statusText: res.statusText, headers: res.headers });
@@ -754,8 +763,9 @@ function createPurifier() {
       token: getToken(), accountSwitched: false,
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [], shielded: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0, waitMs: 0, firstAt: 0, pausedAtFirst: 0, waitAtFirst: 0,
-      // Discord's ids begin with the time they were made: anything newer was sent after this confirm.
-      capId: String((BigInt(Date.now()) - 1420070400000n) << 22n),
+      // Discord's ids begin with the time they were made, on Discord's clock: anything newer was sent
+      // after this confirm.
+      capId: String((BigInt(discordNow()) - 1420070400000n) << 22n),
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: 0,
       uncounted: 0,
@@ -2669,7 +2679,10 @@ function createPurifier() {
     starting = true;
     const ours = await takeRunLock();
     starting = false;
+    // The panel went away while the lock was asked for (a plugin reload): start nothing, hold nothing.
+    if (destroying) { if (ours) freeRunLock(); settleIdle(); return; }
     if (!ours) {
+      settleIdle();
       // Another tab started first: nothing was sent, and focus goes back to Purify.
       handFocus('[data-act="purify"]');
       setStatus(ELSEWHERE, 'calm');
@@ -4855,10 +4868,12 @@ function createPurifier() {
   // For the BetterDiscord plugin, whose updates wait for a purge to finish: busy() while one runs, and
   // whenIdle() resolves when it ends.
   const idleWaiters = [];
-  const whenIdle = () => (run.active ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
-  on('end', () => { for (const resolve of idleWaiters.splice(0)) resolve(); });
+  // A run that ends, or a start that never became one, lets the waiting update ask again.
+  function settleIdle() { for (const resolve of idleWaiters.splice(0)) resolve(); }
+  const whenIdle =() => (run.active || starting ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
+  on('end', settleIdle);
 
-  return { start, destroy, busy: () => run.active, whenIdle };
+  return { start, destroy, busy: () => run.active || starting, whenIdle };
 
 
 }

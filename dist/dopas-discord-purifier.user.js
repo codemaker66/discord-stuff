@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dopa's Discord Purifier
 // @namespace    https://github.com/dopameanie
-// @version      4.1.0
+// @version      4.2.0
 // @description  Cute bulk message purifier for Discord~ ✨ Wipe your own messages from any DM, group or server.
 // @author       Bardo & Dopa
 // @icon         data:image/webp;base64,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
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 (function () {
-  const VERSION = '4.1.0';
+  const VERSION = '4.2.0';
   const SHARE_URL = 'https://codemaker66.github.io/discord-stuff/';
 
   // On the install page, just say hello so it can show "installed ✓".
@@ -172,6 +172,13 @@
     try { return await res.json(); } catch { return null; }
   }
 
+  // Discord's clock, from the Date on its answers. Message ids carry Discord's time, so a run's cut-off
+  // (D64) is taken on it: a PC clock that runs fast would purge what you send after confirming, one that
+  // runs slow would leave what you sent before. The header is whole seconds and read once the answer
+  // has landed, so this never runs ahead of Discord: at worst a message from the last second is left.
+  let discordSkewMs = 0;
+  const discordNow = () => Math.floor(Date.now() + discordSkewMs);
+
   // Stop and Cancel drop a read at once. A DELETE or POST already sent is left to land, so
   // "after this one" and the counts stay true. The timeout bounds both: a dead connection
   // turns into a network error and takes the usual backoff instead of hanging for ever.
@@ -184,6 +191,8 @@
     try {
       // Read the body here too, so a server that stalls mid-answer is covered as well.
       const res = await fetch(url, { ...init, signal: ctl.signal });
+      const served = Date.parse(res.headers.get('date') || '');
+      if (Number.isFinite(served)) discordSkewMs = served - Date.now();
       const body = await res.arrayBuffer();
       const empty = res.status === 204 || res.status === 205 || res.status === 304;
       return new Response(empty ? null : body, { status: res.status, statusText: res.statusText, headers: res.headers });
@@ -713,8 +722,9 @@
       token: getToken(), accountSwitched: false,
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [], shielded: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0, waitMs: 0, firstAt: 0, pausedAtFirst: 0, waitAtFirst: 0,
-      // Discord's ids begin with the time they were made: anything newer was sent after this confirm.
-      capId: String((BigInt(Date.now()) - 1420070400000n) << 22n),
+      // Discord's ids begin with the time they were made, on Discord's clock: anything newer was sent
+      // after this confirm.
+      capId: String((BigInt(discordNow()) - 1420070400000n) << 22n),
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: 0,
       uncounted: 0,
@@ -2628,7 +2638,10 @@
     starting = true;
     const ours = await takeRunLock();
     starting = false;
+    // The panel went away while the lock was asked for (a plugin reload): start nothing, hold nothing.
+    if (destroying) { if (ours) freeRunLock(); settleIdle(); return; }
     if (!ours) {
+      settleIdle();
       // Another tab started first: nothing was sent, and focus goes back to Purify.
       handFocus('[data-act="purify"]');
       setStatus(ELSEWHERE, 'calm');
@@ -4814,10 +4827,12 @@
   // For the BetterDiscord plugin, whose updates wait for a purge to finish: busy() while one runs, and
   // whenIdle() resolves when it ends.
   const idleWaiters = [];
-  const whenIdle = () => (run.active ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
-  on('end', () => { for (const resolve of idleWaiters.splice(0)) resolve(); });
+  // A run that ends, or a start that never became one, lets the waiting update ask again.
+  function settleIdle() { for (const resolve of idleWaiters.splice(0)) resolve(); }
+  const whenIdle =() => (run.active || starting ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
+  on('end', settleIdle);
 
-  return { start, destroy, busy: () => run.active, whenIdle };
+  return { start, destroy, busy: () => run.active || starting, whenIdle };
 
 
   }
