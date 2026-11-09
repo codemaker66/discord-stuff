@@ -26,9 +26,10 @@ async function boot(path, opts = {}) {
   // Presentation only: soften the mock chat behind the panel (its test strings contain literal tags).
   await env.page.addStyleTag({ content: '.chat .txt, .chat .who { color: transparent !important; text-shadow: 0 0 7px rgba(219,222,225,.55); } .chat .ts { display: none; }' });
   await env.page.addScriptTag({ content: source });
-  await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' });
-  // The ring leaves 'lookup' once the open chat is known (or known to be none), whatever the card's copy says.
-  await env.page.waitForFunction(`((s) => s && s !== 'lookup')(${sr}.querySelector('.hero').dataset.state)`);
+  await env.page.waitForSelector('[data-role="layer"]', { state: 'attached' }); // it boots once the page is idle
+  // The ring leaves 'lookup' once the open chat is known (or known to be none), whatever the card's copy
+  // says, and the panel's entrance (D33) has played.
+  await env.page.waitForFunction(`((s) => s && s !== 'lookup')(${sr}.querySelector('.hero').dataset.state) && ${sr}.querySelector('.panel').getAnimations().length === 0`);
   await env.page.waitForTimeout(700);
   return env;
 }
@@ -73,7 +74,7 @@ async function hold(page, ms) {
   const { page, context } = await boot('/channels/4001/5001');
   await shot(page, '01-idle', await panelClip(page));
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(`/found/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`);
+  await page.waitForFunction(`/^Counted~/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`); // the number is in the .sr (D37)
   await page.waitForTimeout(500);
   await shot(page, '02-scanned', await panelClip(page));
   await page.click('[data-act="purify"]');
@@ -115,6 +116,7 @@ async function hold(page, ms) {
   await page.waitForSelector('[data-key="c:3003"]');
   await page.click('[data-key="c:3003"]');
   await page.click('[data-key="c:3002"]');
+  await page.click('.fold-head'); // friends with a closed DM wait in a fold (D43)
   await page.click('[data-key="u:2004"]');
   await page.locator('.guild-head').first().click();
   await page.waitForSelector('[data-key="c:5002"]');
@@ -123,7 +125,7 @@ async function hold(page, ms) {
   await page.waitForTimeout(400);
   await shot(page, '10-batch-selected', await panelClip(page));
   await page.click('[data-act="scan"]');
-  await page.waitForFunction(`/Scan done/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`, null, { timeout: 60000 });
+  await page.waitForFunction(`/Counted~/.test(${sr}.querySelector('[data-role="status-text"]').textContent)`, null, { timeout: 60000 });
   await page.waitForTimeout(300);
   await shot(page, '11-batch-scanned', await panelClip(page));
   await page.click('[data-act="purify"]');

@@ -1,7 +1,9 @@
   // ── Voice: every line the panel says ────────────────────
   // Words. "Chat" is the umbrella word; "channel" means a server channel only; DM and group DM as
-  // Discord says them. "Shield" is the verb and "immune" the state. Purify is the button and the
-  // action, "purged" the result; "delete" appears plainly only in the confirm lead.
+  // Discord says them. "Shield" is the verb and "immune" the state. Count is the safe look first,
+  // Pick chooses chats in Many chats, Purify is the button and the action, "purged" the result;
+  // "purge" stays only as wit (the ring's 'ready for purge', the moods, the terminal). "Delete"
+  // appears plainly only in the confirm lead.
   // Lines stay short, kind and plain, above all when something goes wrong: errors reach the panel
   // through plainError(), and Discord's own wording stays in the log. A name from Discord set in a
   // line of ours sits in bidi isolates (U+2068 … U+2069), so a right-to-left name can't reorder the
@@ -31,6 +33,7 @@
     disposers.push(() => clearInterval(id));
   }
 
+  // What a person's news is keyed on (prefs.seenVersion): major.minor, so a patch release shows nothing.
   const shortVersion = VERSION.split('.').slice(0, 2).join('.');
 
   // ── DOM helpers ─────────────────────────────────────────
@@ -66,14 +69,26 @@
   // A line's emoji is decoration: it shows, but screen readers hear only the words.
   const flaired = (text, flair) => (flair ? [text, h('span', { class: 'flair', 'aria-hidden': 'true', text: ` ${flair}` })] : [text]);
 
-  const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+  // Joins the phrases of a line. The space before the dot can't break, so a wrapped line never
+  // starts with '·'.
+  const SEP = '\u00a0· ';
 
+  // Numbers group the way the browser's language does (de 123.456, hi 1,23,456), always in the
+  // digits 0-9 of the English around them.
+  const NUM = new Intl.NumberFormat(undefined, { numberingSystem: 'latn' });
+  const fmt = (n) => NUM.format(n);
+
+  const plural = (n, word) => `${fmt(n)} ${word}${n === 1 ? '' : 's'}`;
+
+  // Rounded up, so it never promises less than it takes, and never says '60s', '60 min' or '1h 60m'.
   function formatDuration(seconds) {
     if (!Number.isFinite(seconds)) return '';
-    if (seconds < 60) return `${Math.max(1, Math.ceil(seconds))}s`;
-    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.round((seconds % 3600) / 60);
+    const s = Math.max(1, Math.ceil(seconds));
+    if (s < 60) return `${s}s`;
+    const m = Math.ceil(s / 60);
+    if (m < 60) return `${m} min`;
+    const hours = Math.floor(m / 60);
+    const mins = m % 60;
     return mins ? `${hours}h ${mins}m` : `${hours}h`;
   }
 
@@ -86,7 +101,8 @@
   // Every Discord tab shares these. A tab writes back only the keys it changed, and shields
   // are read, changed and written in one go, so no tab can erase another tab's settings.
   const PREFS_KEY = 'dopa-purifier:prefs';
-  const prefs = { x: null, y: null, open: true, muted: false, tab: 'current', welcomed: false };
+  // seenVersion: the version whose news the person has seen (4.1 never wrote it).
+  const prefs = { x: null, y: null, open: true, muted: false, tab: 'current', welcomed: false, seenVersion: null };
   const stringList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 500) : []);
 
   function withStorage(fn) {
@@ -103,15 +119,18 @@
     } catch { return {}; }
   }
 
-  function loadPrefs() {
-    const saved = withStorage(readStored);
+  // saved: what boot read from storage (null when storage is blocked).
+  function loadPrefs(saved) {
     if (!saved) return;
+    const d = saved.dock;
+    if (d && (d.side === 'left' || d.side === 'right') && Number.isFinite(d.dx) && Number.isFinite(d.y)) prefs.dock = { side: d.side, dx: d.dx, y: d.y };
     if (Number.isFinite(saved.x)) prefs.x = saved.x;
     if (Number.isFinite(saved.y)) prefs.y = saved.y;
     if (typeof saved.open === 'boolean') prefs.open = saved.open;
     if (typeof saved.muted === 'boolean') prefs.muted = saved.muted;
     if (saved.tab === 'current' || saved.tab === 'batch') prefs.tab = saved.tab;
     if (typeof saved.welcomed === 'boolean') prefs.welcomed = saved.welcomed;
+    if (typeof saved.seenVersion === 'string') prefs.seenVersion = saved.seenVersion;
   }
 
   let prefsTimer = 0;
@@ -140,9 +159,8 @@
     writePrefs();
   }
 
-  // Pull in shields set in any tab. Returns whether anything changed.
-  function syncProtection() {
-    const saved = withStorage(readStored);
+  // Pull in shields set in any tab (or the ones boot just read). Returns whether anything changed.
+  function syncProtection(saved = withStorage(readStored)) {
     if (!saved) return false; // storage blocked: keep this tab's own shields
     const ids = stringList(saved.protectedIds);
     const released = stringList(saved.released);
@@ -164,35 +182,112 @@
     }) === true;
   }
 
+  // A run's journal lets a reload or a closed laptop keep its place: whose run it was, and which chats
+  // it still had to do, by id. No names, counts or message text, and it lapses after a day. It has its
+  // own key, so onStorage never mistakes it for a shield.
+  const JOURNAL_KEY = 'dopa-purifier:journal';
+  const JOURNAL_TTL_MS = 24 * 60 * 60 * 1000;
+
+  function readJournal(ls) {
+    try {
+      const j = JSON.parse(ls.getItem(JOURNAL_KEY));
+      if (!j || j.v !== 1 || typeof j.user !== 'string' || !['current', 'batch'].includes(j.mode) || !Number.isFinite(j.at)) return null;
+      return {
+        v: 1, user: j.user, mode: j.mode, at: j.at, state: j.state === 'stopped' ? 'stopped' : 'running',
+        chat: j.chat && typeof j.chat.id === 'string' ? { id: j.chat.id } : null,
+        keys: stringList(j.keys), guilds: stringList(j.guilds),
+      };
+    } catch { return null; }
+  }
+
+  // null removes it. A write that fails costs nothing: the journal only ever helps.
+  function storeJournal(j) {
+    withStorage((ls) => (j ? ls.setItem(JOURNAL_KEY, JSON.stringify(j)) : ls.removeItem(JOURNAL_KEY)));
+  }
+
   // ── Sound ───────────────────────────────────────────────
 
-  const sound = { ctx: null, buffer: null, loading: null };
+  // One lifecycle: the dialog primes the sound (the audio engine and the decode) while you read it,
+  // so the hold's commit only starts a source. Stop and Mute hush it with a short fade, and the
+  // engine sleeps whenever nothing is playing. The file itself plays exactly as it is.
+  const sound = { ctx: null, buffer: null, loading: null, source: null, gain: null, playing: false, primeTimer: 0 };
+  const HUSH_S = 0.03; // the fade on Stop or Mute: short enough to be a stop, long enough not to click
+
+  function sleepSound() {
+    if (sound.ctx && sound.ctx.state === 'running') sound.ctx.suspend().catch(() => {});
+  }
+
+  function primeSound() {
+    if (prefs.muted || sound.loading) return;
+    try {
+      if (!sound.ctx) sound.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const { ctx } = sound;
+      // Decode from the embedded base64 directly: fetch() on a data: URL
+      // would trip Discord's connect-src CSP.
+      const bin = atob(DELETE_SOUND.slice(DELETE_SOUND.indexOf(',') + 1));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      sound.loading = ctx.decodeAudioData(bytes.buffer).then((b) => {
+        sound.buffer = b;
+        if (!sound.playing) sleepSound();
+        return b;
+      }, (err) => {
+        sound.loading = null;
+        console.debug('[Dopa Purifier] sound unavailable:', err);
+        return null;
+      });
+    } catch (err) {
+      sound.loading = null;
+      console.debug('[Dopa Purifier] sound unavailable:', err);
+    }
+  }
 
   async function playDeleteSound() {
     if (prefs.muted) return;
+    sound.playing = true;
     try {
-      if (!sound.ctx) sound.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      if (sound.ctx.state === 'suspended') await sound.ctx.resume();
-      if (!sound.buffer) {
-        // Decode from the embedded base64 directly: fetch() on a data: URL
-        // would trip Discord's connect-src CSP.
-        if (!sound.loading) {
-          const bin = atob(DELETE_SOUND.slice(DELETE_SOUND.indexOf(',') + 1));
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          sound.loading = sound.ctx.decodeAudioData(bytes.buffer);
-        }
-        sound.buffer = await sound.loading;
+      if (!sound.buffer) primeSound();
+      const buffer = sound.buffer || await sound.loading;
+      const { ctx } = sound;
+      if (!prefs.muted && buffer && ctx && ctx.state !== 'running') await ctx.resume();
+      if (prefs.muted || !buffer || !ctx) {
+        sound.playing = !!sound.source;
+        if (!sound.playing) sleepSound();
+        return;
       }
-      const source = sound.ctx.createBufferSource();
-      const gain = sound.ctx.createGain();
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
       gain.gain.value = 0.6;
-      source.buffer = sound.buffer;
-      source.connect(gain).connect(sound.ctx.destination);
+      source.buffer = buffer;
+      source.connect(gain).connect(ctx.destination);
+      source.onended = () => {
+        if (sound.source !== source) return;
+        sound.source = null;
+        sound.gain = null;
+        sound.playing = false;
+        sleepSound();
+      };
+      hushSound(); // a second Purify's sound takes over from the first's
+      sound.source = source;
+      sound.gain = gain;
       source.start(0);
     } catch (err) {
+      sound.playing = !!sound.source;
       console.debug('[Dopa Purifier] sound unavailable:', err);
     }
+  }
+
+  // A gain ramp of HUSH_S, then the source stops; its onended lets the engine sleep.
+  function hushSound() {
+    const { source, gain, ctx } = sound;
+    if (!source || !ctx) return;
+    try {
+      const t = ctx.currentTime;
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setValueAtTime(gain.gain.value, t);
+      gain.gain.linearRampToValueAtTime(0, t + HUSH_S);
+      source.stop(t + HUSH_S + 0.005);
+    } catch { /* already stopped */ }
   }
 
   // ── Springs ─────────────────────────────────────────────
@@ -231,8 +326,12 @@
     runAs: null,          // the account the last run was confirmed as
     scanError: null,      // { channelId, line, short, code, blocking }: the last failed count of that chat
     runTargets: [],
+    runNow: null,         // the chat a run is on now
+    outcome: null,        // footer { text, tone, flair, sr } of a This chat run that finished while another chat was open
     batchRows: new Map(), // key → row
     selected: new Set(),  // row keys
+    runCounted: new Set(), // chat ids whose count a finished run wrote (the purge itself, not a Count)
+    leftSince: new Set(),  // chats left since the route was last read (the panel rests while minimised)
     guildsLoaded: false,
     dmsLoaded: false,
     guildsLoading: false,
@@ -241,7 +340,19 @@
   };
 
   let root = null;  // shadow root
-  const $ = (sel) => root.querySelector(sel);
+  // Elements the panel builds once are looked up once: a tick on a big account renders the hero and
+  // the footer, and each lookup was a walk of thousands of rows. A cached element is checked to still
+  // be in the page, or found afresh. Selectors that name the first of many ('.guild') never cache.
+  const STABLE = /^(?:\[data-(?:role|act)="[\w-]+"\]|\.(?:panel|hero|gauge|dial|g-track|g-ok|g-head|g-fail|orb|orb-fill|modal-layer|modal|tabs|foot|term|hold-fill|live-dot))$/;
+  const found = new Map();
+  const $ = (sel) => {
+    if (!STABLE.test(sel)) return root.querySelector(sel);
+    const kept = found.get(sel);
+    if (kept && kept.isConnected && kept.getRootNode() === root) return kept;
+    const el = root.querySelector(sel);
+    if (el) found.set(sel, el); else found.delete(sel);
+    return el;
+  };
   const $$ = (sel) => Array.from(root.querySelectorAll(sel));
 
   // ── Icons (inline SVG, stroke = currentColor) ───────────
@@ -265,7 +376,7 @@
     crown: 'M3.2 8.2l4.6 3.9L12 5l4.2 7.1 4.6-3.9-1.9 10.4H5.1z',
     drop: 'M12 3.2c3 4.4 6.2 7.5 6.2 11a6.2 6.2 0 0 1-12.4 0c0-3.5 3.2-6.6 6.2-11z',
     megaphone: 'M3 11l18-5v12L3 14zM11.6 16.8a3 3 0 1 1-5.8-1.6',
-    share: 'M12 15V3M7.5 7.5L12 3l4.5 4.5M5 12v7h14v-7',
+    share: 'M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1',
     forum: 'M4 5h16v10H9l-5 4z',
     group: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
     dagger: 'M12 1.8l2.1 3.4v9.4H9.9V5.2zM6.8 14.6h10.4v2.2H6.8zM10.9 16.8h2.2v3.4h-2.2zM12 20a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z',
@@ -291,6 +402,7 @@
   G.len = G.c * G.sweep;
   const ARC = { cx: G.cx, cy: G.cy, r: G.r, transform: 'rotate(135 100 100)', fill: 'none' };
   const ROSE_STROKE = 'url(#dp-g-rose) #ff7aa9';
+  const ORB_C = 2 * Math.PI * 22; // the orb's ring, r 22 in a 48 box
 
   function buildGauge() {
     return h('div', { class: 'gauge', 'aria-hidden': 'true' },
@@ -307,10 +419,12 @@
         svg('g', { class: 'g-glow' },
           svg('circle', { ...ARC, class: 'g-ok', stroke: ROSE_STROKE }),
           svg('circle', { ...ARC, class: 'g-head' })),
-        // The sweep for work with no end in sight yet. It runs along the arc only, so it never
-        // crosses the "3 of 31+" under the ring, and sits under the failure notches.
-        svg('path', { class: 'g-sweep', d: 'M40.6 159.4 A84 84 0 1 1 159.4 159.4', pathLength: '100', fill: 'none', stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': '16 116' }),
         svg('circle', { ...ARC, class: 'g-fail' })),
+      // The sweep for work with no end in sight yet: a 40° dash that turns 230° on the compositor, so
+      // it starts at the arc's left end and stops at its right end, never crossing the "3 of 31+" under
+      // the ring. It sits under the track and the failure notches (styles: .sweep).
+      svg('svg', { class: 'sweep', viewBox: '0 0 200 200', 'aria-hidden': 'true' },
+        svg('circle', { ...ARC, pathLength: '360', stroke: ROSE_STROKE, 'stroke-linecap': 'round', 'stroke-dasharray': '40 320' })),
       h('div', { class: 'blood' }),
       h('div', { class: 'sticker', 'data-role': 'sticker', hidden: true }),
       h('div', { class: 'gauge-pct', 'data-role': 'pct' }));
@@ -353,14 +467,17 @@
   // The sweep moves only while work is really happening: a run with no known end (spinning), a
   // count (scanning) or the run's last look once every counted message is handled (verifying).
   function drawRing({ total, done: doneRaw, fails, spinning = false, scanning = false, verifying: checking = false }) {
-    const key = `${total}|${doneRaw}|${fails.length}|${spinning}|${scanning}|${checking}`;
+    // A strip's 44 px ring is too small for notches (their gaps fall under a pixel): it draws an arc.
+    const layer = $('[data-role="layer"]');
+    const small = layer.dataset.tab === 'batch' || layer.dataset.fit === 'strip';
+    const key = `${total}|${doneRaw}|${fails.length}|${spinning}|${scanning}|${checking}|${small}`;
     if (key === ring.drawn) return;
     ring.drawn = key;
     const dial = $('.dial');
     dial.classList.toggle('is-spinning', spinning);
     dial.classList.toggle('is-scanning', scanning);
     dial.classList.toggle('is-verifying', checking);
-    const beads = total > 0 && total <= G.maxBeads;
+    const beads = !small && total > 0 && total <= G.maxBeads;
     dial.classList.toggle('is-beaded', beads);
     const step = total ? G.len / total : G.len;
     const done = Math.min(doneRaw, total || 0);
@@ -457,12 +574,12 @@
         h('button', { class: 'avatar', 'data-act': 'poke', 'aria-label': 'Poke Dopa', title: 'boop~' },
           h('img', { src: EMOTE_IMG, alt: '', draggable: 'false' })),
         h('div', { class: 'titles' },
-          h('div', { class: 'title' }, h('span', { text: "Dopa's Purifier" }), h('span', { class: 'ver', text: `v${shortVersion}` })),
+          h('div', { class: 'title', title: `Dopa's Purifier v${VERSION}` }, h('span', { text: "Dopa's Purifier" })),
           h('div', { class: 'mood', 'data-role': 'mood', text: 'awaiting orders, princess~' })),
         h('div', { class: 'head-tools' },
-          h('button', { class: 'icon-btn', 'data-act': 'share', 'aria-label': 'Share with a friend', title: 'Share with a friend ♡' }, icon('share')),
+          h('button', { class: 'icon-btn', 'data-act': 'share', 'aria-label': 'Copy the install link', title: 'Copy the install link for a friend ♡' }, icon('share')),
           h('button', { class: 'icon-btn', 'data-act': 'mute', 'aria-label': 'Mute sound', title: 'Sound' }, icon('sound')),
-          h('button', { class: 'icon-btn', 'data-act': 'minimize', 'aria-label': 'Minimise', title: 'Minimise' }, icon('minimize')))),
+          h('button', { class: 'icon-btn', 'data-act': 'minimize', title: 'Minimise' }, icon('minimize')))),
       h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'What to purify' },
         h('span', { class: 'tab-pill', 'aria-hidden': 'true' }),
         h('button', { class: 'tab', role: 'tab', 'data-tab': 'current', text: 'This chat' }),
@@ -471,27 +588,27 @@
       h('div', { class: 'welcome', 'data-role': 'welcome', hidden: true, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dp-welcome-title' },
         h('div', { class: 'welcome-card' },
           h('div', { class: 'welcome-emote' }, h('img', { src: EMOTE_IMG, alt: '' })),
-          h('div', { class: 'welcome-title', id: 'dp-welcome-title', text: 'Hi princess~ ♡' }),
-          h('div', { class: 'welcome-lead', text: 'Two steps and your messages are gone:' }),
+          h('div', { class: 'welcome-title', id: 'dp-welcome-title' }, flaired('Hi princess~', '♡')),
+          h('div', { class: 'welcome-lead', text: 'Clear your side of any chat in two steps:' }),
           h('ol', { class: 'welcome-steps' },
             h('li', {}, h('span', {}, h('b', { text: 'Open a chat' }), ' — any DM, group or server channel')),
             h('li', {}, h('span', {}, h('b', { text: 'Purify' }), ', then hold the red button till it fills'))),
           h('div', { class: 'welcome-note' },
             icon('shield'),
-            h('span', { text: 'Only your own messages, nothing leaves Discord, and anyone you shield is immune.' })),
+            h('span', { text: 'Only your own messages, and nothing leaves Discord. Tap the shield by a name and that DM is immune~' })),
           h('div', { class: 'welcome-actions' },
-            h('button', { class: 'btn btn-purge', 'data-act': 'welcome-ok', text: 'Got it ♡' }),
-            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Purify many chats' })))),
+            h('button', { class: 'btn btn-purge', 'data-act': 'welcome-ok' }, h('span', {}, flaired('Got it', '♡'))),
+            h('button', { class: 'btn btn-quiet', 'data-act': 'welcome-batch', text: 'Pick many chats' })))),
       h('div', { class: 'body', 'data-role': 'body' },
         buildHero(),
         buildCurrentView(),
         buildBatchView()),
       h('footer', { class: 'foot' },
         h('div', { class: 'actions', 'data-role': 'idle-actions' },
-          h('button', { class: 'btn btn-quiet', 'data-act': 'scan' }, icon('scan'), h('span', { 'data-role': 'scan-label', text: 'Scan' })),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'scan' }, icon('scan'), h('span', { 'data-role': 'scan-label', text: 'Count' })),
           h('button', { class: 'btn btn-purge', 'data-act': 'purify' }, h('span', { 'data-role': 'purify-label', text: 'Purify' }), h('span', { class: 'btn-count', 'data-role': 'purify-count', hidden: true }),
             h('span', { class: 'sr', 'data-role': 'purify-unit' })),
-          h('button', { class: 'btn btn-quiet', 'data-act': 'go-batch', hidden: true }, icon('sparkle'), h('span', { text: 'Purify many chats' }))),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'go-batch', hidden: true }, icon('sparkle'), h('span', { text: 'Pick many chats' }))),
         h('div', { class: 'actions', 'data-role': 'run-actions', hidden: true },
           h('button', { class: 'btn btn-quiet', 'data-act': 'pause' }, icon('pause'), h('span', { text: 'Pause' })),
           h('button', { class: 'btn btn-purge', 'data-act': 'resume', hidden: true }, icon('play'), h('span', { text: 'Resume' })),
@@ -500,16 +617,15 @@
           h('div', { class: 'status', 'data-role': 'status', role: 'status', 'aria-live': 'polite', dataset: { tone: 'info' } },
             h('span', { class: 'status-dot', 'aria-hidden': 'true' }),
             h('span', { 'data-role': 'status-text' }, flaired('Ready to purify~', '✨'))),
-          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' }))),
-        h('div', { class: 'sr', 'data-role': 'milestone', 'aria-live': 'polite' })));
+          h('button', { class: 'logs-btn', 'data-act': 'logs', 'aria-pressed': 'false' }, icon('heart'), h('span', { 'data-role': 'logs-label', text: 'Logs' })))));
   }
 
   function buildTerminal() {
     return h('section', { class: 'term', 'aria-label': 'Purifier log', hidden: true },
       h('header', { class: 'term-head', 'data-role': 'term-drag' },
         h('span', { class: 'term-title' }, 'DOPA-OS ♡ ', h('span', { class: 'term-title-mid', text: 'PURIFIER ' }), 'MAINFRAME'),
-        h('button', { class: 'icon-btn', 'data-act': 'copy-log', 'aria-label': 'Copy log', title: 'Copy log' }, icon('copy')),
-        h('button', { class: 'icon-btn', 'data-act': 'close-log', 'aria-label': 'Close log', title: 'Close' }, icon('close'))),
+        h('button', { class: 'icon-btn', 'data-act': 'copy-log', title: 'Copy log' }, icon('copy')),
+        h('button', { class: 'icon-btn', 'data-act': 'close-log', title: 'Close log' }, icon('close'))),
       h('div', { class: 'term-screen' }, h('div', { class: 'term-body', 'data-role': 'term-body', role: 'log', 'aria-live': 'off' })),
       h('footer', { class: 'term-foot', 'aria-hidden': 'true' },
         h('span', {}, 'PURGED ', h('b', { 'data-role': 'tf-purged', text: '000' })),
@@ -527,7 +643,7 @@
         h('div', { class: 'modal-title', id: 'dp-modal-title', 'data-role': 'modal-title' }),
         h('div', { class: 'modal-text', 'data-role': 'modal-text' }),
         h('div', { class: 'modal-buttons' },
-          h('button', { class: 'btn btn-quiet', 'data-act': 'cancel', text: 'Nevermind~' }),
+          h('button', { class: 'btn btn-quiet', 'data-act': 'cancel', text: 'Never mind~' }),
           h('button', { class: 'btn btn-purge btn-hold', 'data-act': 'confirm', 'aria-describedby': 'dp-modal-hint' },
             h('span', { class: 'hold-fill', 'aria-hidden': 'true' }),
             h('span', { class: 'hold-label', 'data-role': 'confirm-label' }))),
@@ -538,7 +654,8 @@
   }
 
   function mount() {
-    const host = h('div', { id: 'dopa-purifier-host' });
+    // The panel speaks English, so screen readers use an English voice inside any Discord.
+    const host = h('div', { id: 'dopa-purifier-host', lang: 'en' });
     host.style.cssText = 'position:fixed;inset:0 auto auto 0;width:0;height:0;z-index:2147483600;';
     root = host.attachShadow({ mode: 'open' });
     root.append(
@@ -546,12 +663,15 @@
       h('div', { class: 'layer', 'data-role': 'layer' },
         h('div', { class: 'shell', 'data-role': 'shell' }, h('div', { class: 'wobble', 'data-role': 'wobble' }, buildPanel())),
         buildTerminal(),
+        // The orb draws the hero's 270° arc, open at the bottom.
         h('button', { class: 'orb', 'data-act': 'restore', 'aria-label': "Open Dopa's Purifier", hidden: true },
           svg('svg', { class: 'orb-ring', viewBox: '0 0 48 48', 'aria-hidden': 'true' },
-            svg('circle', { class: 'orb-track', cx: '24', cy: '24', r: '22' }),
-            svg('circle', { class: 'orb-fill', cx: '24', cy: '24', r: '22', 'stroke-dasharray': `0 ${2 * Math.PI * 22}` })),
+            svg('circle', { class: 'orb-track', cx: '24', cy: '24', r: '22', transform: 'rotate(135 24 24)', 'stroke-dasharray': `${(ORB_C * G.sweep).toFixed(2)} ${ORB_C.toFixed(2)}` }),
+            svg('circle', { class: 'orb-fill', cx: '24', cy: '24', r: '22', transform: 'rotate(135 24 24)', 'stroke-dasharray': `0 ${ORB_C.toFixed(2)}` })),
           h('img', { src: EMOTE_IMG, alt: '', draggable: 'false' }),
           h('span', { class: 'orb-badge', 'data-role': 'orb-badge', hidden: true })),
+        // Outside the shell, so milestones and the ending are heard while minimised too.
+        h('div', { class: 'sr', 'data-role': 'milestone', 'aria-live': 'polite', 'aria-atomic': 'true' }),
         buildModal(),
         h('div', { class: 'fx', 'aria-hidden': 'true' })));
     // Keep Discord's global hotkeys (type-to-focus-composer, Esc, etc.) out of our UI.
@@ -559,38 +679,69 @@
       host.addEventListener(type, (e) => e.stopPropagation());
     }
     document.body.appendChild(host);
+    watchHost();
+    // A two-line status, a two-line name or lists loading change the panel's height: the open log follows.
+    const fit = new ResizeObserver(() => placeTerminal());
+    fit.observe($('.panel'));
+    fit.observe($('.foot'));
+    disposers.push(() => fit.disconnect());
     return host;
+  }
+
+  // Light Discord gets a lighter shadow under the panel. Discord marks its theme on <html>; where it
+  // doesn't, a light page behind us decides.
+  function watchHost() {
+    const read = () => {
+      const html = document.documentElement.classList;
+      let light = html.contains('theme-light');
+      if (!light && !html.contains('theme-dark')) {
+        const [r, g, b, a = 1] = (getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g) || []).map(Number);
+        light = a > 0.5 && (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5;
+      }
+      $('[data-role="layer"]').dataset.host = light ? 'light' : 'dark';
+    };
+    read();
+    const obs = new MutationObserver(read);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    disposers.push(() => obs.disconnect());
   }
 
   // ── Status, meter, gauge ────────────────────────────────
 
   // Per-kill updates are quiet (aria-live off) so screen readers aren't read every deletion. The
-  // flair is the line's one emoji from the palette above. A new line ends any wait's countdown.
+  // flair is the line's one emoji from the palette above. sr is said before the line and never
+  // shown, so a number the line no longer repeats is still heard. A new line ends any wait's countdown.
   let waitTick = 0;
-  function setStatus(text, tone = 'info', { quiet = false, flair = '' } = {}) {
+  function setStatus(text, tone = 'info', { quiet = false, flair = '', sr = '' } = {}) {
     clearInterval(waitTick);
     waitTick = 0;
-    paintStatus(text, tone, { quiet, flair });
+    paintStatus(text, tone, { quiet, flair, sr });
   }
 
-  function paintStatus(text, tone, { quiet, flair }) {
+  function paintStatus(text, tone, { quiet, flair, sr = '' }) {
     const el = $('[data-role="status"]');
     el.setAttribute('aria-live', quiet ? 'off' : 'polite');
+    const said = el.querySelector(':scope > .sr');
+    if (said) said.remove();
+    if (sr) el.prepend(h('span', { class: 'sr', text: sr }));
     $('[data-role="status-text"]').replaceChildren(...flaired(text, flair));
     el.title = text; // past two lines the line is clamped; hover shows all of it
     el.dataset.tone = tone;
   }
 
+  // A trailing heart is flair: it shows, but isn't read aloud.
   function setMood(text) {
-    $('[data-role="mood"]').textContent = text;
+    $('[data-role="mood"]').replaceChildren(...(text.endsWith(' ♡') ? flaired(text.slice(0, -2), '♡') : [text]));
   }
 
   let shownCount = null;
   let shownEta = null;  // the run's ETA as shown (see renderHero)
   let beaten = null;    // the verdict whose finish has played its beats
   let lastSnapshot = null;
-  // { key, text, flair?, tone, sticker?, error?, stopped?, problems?, shielded?, failed? }: the last
-  // finished run, shown until the context changes.
+  // The last finished run, shown until the context changes: { key, text (the readout), strip? (the
+  // strip's one line, else text), flair?, tone, sticker?, confetti? (the finish may celebrate), mood?,
+  // footer: { text, tone, flair?, sr? }, error? (plainError's code), stopped?, problems? (chats that
+  // need another look), locked? (chats skipped because you can't read them), shielded?, failed? }.
   let lastEnd = null;
 
   function renderProgress(p) {
@@ -599,6 +750,9 @@
   }
 
   const contextKey = () => (state.tab === 'current' ? `c:${state.target ? state.target.channelId : ''}` : 'batch');
+
+  // Arriving on an immune chat, the footer says what to do instead; the name is heard, not repeated.
+  const immuneStatus = (t) => ['Open another chat to purify~', 'immune', { sr: `${iso(t.name)} is immune. ` }];
 
   // A shield the person set, rather than one of the names that are immune from the start.
   const shieldedByYou = (t) => !!t.partner && protection.ids.has(t.partner.id);
@@ -616,35 +770,43 @@
         case 'lookup-error': return { label: "can't read this chat", labelTone: 'error', line: [state.targetPlain.line], tone: 'error' };
         case 'immune': return {
           icon: 'shield', label: 'immune', labelTone: 'immune', tone: 'immune',
-          line: shieldedByYou(t) ? [...flaired('Immune', '♡'), ' tap the shield to undo'] : [...flaired('Immune from the start', '♡'), ' nothing here gets purged'],
+          line: shieldedByYou(t) ? [...flaired('You shielded this DM', '♡'), ' tap the shield to undo'] : flaired('Safe from the start~ Bardo & Dopa made the purifier', '♡'),
         };
         case 'counting': return { icon: 'scan', label: 'counting…', line: [], tone: 'quiet' };
-        case 'blocked': return { label: 'no access', labelTone: 'error', line: [state.scanError.line], tone: 'error' };
+        // No access is a calm fact: the ring's label says it in crimson, the readout in plain ink.
+        case 'blocked': return { label: 'no access', labelTone: 'error', line: [state.scanError.line], tone: 'quiet' };
         case 'scan-error': return { icon: 'scan', label: 'not counted yet', line: [state.scanError.line], tone: 'error' };
-        case 'unscanned': return { icon: 'scan', label: 'not counted yet', line: flaired('Purify counts them first', '♡'), tone: 'quiet' };
-        case 'indexing': return { icon: 'scan', label: 'still indexing', line: ['Discord is still sorting this chat~ purify anyway, or scan again soon'], tone: 'quiet' };
-        case 'partial': return { count: n, total: n, label: 'found so far', line: ['Discord is still indexing older ones~'], tone: 'ready' };
+        case 'unscanned': return { icon: 'scan', label: 'not counted yet', line: flaired('Purify asks before anything goes', '♡'), tone: 'quiet' };
+        case 'indexing': return { icon: 'scan', label: 'still searching', line: ['Discord is still searching this chat~ purify now, or count again in a minute'], tone: 'quiet' };
+        case 'partial': return { count: n, total: n, label: 'found so far', line: ['Discord may find older ones later~'], tone: 'ready' };
         case 'clear': return { count: 0, label: 'messages found', line: flaired('All clear~ nothing of yours here', '✨'), tone: 'clear' };
-        default: return { count: n, total: n, label: 'ready for purge', labelTone: 'ready', line: [`about ${formatDuration(estimateSeconds(n))} to purge~`], tone: 'ready' };
+        // The ring keeps its battle cry; every line says Purify, the action.
+        default: return { count: n, total: n, label: 'ready for purge', labelTone: 'ready', line: [`about ${formatDuration(estimateSeconds(n))} to purify~`], tone: 'ready' };
       }
     }
-    if (name === 'none') return { label: 'nothing picked yet', line: [], sub: ['tick any DMs or channels below~'], tone: 'quiet' };
+    if (name === 'none') return { icon: 'sparkle', label: 'nothing picked yet', line: [], sub: ['pick any DMs or channels below~'], tone: 'quiet' };
     const rows = selectedRows();
     const scanned = rows.filter((r) => r.channelId && counts.has(r.channelId));
     const total = scanned.reduce((sum, r) => sum + counts.get(r.channelId), 0);
     // A closed DM (a friend with no DM open) can't be counted without opening one; the run counts it.
     const closed = rows.filter((r) => r.needsDM && r.status !== 'error').length;
-    const toScan = rows.length - scanned.length - closed - rows.filter((r) => r.status === 'error').length;
-    const chats = plural(rows.length, 'chat');
+    const toCount = rows.length - scanned.length - closed - rows.filter((r) => r.status === 'error').length;
+    // The strip counts the chats Purify would really go through, as the dialog and the run do; the
+    // ones it leaves out (all clear, no access) are named after them.
+    const blocked = rows.filter(accessError).length;
+    const clear = rows.filter(emptyChat).length;
+    const chats = plural(purifyTargets(rows).length, 'chat');
     // The numeral already says how many were found, so the line says what is still unknown.
-    const parts = [[chats, toScan ? `${toScan.toLocaleString()} to scan` : '', closed ? plural(closed, 'closed DM') : ''].filter(Boolean).join(' · ')];
+    const parts = [chats, toCount && `${fmt(toCount)} to count`, closed && plural(closed, 'closed DM'), clear && `${fmt(clear)} all clear`, blocked && `${fmt(blocked)} skipped`].filter(Boolean).join(SEP);
     const shared = { line: [], tone: total ? 'ready' : 'quiet' };
-    if (name === 'unscanned') return { ...shared, label: 'not counted yet', sub: parts };
-    if (name === 'partial') return { ...shared, count: total, total, label: 'found so far', sub: parts };
-    if (name === 'clear') return { ...shared, count: 0, label: 'messages found', sub: closed ? parts : flaired(`${chats} · all clear`, '✨') };
+    if (name === 'unscanned') return { ...shared, icon: 'scan', label: 'not counted yet', sub: [parts] };
+    if (name === 'partial') return { ...shared, count: total, total, label: 'found so far', sub: [parts] };
+    if (name === 'clear') return { ...shared, count: 0, label: 'messages found', sub: closed || blocked ? [parts] : flaired(`${plural(rows.length, 'chat')}${SEP}all clear`, '✨') };
+    const about = `about ${formatDuration(estimateSeconds(total))}`;
     return {
       ...shared, count: total, total, label: 'ready for purge', labelTone: 'ready',
-      sub: closed ? parts : [`${chats} · about ${formatDuration(estimateSeconds(total))} to purge~`],
+      // A closed DM is counted as it goes, so the estimate is a floor.
+      sub: [closed ? `${parts}${SEP}${about}+` : `${parts}${SEP}${about} to purify~`],
     };
   }
 
@@ -679,13 +841,13 @@
   // What sits in the middle of the ring (hero[data-face]): the count, an icon, or only the label.
   function heroFace(name) {
     if (name === 'run' || name === 'done') return 'count';
-    if (state.tab === 'batch') return name === 'none' || name === 'unscanned' ? 'label' : 'count';
+    if (state.tab === 'batch') return name === 'none' || name === 'unscanned' ? 'icon' : 'count';
     return ['ready', 'partial', 'clear'].includes(name) ? 'count' : ['lookup', 'lookup-error', 'blocked'].includes(name) ? 'label' : 'icon';
   }
 
   // How a run that ended on an error sounds, by cause (lastEnd.error is plainError's code when the
   // end handler knows it, else true).
-  const ERROR_MOODS = { captcha: 'Discord wants a captcha~', network: 'lost Discord for a sec~', switched: 'stopped to be safe~' };
+  const ERROR_MOODS = { captcha: 'taking a break, princess~', network: 'lost Discord for a sec~', switched: 'stopped to be safe~' };
 
   function renderHero() {
     const p = lastSnapshot || progressSnapshot();
@@ -695,11 +857,13 @@
     layer.dataset.hero = mode;
     const hero = $('.hero');
     const name = heroState(mode);
+    const prevState = hero.dataset.state;
     hero.dataset.state = name;
     hero.dataset.face = heroFace(name);
     const idle = mode === 'preview' ? previewFor(name) : null;
-    // The finish plays its beats once, when its verdict first shows.
-    const finishing = mode === 'done' && lastEnd !== beaten;
+    // The finish plays its beats once, when they can be seen: a finish that lands while the tab is
+    // hidden, the panel minimised or mid-unfold is owed, and plays when you look.
+    const finishing = mode === 'done' && lastEnd !== beaten && fxVisible() && !fold;
     if (finishing) beaten = lastEnd;
     // While some chats are still uncounted the total is a floor, not a promise.
     const known = p.total > 0 && !p.partial;
@@ -718,12 +882,12 @@
     const countEl = $('[data-role="count"]');
     if (shown !== shownCount) {
       shownCount = shown;
-      countEl.textContent = shown.toLocaleString();
+      countEl.textContent = fmt(shown);
     }
     countEl.classList.toggle('is-found', !!idle && shown > 0);
     countEl.classList.toggle('is-zero', shown === 0);
     // Sized from the larger of the count and the run's total, so it is set once and never jumps mid-run.
-    countEl.dataset.len = String(Math.max(shown, idle ? 0 : p.total).toLocaleString().length);
+    countEl.dataset.len = String(fmt(Math.max(shown, idle ? 0 : p.total)).length);
 
     const label = $('[data-role="count-label"]');
     const labelText = idle ? idle.label : 'messages purged';
@@ -742,8 +906,8 @@
     const pct = $('[data-role="pct"]');
     const went = mode === 'done' && p.failed && !lastEnd.stopped && !lastEnd.error ? p.deleted : processedNow;
     pct.textContent = idle ? ''
-      : known ? `${Math.min(went, p.total).toLocaleString()} of ${p.total.toLocaleString()}`
-        : p.total ? `${went.toLocaleString()} of ${p.total.toLocaleString()}+` : '';
+      : known ? `${fmt(Math.min(went, p.total))} of ${fmt(p.total)}`
+        : p.total ? `${fmt(went)} of ${fmt(p.total)}+` : '';
     pct.classList.toggle('is-full', mode === 'done' && !p.failed && processedNow >= ringTotal && ringTotal > 0);
 
     // The ETA counts down freely and goes up only for a real slow-down (over 15 %), never a jitter.
@@ -759,7 +923,7 @@
     if (mode === 'run') {
       $('[data-role="stat-eta"] b').textContent = left || 'counting as we go~';
       const fail = $('[data-role="stat-fail"]');
-      fail.querySelector('b').textContent = p.failed.toLocaleString();
+      fail.querySelector('b').textContent = fmt(p.failed);
       fail.classList.toggle('has-fails', p.failed > 0);
       readout.dataset.tone = run.paused ? 'paused' : 'live';
     } else if (mode === 'done') {
@@ -769,46 +933,66 @@
       line.replaceChildren(...idle.line);
       readout.dataset.tone = idle.tone;
     }
-    // The verdict settles in just after the count's last pop.
+    // The verdict settles in just after the count's last pop: the readout's line, or a strip's sub-line,
+    // whichever is drawn. Confetti is This chat's, and only lands on the chat it belongs to.
     if (finishing) {
-      line.animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }],
+      const verdict = [line, $('[data-role="hero-sub"]')].find((el) => el.getClientRects().length) || line;
+      verdict.animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }],
         { duration: reducedMotion() ? 200 : 220, delay: 60, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+      if (lastEnd.confetti && state.tab === 'current') celebrate();
+    }
+    // A count lands gently: the number and the arc fade up as it arrives (opacity only, so reduced
+    // motion keeps it).
+    if (prevState === 'counting' && ['ready', 'partial', 'clear'].includes(name)) {
+      $('.hero-core').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: 'cubic-bezier(.22,1,.36,1)' });
+      $('.g-track').animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 320, easing: 'cubic-bezier(.22,1,.36,1)' });
     }
 
     // A strip has one line under the count: the run's facts, the verdict, or what the ring would say.
     const sub = $('[data-role="hero-sub"]');
     if (mode === 'run') {
       sub.replaceChildren(...(p.total ? [
-        `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}${known ? '' : '+'}`,
-        left && ` · ${left}`,
-        p.failed > 0 && h('span', { class: 'sub-fail', text: ` · ${p.failed.toLocaleString()} failed` }),
+        `${fmt(processedNow)} of ${fmt(p.total)}${known ? '' : '+'}`,
+        left && `${SEP}${left}`,
+        p.failed > 0 && h('span', { class: 'sub-fail', text: `${SEP}${fmt(p.failed)} failed` }),
       ].filter(Boolean) : ['counting as we go~']));
-    } else if (mode === 'done') sub.replaceChildren(...flaired(lastEnd.text, lastEnd.flair));
+    } else if (mode === 'done') sub.replaceChildren(...flaired(lastEnd.strip || lastEnd.text, lastEnd.flair));
     else sub.replaceChildren(...(idle.sub || idle.line.map((x) => (x instanceof Node ? x.cloneNode(true) : x))));
     sub.title = sub.textContent; // the strip truncates; hover shows all of it
 
-    // Minimised through the finish line: the orb keeps the full ring and count until reopened.
+    // This chat's strip names the chat Purify acts on first, so a short window needs no scroll to see it.
+    if (mode === 'preview' && state.tab === 'current' && state.target && !['lookup', 'lookup-error'].includes(name)) {
+      const t = state.target;
+      const chat = [iso(t.guildId ? t.name.replace(/^#/, '') : t.name), t.guildId && t.context ? `${SEP}${t.context}` : ''].join('');
+      sub.prepend(sub.textContent ? `${chat}${SEP}` : chat);
+      sub.title = sub.textContent;
+    }
+
+    // Minimised through the finish line: the orb keeps the arc and count until reopened. Its ring is
+    // the hero's 270° arc, so it never fills the open bottom.
     const orb = $('.orb');
-    const orbC = 2 * Math.PI * 22;
     const orbFrac = run.active ? (known ? Math.min(1, processedNow / p.total) : 0)
       : state.orbDone ? (state.orbDone.clean ? 1 : (p.total ? Math.min(1, processedNow / p.total) : 0)) : 0;
-    $('.orb-fill').setAttribute('stroke-dasharray', `${(orbC * orbFrac).toFixed(2)} ${orbC.toFixed(2)}`);
+    $('.orb-fill').setAttribute('stroke-dasharray', `${(ORB_C * G.sweep * orbFrac).toFixed(2)} ${ORB_C.toFixed(2)}`);
     $('.orb-fill').setAttribute('visibility', orbFrac > 0 ? 'visible' : 'hidden');
     const badge = $('[data-role="orb-badge"]');
-    badge.textContent = p.deleted.toLocaleString();
+    badge.textContent = fmt(p.deleted);
     badge.hidden = !(run.active || state.orbDone) || !p.deleted;
     orb.dataset.live = run.active ? 'true' : state.orbDone ? (state.orbDone.clean ? 'done' : 'trouble') : 'false';
-    // Hovering the orb says how it's going, so a minimised purge needs no reopening to check on.
-    const progress = p.total ? `${processedNow.toLocaleString()} of ${p.total.toLocaleString()}` : `${p.deleted.toLocaleString()} so far`;
-    const orbSays = run.active ? (run.paused ? 'Paused~ click to open' : `Purging~ ${progress}${p.total && !known ? '+' : ''}`)
-      : state.orbDone ? (state.orbDone.clean ? `All clean~ ${p.deleted.toLocaleString()} purged` : 'Done~ something needs a look') : "Open Dopa's Purifier";
-    orb.title = orbSays;
-    orb.setAttribute('aria-label', run.active && !run.paused ? `Open Dopa's Purifier — purging, ${progress}` : orbSays);
+    // Hovering the orb says how it's going, so a minimised purge needs no reopening to check on; its
+    // name says what it opens, then the same.
+    const progress = p.total ? `${fmt(processedNow)} of ${fmt(p.total)}${known ? '' : '+'}` : `${fmt(p.deleted)} so far`;
+    const ending = !run.active && state.orbDone ? endingWords(p) : null;
+    orb.title = run.active ? (run.paused ? `Paused~ ${progress}` : `Purifying~ ${progress}${shownEta != null ? `${SEP}about ${formatDuration(shownEta)} left` : ''}`)
+      : ending ? ending.title : "Open Dopa's Purifier";
+    orb.setAttribute('aria-label', run.active ? `Open Dopa's Purifier — ${run.paused ? 'paused' : 'purifying'}, ${progress}`
+      : ending ? `Open Dopa's Purifier — ${ending.said}` : "Open Dopa's Purifier");
 
     let mood = 'awaiting orders, princess~';
     if (mode === 'run') mood = run.stopping ? 'wrapping up~' : run.paused ? 'paused~ take your time' : "purging… don't look~";
     else if (mode === 'done') {
-      mood = lastEnd.error ? ERROR_MOODS[lastEnd.error] || 'oh no… something broke' : lastEnd.stopped ? 'stopped~ no rush ♡' : lastEnd.problems ? 'some chats fought back~'
+      mood = lastEnd.mood ? lastEnd.mood : lastEnd.error ? ERROR_MOODS[lastEnd.error] || 'oh no… something broke' : lastEnd.stopped ? 'stopped~ no rush ♡'
+        : lastEnd.problems ? (lastEnd.problems === 1 ? 'a chat fought back~' : 'some chats fought back~')
         : lastEnd.shielded ? 'a shield went up~ ♡' : lastEnd.failed ? 'mostly clean, princess ♡' : 'all clean, princess ♡';
     } else if (state.tab === 'batch') mood = "who's first, princess~?";
     else if (state.target && state.target.protected) mood = "this one's immune~";
@@ -820,14 +1004,15 @@
     if (stickerText !== sticker.textContent || sticker.hidden === !!stickerText) {
       sticker.textContent = stickerText;
       sticker.hidden = !stickerText;
-      if (stickerText && finishing && reducedMotion()) sticker.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, delay: 200, fill: 'backwards' });
-      else if (stickerText && finishing) {
-        sticker.animate([
-          { transform: 'rotate(4deg) scale(1.6)', opacity: 0 },
-          { transform: 'rotate(10deg) scale(.94)', opacity: 1, offset: 0.6 },
-          { transform: 'rotate(9deg) scale(1)' },
-        ], { duration: 340, delay: 380, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
-      }
+    }
+    // Stamped with the finish's beats, even when they were owed (the text was written unseen).
+    if (stickerText && finishing && reducedMotion()) sticker.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, delay: 200, fill: 'backwards' });
+    else if (stickerText && finishing) {
+      sticker.animate([
+        { transform: 'rotate(4deg) scale(1.6)', opacity: 0 },
+        { transform: 'rotate(10deg) scale(.94)', opacity: 1, offset: 0.6 },
+        { transform: 'rotate(9deg) scale(1)' },
+      ], { duration: 340, delay: 380, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
     }
 
     $('[data-role="tf-purged"]').textContent = String(p.deleted).padStart(3, '0');
@@ -845,41 +1030,119 @@
 
   // ── This chat ───────────────────────────────────────────
 
-  // A real lookup failure (not just "no chat open"): Scan becomes Try again.
+  // A real lookup failure (not just "no chat open"): Count becomes Try again.
   const describeFailed = () => !!state.targetError && state.targetError !== 'none';
 
-  // The last count of this chat failed: Scan becomes Try again, one request the person asks for.
+  // The last count of this chat failed: Count becomes Try again, one request the person asks for.
   const scanFailed = (t) => !!t && !!state.scanError && state.scanError.channelId === t.channelId;
 
   // Discord won't let you read or delete in this chat: a purge could only fail, so Purify waits
   // until a Try again reads it.
   const blockedHere = (t) => (scanFailed(t) && state.scanError.blocking) || (!!t && describeFailed() && !!state.targetPlain && state.targetPlain.blocking);
 
+  // Lines the footer says once, when it next comes to rest: why a dialog went away, or what a run cut
+  // short last time left behind. resume: { mode, chatId, left, told }, from the journal.
+  // news: someone updating sees what changed, once.
+  const notes = { moved: false, resume: null, news: false };
+
+  // A footer as setStatus's arguments.
+  const footerArgs = (f) => [f.text, f.tone, { flair: f.flair || '', sr: f.sr || '' }];
+
+  // What the footer says when it comes to rest: the verdict on screen's footer, a run that finished
+  // in another chat, a note waiting for this moment, else that it's ready. Returns setStatus's arguments.
+  function restingStatus() {
+    const live = routeTarget();
+    if (notes.moved) { notes.moved = false; return ['Moved chats~ nothing purged', 'calm']; }
+    if (lastEnd && lastEnd.footer && lastEnd.key === contextKey()) {
+      state.outcome = null; // its chat is on screen: the verdict says it now
+      return footerArgs(lastEnd.footer);
+    }
+    if (state.outcome) return footerArgs(state.outcome);
+    const r = notes.resume;
+    if (r && r.mode === 'batch') {
+      notes.resume = null;
+      return [`${plural(r.left, 'chat')} left from last time~ Purify selected finishes them`, 'info'];
+    }
+    if (r && live && live.channelId === r.chatId) {
+      notes.resume = null;
+      return ['Cut short last time~ Purify picks up the rest', 'info'];
+    }
+    if (r && !r.told) {
+      r.told = true;
+      // The journal keeps ids only: the name comes from the lists, when they know it.
+      const row = state.batchRows.get(`c:${r.chatId}`);
+      return [`Cut short last time in ${row ? iso(row.name) : 'a chat'}~ open it and press Purify`, 'info'];
+    }
+    if (notes.news) {
+      notes.news = false;
+      prefs.seenVersion = shortVersion;
+      savePrefs('seenVersion');
+      return ['New look~ Purify counts first, then you hold to confirm', 'info', { flair: '♡' }];
+    }
+    return [live ? 'Ready to purify~' : 'Ready when you are~', 'info', { flair: '✨' }];
+  }
+
+  // A run's verdict, and the count it wrote, last for the visit they were seen on: back on that chat,
+  // Purify counts again instead of resting on an "all clean" that new messages made untrue. Counts from
+  // Count stay, so visiting a chat never clears Many chats' "all clear ✓". Returns whether any went.
+  function forgetLeftChats() {
+    let forgot = false;
+    for (const id of state.leftSince) {
+      const ended = !!lastEnd && lastEnd.key === `c:${id}`;
+      if (ended) lastEnd = null;
+      if (ended || state.runCounted.has(id)) {
+        counts.delete(id);
+        state.runCounted.delete(id);
+        forgot = true;
+      }
+    }
+    state.leftSince.clear();
+    return forgot;
+  }
+
   let describeSeq = 0;
+  let switchTimer = 0;
   async function refreshRoute({ keepScan = false, keepStatus = false } = {}) {
     const route = routeTarget();
     const key = route ? route.channelId : '';
-    if (state.route && route && state.route.channelId === key && !describeFailed()) return;
+    // Leaving a chat mid-run isn't seeing its verdict: that waits for when you come back.
+    if (state.route && state.route.channelId !== key && !run.active) state.leftSince.add(state.route.channelId);
+    const forgot = forgetLeftChats();
+    if (state.route && route && state.route.channelId === key && !describeFailed()) { if (forgot) renderCurrent(); return; }
     if (!state.route && !route && state.target === null && state.targetError === 'none') return;
     if (state.scanning && state.scanKind === 'current' && !keepScan) cancelScan();
     cancelCount();
     // The footer may still be talking about the last chat (or the failed lookup); an account
     // switch re-reads the same chat and keeps its notice.
     const freshStatus = !keepStatus && (!state.target || state.target.channelId !== key || describeFailed());
+    // From one chat to another, the card dims for a moment rather than flashing "finding this chat…",
+    // which shows only if Discord takes longer than 250 ms to say what the new chat is. With no target,
+    // Purify, Count and the card do nothing meanwhile.
+    const switching = !!state.target && !!route && state.target.channelId !== key && !run.active;
     state.route = route;
     state.target = null;
     state.targetError = route ? null : 'none';
     state.targetPlain = null;
     state.scanError = null;
     const seq = ++describeSeq;
-    renderCurrent();
-    if (!route) { if (!run.active) setStatus('Ready when you are~', 'info', { flair: '✨' }); return; }
+    const layer = $('[data-role="layer"]');
+    clearTimeout(switchTimer);
+    if (switching) {
+      layer.dataset.switching = '';
+      switchTimer = setTimeout(renderCurrent, 250);
+    } else {
+      delete layer.dataset.switching;
+      renderCurrent();
+    }
+    if (!route) { if (!run.active) setStatus(...restingStatus()); return; }
     try {
       const target = await describeRoute(route);
       if (seq !== describeSeq) return; // user moved on while we were asking
       state.target = target;
-      if (target.protected && !run.active && !keepStatus) setStatus(`${target.name} is immune~`, 'immune');
-      else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus('Ready to purify~', 'info', { flair: '✨' });
+      if (target.protected && !run.active && !keepStatus) {
+        notes.moved = false;
+        setStatus(...immuneStatus(target));
+      } else if (freshStatus && !run.active && !state.scanning && state.tab === 'current') setStatus(...restingStatus());
     } catch (err) {
       if (seq !== describeSeq) return;
       // Unread, it has no name we can trust; the id would only confuse.
@@ -889,12 +1152,20 @@
       addLog(`couldn't read this chat · ${err.message}`, 'error');
       setStatus(state.targetPlain.short, 'error');
     }
+    clearTimeout(switchTimer);
+    delete layer.dataset.switching;
     renderCurrent();
   }
 
+  // A chat's kind, the way the card's eyebrow names it.
+  const chatKind = (c) => (!c ? 'This chat' : c.guildId ? 'Server channel' : c.kind === 'group' ? 'Group DM' : 'Direct message');
+
   function renderCurrent() {
-    const runningHere = run.active && state.runMode === 'current';
-    const shown = runningHere ? state.runTargets[0] : state.target;
+    // During any run the card names the chat being purified (in Many chats, the one it's on now), and
+    // 'viewing …' names the chat on screen when that's another.
+    const runningHere = run.active;
+    const batchRun = runningHere && state.runMode === 'batch';
+    const shown = runningHere ? state.runNow || state.runTargets[0] : state.target;
     const card = $('[data-role="target"]');
     const blocked = !runningHere && blockedHere(shown);
     const checking = lastLook();
@@ -904,11 +1175,11 @@
       && !(shown && shown.protected) && state.tab === 'current';
     if (purified) card.dataset.state = 'purified';
     const eyebrow = $('[data-role="eyebrow-text"]');
-    if (runningHere) eyebrow.replaceChildren(...(run.paused ? ['Paused · resumes in place'] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), 'Purging']));
-    else if (shown && shown.protected) eyebrow.replaceChildren(icon('crown', 'ico-crown'), 'Immune');
+    const which = batchRun ? `${SEP}chat ${state.runTargets.indexOf(shown) + 1} of ${state.runTargets.length}` : '';
+    if (runningHere) eyebrow.replaceChildren(...(run.paused ? [`Paused${which}`] : checking ? ['Double-checking~'] : [icon('dagger', 'ico-dagger ico-dagger-r'), `Purifying${which}`]));
+    else if (shown && shown.protected) eyebrow.replaceChildren(icon('crown', 'ico-crown'), chatKind(shown));
     else if (purified) eyebrow.replaceChildren(icon('check'), lastEnd.failed ? 'Mostly purified' : 'Purified');
-    else if (blocked) eyebrow.replaceChildren('No access');
-    else eyebrow.replaceChildren(!shown ? 'This chat' : shown.guildId ? 'Server channel' : shown.kind === 'group' ? 'Group DM' : 'Direct message');
+    else eyebrow.replaceChildren(chatKind(shown));
     if (purified && lastEnd.failed) card.dataset.state = 'partial';
     $('[data-role="target-ico"]').replaceChildren(shown && shown.protected ? icon('shield') : !shown ? '✦' : shown.guildId ? '#' : shown.kind === 'group' ? icon('group') : '@');
     // DMs can be shielded right from the card.
@@ -920,7 +1191,10 @@
     if (shown) {
       name.textContent = shown.guildId ? shown.name.replace(/^#/, '') : shown.name;
       context.textContent = shown.guildId ? shown.context : '';
+      // Both parts can truncate, so hovering the line names the whole chat.
+      name.parentElement.title = shown.guildId && shown.context ? `${name.textContent} · ${shown.context}` : name.textContent;
     } else {
+      name.parentElement.title = '';
       name.textContent = state.targetError === 'none' ? 'No chat open' : 'finding this chat…';
       context.textContent = '';
     }
@@ -928,7 +1202,7 @@
     const viewing = $('[data-role="target-viewing"]');
     const elsewhere = runningHere && state.target && state.target.channelId !== shown.channelId;
     viewing.hidden = !elsewhere;
-    if (elsewhere) viewing.textContent = `viewing ${state.target.name}`;
+    if (elsewhere) viewing.textContent = `viewing ${state.target.guildId ? state.target.name.replace(/^#/, '') : state.target.name}`;
     renderHero();
     renderActions();
   }
@@ -938,6 +1212,9 @@
   function selectedRows() {
     return Array.from(state.selected).map((k) => state.batchRows.get(k)).filter((r) => r && !r.protected);
   }
+
+  let shownBusy = null;   // what the rows' boxes and the shields last showed (see renderActions)
+  let shownActive = null;
 
   function renderActions() {
     const idle = $('[data-role="idle-actions"]');
@@ -978,31 +1255,38 @@
       clean = usable && n === 0 && !isPartialCount(t.channelId);
       scan.disabled = (!usable && !state.scanning && !describeFailed()) || counting;
       purify.disabled = !usable || state.scanning || clean || blockedHere(t);
-      scanLabel.textContent = state.scanning ? 'Cancel scan' : retry ? 'Try again' : (n !== undefined ? 'Scan again' : 'Scan');
+      scanLabel.textContent = state.scanning ? 'Cancel' : retry ? 'Try again' : n !== undefined ? 'Count again' : 'Count';
       purifyLabel.textContent = counting ? 'Counting…' : 'Purify';
-      purifyCount.textContent = n ? n.toLocaleString() : '';
+      purifyCount.textContent = n ? fmt(n) : '';
       purifyCount.hidden = !n || counting;
     } else {
       scan.disabled = !rows.length && !state.scanning;
       // Nothing left to do in any selected chat (all counted at 0, or closed to us): nothing to offer.
-      const empty = (r) => !!r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId);
-      clean = rows.length > 0 && rows.every(empty);
-      purify.disabled = !rows.length || state.scanning || rows.every((r) => empty(r) || accessError(r));
-      scanLabel.textContent = state.scanning ? 'Cancel scan' : 'Scan selected';
+      clean = rows.length > 0 && rows.every(emptyChat);
+      purify.disabled = !rows.length || state.scanning || !purifyTargets(rows).length;
+      scanLabel.textContent = state.scanning ? 'Cancel' : 'Count';
       purifyLabel.textContent = 'Purify selected';
-      purifyCount.textContent = String(rows.length);
-      purifyCount.hidden = !rows.length;
+      // The badge counts ticks, the strip the chats that go and the dialog's title what goes: no
+      // fourth number on the button.
+      purifyCount.textContent = '';
+      purifyCount.hidden = true;
     }
     // Resting, not broken: there is simply nothing of yours left to purge.
     purify.classList.toggle('is-clean', clean);
     const busy = run.active || state.scanning;
-    for (const row of state.batchRows.values()) if (row.box) row.box.disabled = busy;
-    for (const act of ['dm-all', 'dm-none', 'dm-refresh', 'server-refresh']) $(`[data-act="${act}"]`).disabled = busy;
-    for (const b of $$('.shield-btn')) {
-      b.disabled = run.active;
-      b.title = run.active ? 'Stop the purge to change shields' : shieldTitle(b.classList.contains('is-on'));
+    // Every row and shield is touched only when that can change: a tick on a big account stays a tick.
+    if (busy || busy !== shownBusy || run.active !== shownActive) {
+      for (const row of state.batchRows.values()) if (row.box) row.box.disabled = busy;
+      for (const b of $$('.shield-btn')) {
+        b.disabled = run.active;
+        b.title = run.active ? 'Stop purifying to change shields~' : shieldTitle(b.classList.contains('is-on'));
+      }
     }
-    if (root.querySelector('.guild')) syncGuildChecks();
+    shownBusy = busy;
+    shownActive = run.active;
+    for (const act of ['dm-all', 'dm-none', 'dm-refresh', 'server-refresh']) $(`[data-act="${act}"]`).disabled = busy;
+    syncGuildChecks();
+    syncFold();
     speakCounts(rows);
     $('[data-role="layer"]').dataset.run = run.active ? (run.paused ? 'paused' : 'running') : 'idle';
     applyFocus();
@@ -1029,7 +1313,7 @@
     }
   }
 
-  // Scans are cancellable: the Scan button becomes Cancel, and leaving the channel cancels too.
+  // Counts are cancellable: Count becomes Cancel, and leaving the channel cancels too.
   function beginScan(kind) {
     state.scanning = true;
     state.scanKind = kind;
@@ -1065,27 +1349,35 @@
     const t = state.target;
     if (!t || t.protected || run.active || state.scanning) return;
     const signal = beginScan('current');
+    state.outcome = null;
     setStatus('Counting your messages…', 'info');
     try {
       const n = await countMine(t, {
         signal,
         onWait: showWait,
-        onProgress: ({ count, scanned }) => setStatus(`Checked ${scanned.toLocaleString()} · ${count.toLocaleString()} of yours so far`, 'info', { quiet: true }),
+        onProgress: ({ count, scanned }) => setStatus(`Checked ${fmt(scanned)}${SEP}${fmt(count)} of yours so far`, 'info', { quiet: true }),
       });
       counts.set(t.channelId, n);
+      state.runCounted.delete(t.channelId); // Count's own now
       if (lastEnd && lastEnd.key === `c:${t.channelId}`) lastEnd = null;
       // Measured against the address, so a chat being re-read (an account switch) still counts as here.
       const here = !state.route || state.route.channelId === t.channelId;
       const where = here ? '' : ` in \u2068${t.name}\u2069`;
       // Shielded while we were counting: there's nothing to offer here any more.
-      if (here && state.target && state.target.protected) setStatus(`${state.target.name} is immune~`, 'immune');
+      if (here && state.target && state.target.protected) setStatus(...immuneStatus(state.target));
+      // The ring shows the number: the footer names the next step, and the number is still heard.
+      // Discord's search catching up is its normal pace, so no alarm.
       else if (isPartialCount(t.channelId)) {
-        setStatus(n ? `${plural(n, 'message')} found so far${where} · Discord is still indexing older ones` : `Discord is still indexing${where}~ older messages may be hiding`, 'warn');
+        if (!n) setStatus(`Discord is still searching${where}~ count again in a minute`, 'calm');
+        else if (where) setStatus(`${plural(n, 'message')} found so far${where}`, 'info');
+        else setStatus('Purify now, then once more later for the rest', 'info', { sr: `${plural(n, 'message')} found so far. ` });
       } else if (n) {
-        setStatus(`${plural(n, 'message')} found${where} · ~${formatDuration(estimateSeconds(n))} to purge`, 'success', { flair: '✨' });
+        if (where) setStatus(`${plural(n, 'message')} found${where}`, 'success', { flair: '✨' });
+        // No flair: the line fits one row, so the panel keeps its height into the run.
+        else setStatus("Counted~ press Purify when you're ready", 'success', { sr: `${plural(n, 'message')} found. ` });
       } else setStatus(`All clear~ nothing of yours ${here ? 'here' : `in \u2068${t.name}\u2069`}`, 'success', { flair: '✨' });
     } catch (err) {
-      if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
+      if (err instanceof Stopped) setStatus('Stopped counting~', 'calm');
       else {
         state.scanError = { channelId: t.channelId, ...plainError(err) };
         addLog(`scan failed · ${err.message}`, 'error');
@@ -1103,10 +1395,12 @@
     const rows = selectedRows();
     if (!rows.length || run.active || state.scanning) return;
     const signal = beginScan('batch');
+    state.outcome = null;
     let grand = 0;
     let deferred = 0;
     let indexing = 0;
     let missed = 0;
+    let missedLocked = 0; // of those, chats you can't read
     let missedWhy = '';
     let searched = false;
     try {
@@ -1116,11 +1410,12 @@
         // Search is Discord's tightest limit: pace it like a purge does instead of leaning on 429s.
         if (searched) await sleep(TIMING.searchDelayMs, signal);
         searched = true;
-        setStatus(`Counting ${i + 1} of ${rows.length} · \u2068${row.display}\u2069`, 'info', { quiet: true });
+        setStatus(`Counting ${i + 1} of ${rows.length}${SEP}\u2068${row.display}\u2069`, 'info', { quiet: true });
         setRowState(row, 'scanning');
         try {
           const n = await countMine(row, { signal, onWait: showWait });
           counts.set(row.channelId, n);
+          state.runCounted.delete(row.channelId);
           grand += n;
           if (isPartialCount(row.channelId)) indexing++;
           setRowState(row, isPartialCount(row.channelId) ? 'indexing' : n ? 'ready' : 'clean');
@@ -1129,36 +1424,43 @@
           addLog(`scan failed · ${row.label} · ${err.message}`, 'error');
           setRowState(row, 'error', err.message);
           if (!missed++) missedWhy = err.message;
+          if (plainError(err).code === 'no-access') missedLocked++;
         }
         renderHero(); // the strip keeps up as each chat lands
       }
       if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
       const counted = rows.length - deferred - missed;
-      if (!searched) setStatus("Closed DMs are counted as they're purged~", 'info', { flair: '♡' });
-      else if (missed) setStatus(`Scan done~ ${plural(grand, 'message')} · ${plural(missed, 'chat')} skipped · ${shortReason(missedWhy)}${missed > 1 ? ' and more' : ''}`, 'warn');
-      else if (indexing) setStatus(`Scan done~ ${plural(grand, 'message')} so far · Discord is still indexing ${plural(indexing, 'chat')}`, 'warn');
+      if (!searched) setStatus('Closed DMs are counted when you purify them~', 'info', { flair: '♡' });
+      // A chat you can't read is a calm fact, not a failure.
+      else if (missed && missedLocked === missed) setStatus(`Counted~ ${plural(grand, 'message')}${SEP}skipped ${plural(missed, 'chat')} you can't read`, 'success');
+      else if (missed) setStatus(`Counted~ ${plural(grand, 'message')}${SEP}${plural(missed, 'chat')} skipped${SEP}${shortReason(missedWhy)}${missed > 1 ? ' and more' : ''}`, 'warn');
+      else if (indexing) setStatus(`Counted~ Discord is still searching ${plural(indexing, 'chat')}, so more may turn up`, 'info');
       else if (!grand) setStatus(`All clear~ nothing of yours in ${counted === 1 ? 'that chat' : `those ${counted} chats`}`, 'success', { flair: '✨' });
-      else setStatus(`Scan done~ ${plural(grand, 'message')} in ${plural(counted, 'chat')}`, 'success', { flair: '✨' });
+      else setStatus(`Counted~ ${plural(grand, 'message')} in ${plural(counted, 'chat')}`, 'success', { flair: '✨' });
     } catch (err) {
       for (const row of rows) if (row.status === 'scanning') setRowState(row, 'idle');
-      if (err instanceof Stopped) setStatus('Scan cancelled~', 'info');
+      if (err instanceof Stopped) setStatus('Stopped counting~', 'calm');
       else {
         addLog(`scan failed · ${err.message}`, 'error');
         setStatus(plainError(err).short, 'error');
       }
     } finally {
       endScan();
+      settleBatchSelection(rows); // a chat Discord won't let you into unticks now, not after a purge
       renderHero();
       renderActions();
     }
   }
 
-  // Short enough for the one line a running footer has, seconds included.
+  // Short enough for the one line a running footer has; a minute or more reads as minutes. Offline
+  // has no countdown: the run carries on the moment the browser is back.
   function waitText(w, s = Math.max(1, Math.ceil(w.seconds))) {
-    if (w.kind === 'rate') return `Taking a breather~ back in ${s}s`;
-    if (w.kind === 'index') return 'Discord is still indexing~ hang on…';
-    if (w.kind === 'network') return `Connection hiccup~ retrying in ${s}s`;
-    return `Discord is busy~ retrying in ${s}s`;
+    const t = s < 60 ? `${s}s` : `about ${formatDuration(s)}`;
+    if (w.kind === 'rate') return `Taking a breather~ back in ${t}`;
+    if (w.kind === 'index') return 'Discord is still searching~ hang on…';
+    if (w.kind === 'offline') return "Offline~ purifying carries on once you're back";
+    if (w.kind === 'network') return `Connection hiccup~ retrying in ${t}`;
+    return `Discord is busy~ retrying in ${t}`;
   }
 
   // Discord's own pacing, said calmly. The seconds count down here, once a second and with no
@@ -1168,7 +1470,7 @@
     const left = () => Math.max(1, Math.ceil((end - Date.now()) / 1000));
     const flair = w.kind === 'rate' ? '🦇' : '';
     setStatus(waitText(w, left()), 'calm', { flair });
-    if (w.kind === 'index' || left() <= 1) return;
+    if (w.kind === 'index' || w.kind === 'offline' || left() <= 1) return;
     waitTick = setInterval(() => {
       const s = left();
       paintStatus(waitText(w, s), 'calm', { quiet: true, flair });
@@ -1183,11 +1485,11 @@
   const PLAIN_ERRORS = [
     // First: the engine reports an account switch with status 0, like a dropped connection.
     { code: 'switched', when: (e) => /switched Discord accounts/.test(e.message), line: 'You switched Discord accounts~ stopped to be safe', short: 'Switched accounts' },
-    { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha/i.test(e.message), line: 'Discord wants a captcha~ solve it in Discord, then press Purify to finish', short: 'Discord wants a captcha' },
-    { code: 'logged-out', when: (e) => e.status === 401 || /login token/.test(e.message), line: "You're logged out of Discord~ log in, then press Try again", short: 'Logged out of Discord' },
-    { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so there's nothing here to purge", short: 'No access here', blocking: true },
+    { code: 'captcha', when: (e) => e.code === 'captcha' || /captcha|human check/i.test(e.message), line: "Discord wants to check you're human~ take a break, then press Purify to finish", short: 'Discord wants a human check' },
+    { code: 'logged-out', when: (e) => e.status === 401 || /login token/.test(e.message), line: "Couldn't use your Discord login~ reload Discord and try again", short: 'Login not working' },
+    { code: 'no-access', when: (e) => e.code === 50001 || /Missing Access/.test(e.message), line: "You can't read this channel, so Purify can't reach your messages here", short: 'No access here', blocking: true },
     { code: 'no-permission', when: (e) => e.code === 50013 || /Missing Permissions/.test(e.message), line: "Discord won't let you delete here", short: 'No permission here', blocking: true },
-    { code: 'indexing', when: (e) => e.status === 202 || /indexing/.test(e.message), line: 'Discord is still sorting this chat~ try again in a minute', short: 'Discord is still indexing' },
+    { code: 'indexing', when: (e) => e.status === 202 || /indexing/.test(e.message), line: 'Discord is still searching this chat~ try again in a minute', short: 'Discord is still searching' },
     { code: 'network', when: (e) => e.status === 0 || /Network unreachable/.test(e.message), line: "Can't reach Discord~ check your internet, then press Try again", short: "Can't reach Discord" },
     { code: 'server', when: (e) => e.status >= 500, line: 'Discord is having a moment~ try again in a minute', short: 'Discord is having a moment' },
     { code: 'gone', when: (e) => e.code === 10003, line: "This chat doesn't exist any more", short: 'Chat is gone' },
@@ -1211,8 +1513,8 @@
   function listError(what, err) {
     addLog(`couldn't load ${what} · ${err.message}`, 'error');
     const p = plainError(err);
-    if (p.code === 'logged-out') return "You're logged out of Discord~ log in and your chats show up here";
-    return `${p.code === 'other' ? p.line : p.short} · press ↻ to try again`;
+    if (p.code === 'logged-out') return "Couldn't use your Discord login~ reload Discord and your chats show up here";
+    return `${p.code === 'other' ? p.line : p.short}${SEP}press ↻ to try again`;
   }
 
   // The dialog names the account doing the deleting, so a switched account can't surprise anyone.
@@ -1245,6 +1547,7 @@
           searchOnly: true,
           onWait: (w) => { held = w; ctl.abort(); },
         }));
+        state.runCounted.delete(t.channelId);
       }
     } catch (err) {
       if (!(err instanceof Stopped)) {
@@ -1265,7 +1568,10 @@
       else if (!plain) addLog('count skipped · Discord took too long, so the purge counts as it goes', 'info');
     }
     renderCurrent();
-    const here = state.target && state.target.channelId === t.channelId && !state.target.protected;
+    // Still the chat on screen, by the address itself: a click away that the panel hasn't caught up
+    // with yet must not bring up a dialog for the chat left behind.
+    const live = routeTarget();
+    const here = !!live && live.channelId === t.channelId && !!state.target && state.target.channelId === t.channelId && !state.target.protected;
     if (!own || !here || run.active || modal || state.scanning) return { go: false };
     // A chat you can't read could only fail: say so instead of asking.
     if (plain && plain.blocking) { setStatus(plain.short, 'error'); return { go: false }; }
@@ -1278,8 +1584,11 @@
   }
 
   async function askPurgeCurrent() {
-    if (!state.target || state.target.protected || run.active || modal || state.counting || state.scanning) return;
+    if (!state.target || state.target.protected || run.active || starting || modal || state.counting || state.scanning) return;
     const t = state.target;
+    // Another tab is purifying: say so, rather than count or ask.
+    if (await runLockHeld()) { setStatus(ELSEWHERE, 'calm'); return; }
+    if (state.target !== t || run.active || starting || modal || state.counting || state.scanning) return;
     const blocked = state.scanError && state.scanError.channelId === t.channelId && state.scanError.blocking;
     if (blocked) { setStatus(state.scanError.short, 'error'); return; }
     let who;
@@ -1289,17 +1598,24 @@
       if (!counted.go) return;
       ({ who } = counted);
     }
-    // Re-read: an account switch may have reset everything meanwhile, or the person moved on.
+    // Re-read: an account switch may have reset everything meanwhile, or the person moved on (the
+    // address says so first, even before the panel has caught up).
     const now = state.target;
-    if (!now || now.channelId !== t.channelId || now.protected || run.active || modal || state.scanning || state.counting || state.tab !== 'current') return;
+    const live = routeTarget();
+    if (!now || now.channelId !== t.channelId || now.protected || run.active || starting || modal || state.scanning || state.counting || state.tab !== 'current'
+      || !live || live.channelId !== now.channelId) return;
     const n = isPartialCount(now.channelId) ? 0 : counts.get(now.channelId);
-    const b = (k) => h('b', { text: k.toLocaleString() });
+    const b = (k) => h('b', { text: fmt(k) });
+    // A server channel's search reaches its threads (a forum's or media channel's, its posts) too.
+    const reach = !now.guildId ? '' : [0, 2, 5, 13].includes(now.channelType) ? ', threads included,' : [15, 16].includes(now.channelType) ? ', posts included,' : '';
     confirmDialog({
       title: 'Ready to purify?',
-      lead: n === 1 ? ['This will delete your ', b(1), ' message in']
-        : n ? ['This will delete all ', b(n), ' of your messages in'] : ['This will delete all your messages in'],
+      lead: n === 1 ? ['This will delete your ', b(1), ` message${reach} in`]
+        : n ? ['This will delete all ', b(n), ` of your messages${reach} in`] : [`This will delete all your messages${reach} in`],
       pill: now,
+      channelId: now.channelId,
       who,
+      time: longPurge(n),
       confirmLabel: ['Hold to purify', '✨'],
       onConfirm: () => beginRun([{ ...now }], 'current', who),
     });
@@ -1309,40 +1625,136 @@
   // counted yet, and that an index still being built may hold older ones. Chats Discord won't let you
   // into are listed as skipped, not counted as purged.
   async function askPurgeSelected() {
-    if (!selectedRows().length || run.active || modal) return;
+    if (!selectedRows().length || run.active || starting || modal) return;
+    if (await runLockHeld()) { setStatus(ELSEWHERE, 'calm'); return; }
     const who = await actingAs();
     const rows = selectedRows(); // re-read: an account switch clears the selection
-    if (!rows.length || run.active || modal || state.scanning) return;
-    const skipped = rows.filter(accessError);
-    const counted = rows.filter((r) => !accessError(r) && r.channelId && counts.has(r.channelId));
+    if (!rows.length || run.active || starting || modal || state.scanning) return;
+    // The number never changes at the moment that can't be undone: the title, the list, 'Starting on'
+    // and 'Chat 1 of N' all count the chats that really go. All-clear and no-access chats sit it out.
+    const targets = purifyTargets(rows);
+    const n = targets.length;
+    if (!n) return; // nothing left to purge in any of them
+    const counted = targets.filter((r) => r.channelId && counts.has(r.channelId));
     const known = counted.reduce((sum, r) => sum + counts.get(r.channelId), 0);
-    const uncounted = rows.length - skipped.length - counted.length;
+    const uncounted = n - counted.length;
     const partial = counted.some((r) => isPartialCount(r.channelId));
-    if (!known && !uncounted && !partial) return; // nothing left to purge in any of them
-    const n = rows.length - skipped.length;
-    const b = (k) => h('b', { text: k.toLocaleString() });
-    const chats = (k) => (k === 1 ? 'chat' : 'chats');
-    const lead = known && !uncounted ? ['This deletes all ', b(known), ` of your messages in ${n === 1 ? 'this chat' : 'these chats'}`]
-      : known ? ['This deletes ', b(known), ` counted message${known === 1 ? '' : 's'}, plus every message of yours in the `, b(uncounted), ` ${chats(uncounted)} not counted yet`]
-        : counted.length && uncounted ? ['This deletes every message of yours in the ', b(uncounted), ` ${chats(uncounted)} not counted yet`]
-          : n === 1 ? [`This deletes every message of yours in this chat${uncounted ? ' — not counted yet' : ''}`]
-            : ['This deletes every message of yours in these ', b(n), ` chats${uncounted ? ' — none counted yet' : ''}`];
+    const b = (k) => h('b', { text: fmt(k) });
+    // The chats are named in the list below, and usually aren't the one on screen: '1 chat', never 'this chat'.
+    const where = n === 1 ? ' in 1 chat' : ' in these chats';
+    const lead = known && !uncounted ? (known === 1 ? ['This will delete your ', b(1), ` message${where}`] : ['This will delete all ', b(known), ` of your messages${where}`])
+      : known ? ['This will delete ', b(known), ` of your messages, plus all of yours in `, b(uncounted), ` ${uncounted === 1 ? 'chat' : 'chats'} not counted yet`]
+        : n === 1 ? [`This will delete all your messages${where}`] : ['This will delete all your messages in these ', b(n), ' chats'];
+    const threads = targets.some((r) => r.guildId) ? ', threads included' : '';
+    // A server with many channels picked is one line; its channels are named on hover and when opened.
+    const byServer = new Map();
+    for (const r of targets) if (r.guildId) byServer.set(r.guildId, [...(byServer.get(r.guildId) || []), r]);
+    const msgs = (group) => (group.some((r) => !counts.has(r.channelId)) ? 'not counted' : plural(group.reduce((sum, r) => sum + counts.get(r.channelId), 0), 'message'));
+    const list = [];
+    for (const r of targets) {
+      const group = r.guildId && byServer.get(r.guildId);
+      if (group && group.length >= 4) {
+        if (group[0] === r) list.push(serverLine(r.context, group, msgs(group)));
+        continue;
+      }
+      const k = r.channelId ? counts.get(r.channelId) : undefined;
+      list.push(k === undefined ? { label: r.label, meta: 'not counted', tone: 'unknown' } : { label: r.label, meta: plural(k, 'message') });
+    }
+    const skipped = rows.filter(accessError);
+    for (const r of skipped) list.push({ label: r.label, meta: `skipped · ${shortReason(r.reason)}`, tone: 'skipped' });
+    const clear = rows.filter(emptyChat).length;
+    if (clear) list.push({ label: `${plural(clear, 'chat')} with nothing of yours`, meta: 'left out', tone: 'unknown' });
+    const out = skipped.length + clear;
     confirmDialog({
       title: `Purify ${plural(n, 'chat')}?`,
-      lead: [...lead, partial ? ' (Discord may find older ones later)' : '', ':'],
-      list: rows.map((r) => {
-        const k = r.channelId ? counts.get(r.channelId) : undefined;
-        if (accessError(r)) return { label: r.label, meta: `skipped · ${shortReason(r.reason)}`, tone: 'skipped' };
-        return k === undefined ? { label: r.label, meta: 'not counted', tone: 'unknown' } : { label: r.label, meta: plural(k, 'message') };
-      }),
+      lead: [...lead, threads, partial ? ' (Discord may find older ones later)' : '',
+        h('span', { 'aria-hidden': 'true', text: ':' }), h('span', { class: 'sr', text: '.' })],
+      list,
+      listLabel: `${plural(n, 'chat')} to purify${out ? `, ${fmt(out)} left out` : ''}`,
       who,
+      time: longPurge(known, uncounted > 0 || partial),
       confirmLabel: ['Hold to purify all', '✨'],
-      onConfirm: () => beginRun(rows, 'batch', who),
+      onConfirm: () => beginRun(targets, 'batch', who),
     });
+  }
+
+  // One line in the dialog for a server with many channels picked: its name, how many, and what they
+  // hold. Its title and its opened state name every channel, so the line still shows exactly what goes.
+  function serverLine(server, group, meta) {
+    const names = group.map((r) => `${r.glyph === '#' ? '#' : ''}${r.display}`).join(', ');
+    return h('div', { class: 'modal-item modal-server', role: 'listitem' },
+      h('details', {},
+        h('summary', { title: names },
+          h('span', { class: 'modal-item-name' }, icon('chevron', 'modal-server-chev'), `${server}${SEP}${plural(group.length, 'channel')}`),
+          h('span', { class: `modal-item-meta${meta === 'not counted' ? ' is-unknown' : ''}`, text: meta })),
+        h('div', { class: 'modal-server-names', text: names })));
+  }
+
+  // One purge at a time in this browser: a run holds a Web Lock that every Discord tab here shares, and
+  // a tab that closes or crashes lets go of it at once. Without Web Locks, or if they fail, nothing is
+  // ever blocked. Counting stays free.
+  const RUN_LOCK = 'dopa-purifier:run';
+  const ELSEWHERE = 'Purifying in another Discord tab~ one at a time keeps your account safe';
+  let releaseRunLock = null;
+  let starting = false; // from the hold to the run's start, while the lock is asked for
+
+  async function runLockHeld() {
+    try {
+      const { held } = await navigator.locks.query();
+      return held.some((lock) => lock.name === RUN_LOCK);
+    } catch { return false; }
+  }
+
+  // Resolves true once this tab holds the lock (or there is none to hold), false if another tab has it.
+  function takeRunLock() {
+    return new Promise((resolve) => {
+      try {
+        navigator.locks.request(RUN_LOCK, { ifAvailable: true }, (lock) => {
+          if (!lock) { resolve(false); return null; }
+          resolve(true);
+          return new Promise((release) => { releaseRunLock = release; });
+        }).catch(() => resolve(true));
+      } catch { resolve(true); }
+    });
+  }
+
+  function freeRunLock() {
+    if (releaseRunLock) releaseRunLock();
+    releaseRunLock = null;
+  }
+
+  // The journal this tab knows of: its own run's, or the one boot found. Written when a run starts and
+  // as each chat finishes, never per kill.
+  let journal = null;
+  let destroying = false; // the panel going away (a plugin reload) cuts a run short; it isn't a Stop
+
+  function startJournal(targets, mode) {
+    const user = session.me && session.me.id;
+    journal = !user ? null : mode === 'current'
+      ? { v: 1, user, mode, at: Date.now(), state: 'running', chat: { id: targets[0].channelId } }
+      : {
+        v: 1, user, mode, at: Date.now(), state: 'running',
+        keys: targets.map((t) => t.key).slice(0, 500),
+        guilds: [...new Set(targets.map((t) => t.guildId).filter(Boolean))].slice(0, 500),
+      };
+    storeJournal(journal); // replaces any older one
   }
 
   // `who` is the account the person confirmed as; the run is bound to it.
   async function beginRun(targets, mode, who) {
+    starting = true;
+    const ours = await takeRunLock();
+    starting = false;
+    // The panel went away while the lock was asked for (a plugin reload): start nothing, hold nothing.
+    if (destroying) { if (ours) freeRunLock(); settleIdle(); return; }
+    if (!ours) {
+      settleIdle();
+      // Another tab started first: nothing was sent, and focus goes back to Purify.
+      handFocus('[data-act="purify"]');
+      setStatus(ELSEWHERE, 'calm');
+      renderActions();
+      return;
+    }
     if (syncProtection()) protectionStale = true; // a shield from another tab; the engine honours it per chat
     state.runTargets = targets;
     state.runMode = mode;
@@ -1361,6 +1773,7 @@
       t.openedByUs = false;
       if (t.row) setRowState(t, 'queued');
     }
+    startJournal(targets, mode);
     await startRun(targets);
   }
 
@@ -1370,9 +1783,9 @@
     return row.channelId ? `c:${row.channelId}` : `u:${row.userId}`;
   }
 
-  // One line per row: the count is the readiness and the pill the outcome, so only news (purging,
-  // still indexing, run again later) takes a second line. Each row's checkbox is described by its
-  // tag and meta, so a screen reader hears 'DM: Mira, checkbox, checked, 7 msgs'.
+  // One line per row: the count is the readiness and the pill the outcome, so only news (still
+  // indexing, run again later) takes a second line. Each row's checkbox is described by its tag and
+  // meta, so a screen reader hears 'DM: Mira, checkbox, checked, 7 msgs' or '… purifying 5 of 7'.
   function setRowState(row, status, detail) {
     const was = row.status;
     row.status = status;
@@ -1380,33 +1793,39 @@
     const el = row.el;
     if (!el || row.protected) return;
     el.dataset.state = status;
-    el.title = detail || '';
+    // Hover shows the whole name and what it is, however the line cut them.
+    el.title = detail || [row.display, row.sub].filter(Boolean).join(' ');
     const n = counts.get(row.channelId);
-    const deleted = (row.deleted || 0).toLocaleString();
+    const deleted = fmt(row.deleted || 0);
     const tag = el.querySelector('.row-tag');
-    const tagText = status === 'running' ? (row.failed ? `purging~ · ${row.failed} failed` : 'purging~')
-      : status === 'partial' ? detail || 'run again later'
-        : status === 'indexing' ? 'Discord is still indexing~' : '';
+    // A running row says so with its pill and tint alone, so it never grows a line as a run moves on.
+    const tagText = status === 'partial' ? detail || 'run again later'
+      : status === 'indexing' ? 'still searching~' : '';
     if (tag.textContent !== tagText) tag.textContent = tagText;
     tag.hidden = !tagText;
-    const progress = n ? `${deleted}/${n.toLocaleString()}` : deleted;
     // Each kill changes only the running pill's number, so its spinner keeps turning.
-    const live = was === 'running' && status === 'running' && el.querySelector('.run-pill-live .run-pill-n');
-    if (live) { live.textContent = progress; return; }
-    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: k.toLocaleString() }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
+    if (was === 'running' && status === 'running') {
+      const done = el.querySelector('.run-pill-live .run-pill-n');
+      const total = el.querySelector('.run-pill-live .run-pill-total');
+      if (done && (n ? !!total && total.textContent === fmt(n) : !total)) { done.textContent = deleted; return; }
+    }
+    const msgs = (k) => h('span', { class: 'meta-count' }, h('b', { text: fmt(k) }), h('small', { text: k === 1 ? ' msg' : ' msgs' }));
     const clear = () => h('span', { class: 'meta-clear' }, 'all clear', h('span', { 'aria-hidden': 'true', text: ' ✓' }));
     const pill = (kind, ...children) => h('span', { class: `run-pill run-pill-${kind}` }, ...children);
     const say = (text) => h('span', { class: 'sr', text });
     let meta = null;
-    if (status === 'idle') meta = row.needsDM ? h('span', { class: 'chip-need', text: 'closed DM' }) : null;
-    else if (status === 'scanning') meta = pill('scan', h('i', { class: 'spin' }), 'scanning');
+    // Friends with a closed DM aren't told so one by one: their fold says it once.
+    if (status === 'scanning') meta = pill('scan', h('i', { class: 'spin' }), 'counting');
     else if (status === 'ready') meta = n ? msgs(n) : null;
     else if (status === 'indexing') meta = n ? msgs(n) : 'none yet';
     else if (status === 'clean') meta = clear();
     else if (status === 'queued') meta = pill('queued', 'queued');
-    else if (status === 'running') meta = pill('live', h('i', { class: 'spin' }), say('purging '), h('span', { class: 'run-pill-n', text: progress }));
-    else if (status === 'done') meta = pill('done', icon('check'), say('purged '), row.failed ? `${deleted} · ${row.failed} failed` : deleted);
-    else if (status === 'partial') meta = pill('stopped', `${deleted} · again later`);
+    else if (status === 'running') {
+      meta = pill('live', h('i', { class: 'spin' }), say('purifying '), h('span', { class: 'run-pill-n', text: deleted }),
+        ...(n ? [say(' of '), h('span', { 'aria-hidden': 'true', text: '/' }), h('span', { class: 'run-pill-total', text: fmt(n) })] : []));
+    } else if (status === 'done' && !row.deleted && !row.failed) meta = clear();
+    else if (status === 'done') meta = pill('done', icon('check'), say('purged '), row.failed ? `${deleted}${SEP}${fmt(row.failed)} failed` : deleted);
+    else if (status === 'partial') meta = pill('stopped', `${deleted}${SEP}again later`);
     else if (status === 'error') meta = pill('error', h('span', { 'aria-hidden': 'true', text: '✗ ' }), h('span', { class: 'run-pill-why', text: detail ? shortReason(detail) : 'skipped' }));
     else if (status === 'stopped') meta = pill('stopped', 'stopped');
     el.querySelector('.row-meta').replaceChildren(...(meta ? [meta] : []));
@@ -1434,11 +1853,11 @@
   function shortReason(reason) {
     if (/Missing Access/i.test(reason)) return 'no access';
     if (/Missing Permissions/i.test(reason)) return 'no permission';
-    if (/indexing/i.test(reason)) return 'still indexing';
+    if (/indexing/i.test(reason)) return 'still searching';
     if (/system message/i.test(reason)) return 'system message';
     if (/archived/i.test(reason)) return 'archived thread';
     if (/Unknown Message/i.test(reason)) return 'already gone';
-    if (/captcha/i.test(reason)) return 'captcha';
+    if (/captcha|human check/i.test(reason)) return 'captcha';
     return plainError(reason).short;
   }
 
@@ -1474,8 +1893,7 @@
     const box = h('input', { type: 'checkbox', class: 'check', 'aria-label': row.label });
     box.checked = state.selected.has(key);
     box.addEventListener('change', () => {
-      if (box.checked) state.selected.add(row.key); else state.selected.delete(row.key);
-      row.el.classList.toggle('is-selected', box.checked);
+      tickRow(row, box.checked);
       selectionChanged();
     });
     box.disabled = run.active || state.scanning;
@@ -1496,6 +1914,22 @@
     describeRow(row);
     setRowState(row, row.status || restingState(row));
     return row.el;
+  }
+
+  // Ticks or unticks one row. A chat whose count a finished run wrote is counted afresh when it is
+  // picked again, so new messages since then aren't hidden behind an old 'all clear'.
+  function tickRow(row, checked) {
+    row.box.checked = checked;
+    if (!checked) state.selected.delete(row.key);
+    else {
+      state.selected.add(row.key);
+      if (row.channelId && state.runCounted.has(row.channelId) && !run.active) {
+        state.runCounted.delete(row.channelId);
+        counts.delete(row.channelId);
+        setRowState(row, 'idle');
+      }
+    }
+    row.el.classList.toggle('is-selected', checked);
   }
 
   // Re-key a friend row once its DM exists, so the row and its selection follow the real channel id.
@@ -1526,7 +1960,7 @@
   async function loadDMs() {
     const list = $('[data-role="dm-list"]');
     if (run.active || state.scanning) {
-      if (!state.dmsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when the purge finishes~' }));
+      if (!state.dmsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when purifying is done~' }));
       return;
     }
     const seq = ++dmSeq;
@@ -1573,7 +2007,8 @@
       const name = user.global_name || user.username || 'Unknown';
       rows.push({
         kind: 'friend', channelId: null, userId: rel.id, needsDM: true, guildId: null,
-        name, display: name, sub: user.username ? `@${user.username} · friend` : 'friend', glyph: '',
+        // The word that explains the row comes first, so it survives a long name.
+        name, display: name, sub: user.username ? `friend${SEP}@${user.username}` : 'friend', glyph: '',
         partner: user,
         protected: isProtectedUser(user),
         label: `Friend: ${iso(name)}`, context: 'Direct message',
@@ -1581,9 +2016,59 @@
     }
     rows.sort((a, b) => Number(b.protected) - Number(a.protected));
     for (const r of rows) if (r.protected) state.selected.delete(rowKey(r));
-    list.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r)) : [h('div', { class: 'list-empty', text: 'No DMs here yet~' })]));
+    // Friends you have no DM with wait in one fold at the end: 'All' never ticks them, so they read as
+    // a choice rather than as chats that were missed.
+    const folded = rows.filter((r) => r.needsDM && !r.protected);
+    const open = rows.filter((r) => !folded.includes(r));
+    // With nothing else to pick (only immune DMs), the fold starts open.
+    if (friendsFold.open === null) friendsFold.start = !open.some((r) => !r.protected);
+    list.replaceChildren(...(rows.length ? [...open.map((r) => makeRow(r)), folded.length ? buildFold(folded) : null].filter(Boolean)
+      : [h('div', { class: 'list-empty', text: 'No DMs here yet~' })]));
     state.dmsLoaded = true;
     applyFilter();
+  }
+
+  // The fold of friends with a closed DM, built like a server's line without its select-all box.
+  // It opens when the person opens it, while a query finds someone inside, and while anyone inside is
+  // ticked, so it never hides a pick. friendsFold.open is the person's own choice (null: not made yet).
+  const friendsFold = { open: null, start: false };
+  const foldOpen = () => friendsFold.open ?? friendsFold.start;
+
+  function buildFold(rows) {
+    const head = h('button', { class: 'fold-head', 'aria-expanded': 'false', 'aria-controls': 'dp-fold-rows' },
+      h('span', { class: 'guild-chevron', 'aria-hidden': 'true' }, icon('chevron')),
+      h('span', { class: 'guild-name', text: 'Friends with a closed DM' }),
+      h('span', { class: 'guild-meta', 'data-role': 'fold-meta', text: plural(rows.length, 'friend') }));
+    head.addEventListener('click', () => {
+      friendsFold.open = head.getAttribute('aria-expanded') !== 'true';
+      syncFold();
+    });
+    return h('div', { class: 'fold', 'data-role': 'fold' },
+      h('div', { class: 'fold-bar', dataset: { key: 'fold:friends' } }, head),
+      h('div', { class: 'fold-rows', id: 'dp-fold-rows', hidden: true },
+        h('div', { class: 'list-empty fold-note', text: 'Purifying one opens the DM for a moment, then closes it again~' }),
+        rows.map((r) => makeRow(r))));
+  }
+
+  // Shows the fold open or closed, and how many inside are picked: '2 friends · 1 picked'.
+  function syncFold() {
+    const fold = $('[data-role="fold"]');
+    if (!fold) return;
+    const rows = [];
+    for (const row of state.batchRows.values()) if (row.needsDM && row.box) rows.push(row);
+    const picked = rows.filter((r) => state.selected.has(r.key)).length;
+    const found = !!state.filter.trim() && rows.some((r) => !r.el.hidden);
+    const open = foldOpen() || picked > 0 || found;
+    const head = fold.querySelector('.fold-head');
+    const was = head.getAttribute('aria-expanded') === 'true';
+    if (was !== open) {
+      head.setAttribute('aria-expanded', String(open));
+      fold.querySelector('.fold-rows').hidden = !open;
+      rove(fold.parentElement);
+    }
+    const meta = `${plural(rows.length, 'friend')}${picked ? `${SEP}${fmt(picked)} picked` : ''}`;
+    const metaEl = fold.querySelector('[data-role="fold-meta"]');
+    if (metaEl.textContent !== meta) metaEl.textContent = meta;
   }
 
   // ── Protection ──────────────────────────────────────────
@@ -1599,7 +2084,7 @@
 
   function toggleProtection(user) {
     if (!user) return;
-    if (run.active) { setStatus('Stop the purge first to change shields~', 'warn'); return; }
+    if (run.active) { setStatus('Stop purifying to change shields~', 'warn'); return; }
     const synced = syncProtection(); // start from every tab's shields, not just this one's
     const before = { ids: new Set(protection.ids), released: new Set(protection.released) };
     const shield = !isProtectedUser(user);
@@ -1611,7 +2096,7 @@
       protection.released = before.released;
       if (synced) protectionChanged();
       addLog(`couldn't save the shield for ${name} — Discord's storage is full or blocked`, 'error');
-      setStatus(`Couldn't save~ ${name} is ${shield ? 'not immune' : 'still immune'} (Discord's storage is full or blocked)`, 'error');
+      setStatus(shield ? `Couldn't save~ ${name} isn't immune yet` : `Couldn't save~ ${name} is still immune`, 'error');
       return;
     }
     addLog(shield ? `shielded ${name} — they're immune now ♡` : `${name} is no longer immune`, 'info');
@@ -1645,7 +2130,7 @@
 
   // 'Shield' is the verb and 'immune' the state. The button keeps one name and aria-pressed says
   // whether the shield is up, so a screen reader never hears 'remove' and 'pressed' at once.
-  const shieldTitle = (immune) => (immune ? 'Immune ♡ click to remove the shield' : 'Shield this DM~ never purged');
+  const shieldTitle = (immune) => (immune ? 'Immune ♡ tap to remove the shield' : 'Shield this DM~ never purged');
 
   function shieldButton(user, { protectedNow, label }) {
     const btn = h('button', {
@@ -1654,7 +2139,9 @@
       'data-user-id': user.id,
       'aria-pressed': String(protectedNow),
       'aria-label': `Shield ${iso(label)}`,
-      title: shieldTitle(protectedNow),
+      // Drawn mid-purge, it starts as renderActions would leave it (which skips the rows when idle).
+      title: run.active ? 'Stop purifying to change shields~' : shieldTitle(protectedNow),
+      disabled: run.active,
     }, icon('shield'));
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1664,10 +2151,20 @@
     return btn;
   }
 
+  // Servers holding chats a run left ticked last time open by themselves, so every tick is in view.
+  const restoredGuilds = new Set();
+  function openRestoredGuilds() {
+    for (const section of $$('.guild')) {
+      if (!restoredGuilds.delete(section.dataset.guildId)) continue;
+      const head = section.querySelector('.guild-head');
+      if (head.getAttribute('aria-expanded') !== 'true') head.click();
+    }
+  }
+
   async function loadServers({ refresh = false } = {}) {
     const list = $('[data-role="server-list"]');
     if (run.active || state.scanning) {
-      if (!state.guildsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when the purge finishes~' }));
+      if (!state.guildsLoaded) list.replaceChildren(h('div', { class: 'list-empty', text: 'Lists load when purifying is done~' }));
       return;
     }
     const seq = ++guildSeq;
@@ -1680,6 +2177,7 @@
       list.replaceChildren(...(guilds.length ? guilds.map(buildGuild) : [h('div', { class: 'list-empty', text: "You're not in any servers~" })]));
       state.guildsLoaded = true;
       applyFilter();
+      openRestoredGuilds();
     } catch (err) {
       if (seq !== guildSeq) return;
       list.replaceChildren(h('div', { class: 'list-empty', text: listError('your servers', err) }));
@@ -1701,6 +2199,7 @@
     // The select-all box comes first, where it is drawn, so focus moves the way the eye does.
     const section = h('div', { class: 'guild', dataset: { guildId: guild.id, name: guild.name.toLowerCase() } },
       h('div', { class: 'guild-bar' }, allLabel, head), channelsEl);
+    guildParts.set(section, { all, meta: head.querySelector('[data-role="guild-meta"]') });
     let loading = null;
     const load = () => {
       if (!loading) {
@@ -1716,10 +2215,12 @@
               protected: false, label: `${glyph === '#' ? '#' : ''}${iso(ch.name)} (${iso(guild.name)})`, context: guild.name,
             };
           });
-          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'Nothing here you can purge~' })]));
+          channelsEl.replaceChildren(...(rows.length ? rows.map((r) => makeRow(r, { indent: true })) : [h('div', { class: 'list-empty', text: 'No channels here you can purify~' })]));
           head.querySelector('[data-role="guild-meta"]').textContent = plural(rows.length, 'channel');
           applyFilter();
           syncGuildChecks();
+          // Picks restored from last time join the badge, the strip and Purify once their rows exist.
+          if (rows.some((r) => state.selected.has(r.key))) { renderHero(); renderActions(); }
         }, (err) => {
           loading = null;
           channelsEl.replaceChildren(h('div', { class: 'list-empty', text: listError(`${guild.name}'s channels`, err) }));
@@ -1741,30 +2242,44 @@
       try { await load(); } catch { all.checked = false; return; }
       for (const row of state.batchRows.values()) {
         if (row.guildId !== guild.id || !row.box || row.el.hidden) continue;
-        row.box.checked = checked;
-        if (checked) state.selected.add(row.key); else state.selected.delete(row.key);
-        row.el.classList.toggle('is-selected', checked);
+        tickRow(row, checked);
       }
       selectionChanged();
     });
     return section;
   }
 
+  // Each server's select-all box and meta, found once (a section → { all, meta }).
+  const guildParts = new WeakMap();
+
+  // One pass over the rows for every server: a tick on a big account costs one walk, not one per server.
   function syncGuildChecks() {
+    const tally = new Map(); // guildId → { n, picked }
+    for (const row of state.batchRows.values()) {
+      if (!row.guildId || !row.box) continue;
+      const t = tally.get(row.guildId) || { n: 0, picked: 0 };
+      t.n++;
+      if (state.selected.has(row.key)) t.picked++;
+      tally.set(row.guildId, t);
+    }
+    const busy = run.active || state.scanning;
     for (const section of $$('.guild')) {
-      const box = section.querySelector('.guild-all .check');
-      const rows = Array.from(state.batchRows.values()).filter((r) => r.guildId === section.dataset.guildId && r.box);
-      const picked = rows.filter((r) => state.selected.has(r.key)).length;
-      box.checked = rows.length > 0 && picked === rows.length;
-      box.indeterminate = picked > 0 && picked < rows.length;
-      box.disabled = run.active || state.scanning;
-      const meta = section.querySelector('[data-role="guild-meta"]');
-      if (rows.length) meta.textContent = picked ? `${picked} of ${rows.length}` : plural(rows.length, 'channel');
+      const parts = guildParts.get(section);
+      if (!parts) continue;
+      const { n, picked } = tally.get(section.dataset.guildId) || { n: 0, picked: 0 };
+      parts.all.checked = n > 0 && picked === n;
+      parts.all.indeterminate = picked > 0 && picked < n;
+      parts.all.disabled = busy;
+      const meta = picked ? `${fmt(picked)} of ${fmt(n)}` : plural(n, 'channel');
+      if (n && parts.meta.textContent !== meta) parts.meta.textContent = meta;
     }
   }
 
   // Every list is filtered, re-roved and, when nothing in it matches, says so.
   const LISTS = ['[data-role="dm-list"]', '[data-role="server-list"]'];
+
+  // Only what changes is written, so a keystroke on a big account doesn't restyle every row.
+  const show = (el, shown) => { if (el.hidden === shown) el.hidden = !shown; };
 
   function applyFilter() {
     const typed = state.filter.trim();
@@ -1773,41 +2288,57 @@
       if (!row.el) continue;
       // The marks that keep names in reading order are invisible, so they never stop a match.
       const hay = `${row.display} ${row.name} ${row.label} ${row.sub || ''}`.replace(/[\u2066-\u2069]/g, '').toLowerCase();
-      row.el.hidden = !!q && !hay.includes(q);
+      show(row.el, !q || hay.includes(q));
     }
     for (const guild of $$('.guild')) {
       const nameHit = !q || guild.dataset.name.includes(q);
       const anyChannel = Array.from(guild.querySelectorAll('.row')).some((r) => !r.hidden);
-      guild.hidden = !nameHit && !anyChannel;
-      if (q && nameHit) for (const r of guild.querySelectorAll('.row')) r.hidden = false;
+      show(guild, nameHit || anyChannel);
+      if (q && nameHit) for (const r of guild.querySelectorAll('.row')) show(r, true);
     }
+    // The fold shows while a query finds someone inside it, and goes back to how it was after.
+    const fold = $('[data-role="fold"]');
+    if (fold) show(fold, !q || [...fold.querySelectorAll('.row')].some((r) => !r.hidden));
+    syncFold();
     for (const list of LISTS.map($)) {
       const none = list.querySelector('[data-role="no-match"]');
       if (none) none.remove();
-      const items = list.querySelectorAll(':scope > .row, :scope > .guild');
+      const items = list.querySelectorAll(':scope > .row, :scope > .guild, :scope > .fold');
       if (q && items.length && [...items].every((el) => el.hidden)) {
-        list.append(h('div', { class: 'list-empty', 'data-role': 'no-match', text: `No chats match “${iso(typed)}”~` }));
+        // A DM that isn't open (and isn't a friend's) isn't in the list at all: say how to bring it.
+        const words = list.dataset.role === 'dm-list' ? `No DMs match “${iso(typed)}”~ closed it? Open it in Discord, then press ↻` : `No chats match “${iso(typed)}”~`;
+        list.append(h('div', { class: 'list-empty', 'data-role': 'no-match', text: words }));
       }
       rove(list);
     }
+  }
+
+  // Keystrokes in the filter land once a frame.
+  let filterFrame = 0;
+  function onFilterInput(e) {
+    state.filter = e.target.value;
+    if (filterFrame) return;
+    filterFrame = requestAnimationFrame(() => { filterFrame = 0; applyFilter(); });
   }
 
   function selectAllDMs(checked) {
     for (const row of state.batchRows.values()) {
       if (row.kind === 'guild' || row.protected || !row.box || row.el.hidden) continue;
       if (checked && row.needsDM) continue; // "All" means chats you already have; friends are opt-in
-      row.box.checked = checked;
-      if (checked) state.selected.add(row.key); else state.selected.delete(row.key);
-      row.el.classList.toggle('is-selected', checked);
+      tickRow(row, checked);
     }
     selectionChanged();
   }
 
   function selectionChanged() {
     if (lastEnd && lastEnd.key === 'batch') lastEnd = null;
-    syncGuildChecks();
+    // Every chat left from last time unticked: the journal has nothing more to keep.
+    if (journal && journal.keys && !run.active && !journal.keys.some((k) => state.selected.has(k))) {
+      journal = null;
+      storeJournal(null);
+    }
     renderHero();
-    renderActions();
+    renderActions(); // which brings the servers' boxes and the fold up to date
   }
 
   // Numbers a screen reader would otherwise hear bare: 'Many chats 4 selected', 'Purify selected 4 chats'.
@@ -1823,7 +2354,10 @@
   // its lines (keeping to the row's shield, or a server's name, when the next line has one), Home
   // and End jump to either end, Right goes along a line and into a server, Left comes back out or
   // folds the server up. Ticking still takes its own Space or click: moving never selects.
-  const CONTROLS = '.check, .shield-btn, .guild-head';
+  const CONTROLS = '.check, .shield-btn, .guild-head, .fold-head';
+  // A server and the friends' fold open the same way: a head line, then the lines inside it.
+  const GROUP = '.guild, .fold';
+  const INNER = '.guild-channels, .fold-rows';
 
   // Shown within its list (the list's own view may be hidden: it is still that list's Tab stop).
   function shownIn(list, el) {
@@ -1831,8 +2365,9 @@
     return true;
   }
 
-  const linesOf = (list) => Array.from(list.querySelectorAll('.row, .guild-bar')).filter((line) => shownIn(list, line));
-  const lineOf = (control) => control.closest('.row, .guild-bar');
+  const LINES = '.row, .guild-bar, .fold-bar';
+  const linesOf = (list) => Array.from(list.querySelectorAll(LINES)).filter((line) => shownIn(list, line));
+  const lineOf = (control) => control.closest(LINES);
   const controlsOf = (line) => Array.from(line.querySelectorAll(CONTROLS));
   const lineKey = (line) => line.dataset.key || `g:${line.parentElement.dataset.guildId}`;
 
@@ -1859,7 +2394,9 @@
     const line = lineOf(control);
     roving.set(list.dataset.role, { key: lineKey(line), col: controlsOf(line).indexOf(control) });
     for (const other of list.querySelectorAll(CONTROLS)) other.tabIndex = other === control ? 0 : -1;
-    line.scrollIntoView({ block: 'nearest' }); // the whole line, clear of the sticky strip (scroll-padding)
+    // Keys bring the whole line into view, clear of the sticky strip (scroll-padding). A press doesn't:
+    // scrolling under the pointer would move the line away and lose the click.
+    if (control.matches(':focus-visible')) line.scrollIntoView({ block: 'nearest' });
   }
 
   function onListKey(e) {
@@ -1872,7 +2409,7 @@
     const cols = controlsOf(line);
     const col = cols.indexOf(control);
     const inColumn = (target, c) => { const all = target ? controlsOf(target) : []; return all[Math.min(c, all.length - 1)]; };
-    const isHead = control.classList.contains('guild-head');
+    const isHead = control.matches('.guild-head, .fold-head');
     const open = isHead && control.getAttribute('aria-expanded') === 'true';
     let to = null;
     if (e.key === 'ArrowDown') to = inColumn(lines[at + 1], col);
@@ -1880,14 +2417,14 @@
     else if (e.key === 'Home') to = inColumn(lines[0], 0);
     else if (e.key === 'End') to = inColumn(lines[lines.length - 1], 0);
     else if (e.key === 'ArrowRight') {
-      const child = lines[at + 1] && lines[at + 1].closest('.guild-channels') && lines[at + 1].closest('.guild') === line.closest('.guild') ? lines[at + 1] : null;
+      const child = lines[at + 1] && lines[at + 1].closest(INNER) && lines[at + 1].closest(GROUP) === line.closest(GROUP) ? lines[at + 1] : null;
       if (cols[col + 1]) to = cols[col + 1];
       else if (isHead && !open) control.click();
       else if (open) to = inColumn(child, 0);
     } else if (e.key === 'ArrowLeft') {
       if (open) control.click();
       else if (col > 0) to = cols[col - 1];
-      else if (line.closest('.guild-channels')) to = line.closest('.guild').querySelector('.guild-head');
+      else if (line.closest(INNER)) to = line.closest(GROUP).querySelector('.guild-head, .fold-head');
     } else return;
     e.preventDefault();
     if (to) to.focus({ preventScroll: true }); // onListFocus brings its whole line into view
@@ -1896,13 +2433,23 @@
   // A chat Discord won't let you read or delete in: another go can't change that.
   const accessError = (row) => row.status === 'error' && plainError(row.reason).blocking;
 
-  // After a batch only what's left stays ticked, so Purify never offers to purge a finished chat
-  // again. Rows keep their pills, so the outcome stays readable. Partial, indexing, stopped and
+  // A chat counted at nothing of yours (and not still being indexed): purifying it would do nothing.
+  const emptyChat = (r) => !!r.channelId && counts.get(r.channelId) === 0 && !isPartialCount(r.channelId);
+
+  // The picked chats Purify really goes through: not the ones counted empty, nor the ones Discord
+  // won't let you into. The strip, the dialog and the run all count these.
+  const purifyTargets = (rows) => rows.filter((r) => !accessError(r) && !emptyChat(r));
+
+  // Only what's left stays ticked. A Count unticks the chats Discord won't let you into (they keep
+  // '✗ no access'), and all-clear chats stay picked so the strip can say so. After a batch (no rows
+  // given) the finished and empty chats untick too, so Purify never offers a finished chat again.
+  // Rows keep their pills, so the outcome stays readable. Partial, indexing, stopped and
   // done-with-failures rows stay ticked.
-  function settleBatchSelection() {
-    for (const row of state.runTargets) {
+  function settleBatchSelection(rows = null) {
+    const ended = !rows;
+    for (const row of rows || [...state.runTargets, ...selectedRows()]) {
       if (!row.row || !row.box) continue;
-      if ((row.status === 'done' && !row.failed) || accessError(row)) {
+      if (accessError(row) || (ended && ((row.status === 'done' && !row.failed) || emptyChat(row)))) {
         state.selected.delete(row.key);
         row.box.checked = false;
         row.el.classList.remove('is-selected');
@@ -1936,16 +2483,45 @@
     if (passed < milestone.next || passed >= 100 || now - milestone.at < 60000) return;
     milestone.next = passed + 25;
     milestone.at = now;
-    const failed = p.failed ? ` · ${p.failed.toLocaleString()} failed` : '';
+    const failed = p.failed ? ` · ${fmt(p.failed)} failed` : '';
     const left = p.etaSeconds != null ? ` · about ${formatDuration(p.etaSeconds)} left` : '';
-    $('[data-role="milestone"]').textContent = `${Math.floor((done / p.total) * 100)}% · ${p.deleted.toLocaleString()} of ${p.total.toLocaleString()} purged${failed}${left}`;
+    $('[data-role="milestone"]').textContent = `${Math.floor((done / p.total) * 100)}% · ${fmt(p.deleted)} of ${fmt(p.total)} purged${failed}${left}`;
+  }
+
+  // How a run that finished while minimised ended, for the orb and screen readers: a clean finish by
+  // its number, any other by its verdict.
+  function endingWords(p) {
+    const clean = state.orbDone && state.orbDone.clean && lastEnd && !lastEnd.failed;
+    if (clean) return { clean, title: `All clean~ ${fmt(p.deleted)} purged`, said: `all clean, ${fmt(p.deleted)} purged` };
+    const text = lastEnd ? lastEnd.text : '';
+    return { clean, title: text, said: text };
+  }
+
+  // After the main end handler: minimised, the region says how it ended (the panel isn't there to);
+  // open, it empties, so no stale milestone outlives the verdict.
+  function wireMilestone() {
+    on('end', (p) => {
+      const minimised = minimisedNow();
+      $('[data-role="milestone"]').textContent = minimised && state.orbDone ? `Dopa's Purifier: ${endingWords(p).title}` : '';
+    });
   }
 
   // ── Tabs ────────────────────────────────────────────────
 
+  // A tab switch glides the panel's height instead of cutting it (Arrow, Home and End can switch twice
+  // in one glide, so a glide still running hands over from where it is). Opening a list too long to
+  // lay out every frame (a heavy account's) cuts instead: a glide that drops frames is worse than none.
+  let tabGlide = null;
+  const GLIDE_ROWS = 300;
+
   function switchTab(tab, { initial = false } = {}) {
     const changed = tab !== state.tab;
     if (changed) cancelCount();
+    const panel = $('.panel');
+    const glide = !initial && changed && !reducedMotion() && !$('[data-role="layer"]').dataset.dragging && !panel.closest('[hidden]')
+      && !(tab === 'batch' && state.batchRows.size > GLIDE_ROWS);
+    const from = glide ? panel.offsetHeight : 0;
+    if (tabGlide) { tabGlide.cancel(); tabGlide = null; }
     state.tab = tab;
     prefs.tab = tab;
     if (!initial) savePrefs('tab');
@@ -1961,18 +2537,24 @@
       if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
       if (!state.guildsLoaded && !state.guildsLoading) loadServers();
     }
-    if (!initial && changed) $('[data-role="body"]').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
+    if (!initial && changed) $('[data-role="body"]').animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 200, easing: 'ease-out' });
     renderCurrent();
     layoutPanel();
+    const to = glide ? panel.offsetHeight : 0;
+    if (glide && Math.abs(to - from) > 1) {
+      tabGlide = panel.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: 240, easing: 'cubic-bezier(.22,1,.36,1)' });
+      const done = tabGlide;
+      done.finished.then(() => { if (tabGlide === done) tabGlide = null; }, () => {});
+    }
   }
 
   // ── Confirm dialog (hold to confirm) ────────────────────
 
   const HOLD_MS = 850;
-  const ARMED_MS = 5000; // how long a first assistive press waits for the second
+  const ARMED_MS = 15000; // how long a first assistive press waits for the second (a switch user needs time)
   const TAP_MS = 250; // a release sooner than this was a tap, not a change of mind
   const SLOP_PX = 12; // how far a finger or pen may drift off the button and still be holding it
-  let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed }
+  let modal = null; // { onConfirm, restoreFocus, label, openedAt, armed, channelId }
   let dialogTimer = 0;
 
   // The hold button's words, each a [text, flair] pair (the line's one emoji, unspoken). The two long
@@ -2002,21 +2584,36 @@
       t.guildId && t.context ? [' ', h('span', { class: 'pill-context', text: `· ${t.context}` })] : null);
   }
 
-  function confirmDialog({ title, lead, pill, list, who, confirmLabel, onConfirm }) {
+  // A purge that takes a while says so at the moment you commit to it: how long, and that Discord has
+  // to stay open. What you send meanwhile is safe, since a run never touches messages newer than the
+  // moment you confirmed (run.capId).
+  const LONG_PURGE_S = 120;
+  const KEEP_OPEN = "keep Discord open~ messages you send now aren't touched";
+  const longPurge = (n, more = false) => (n > 0 && estimateSeconds(n) >= LONG_PURGE_S ? { seconds: estimateSeconds(n), more } : null);
+
+  // channelId: the chat a This chat dialog asks about. Moving to another chat closes it (see navigated);
+  // a Many chats dialog has none and stays.
+  // time: { seconds, more } for a long purge (see longPurge), said between who and the warning.
+  function confirmDialog({ title, lead, pill, list, listLabel, who, time = null, confirmLabel, onConfirm, channelId = null }) {
     if (modal) return;
     const layer = $('.modal-layer');
     $('[data-role="modal-title"]').textContent = title;
     $('[data-role="modal-text"]').replaceChildren(...[
       h('p', { class: 'modal-lead', id: 'dp-modal-lead' }, lead),
       pill && targetPill(pill),
-      list && h('div', { class: 'modal-list', role: 'list', 'aria-label': plural(list.length, 'chat'), tabindex: '0' },
-        list.map((item) => h('div', { class: 'modal-item', role: 'listitem' },
+      list && h('div', { class: 'modal-list', role: 'list', 'aria-label': listLabel || plural(list.length, 'chat'), tabindex: '0' },
+        list.map((item) => (item instanceof Node ? item : h('div', { class: 'modal-item', role: 'listitem' },
           h('span', { class: 'modal-item-name', title: item.label, text: item.label }),
-          h('span', { class: `modal-item-meta${item.tone ? ` is-${item.tone}` : ''}`, text: item.meta })))),
+          h('span', { class: `modal-item-meta${item.tone ? ` is-${item.tone}` : ''}`, text: item.meta }))))),
       who && h('div', { class: 'modal-who', id: 'dp-modal-who' }, 'deleting as ', h('b', { text: `@${who}` })),
+      time && h('div', { class: 'modal-time', id: 'dp-modal-time' }, `About ${formatDuration(time.seconds)}${time.more ? '+' : ''}${SEP}${KEEP_OPEN}`),
       h('div', { class: 'modal-warn', id: 'dp-modal-warn' }, h('span', {}, flaired("This can't be undone", '🩸'))),
     ].filter(Boolean));
-    modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0 };
+    const modalEl = $('.modal');
+    const described = (modalEl.getAttribute('aria-describedby') || '').split(/\s+/).filter((id) => id && id !== 'dp-modal-time');
+    if (time) described.splice(Math.max(0, described.indexOf('dp-modal-warn')), 0, 'dp-modal-time');
+    modalEl.setAttribute('aria-describedby', described.join(' '));
+    modal = { onConfirm, restoreFocus: root.activeElement, label: confirmLabel, openedAt: performance.now(), armed: 0, channelId };
     hold.pointer = false;
     hold.sealed = false;
     clearTimeout(dialogTimer);
@@ -2028,6 +2625,10 @@
     resetHold();
     for (const el of behindDialog()) el.inert = true;
     $('[data-act="cancel"]').focus();
+    // Once the dialog has faded in (160 ms), while it is read and long before the earliest commit
+    // (HOLD_MS after a press): the commit then only plays.
+    clearTimeout(sound.primeTimer);
+    sound.primeTimer = setTimeout(primeSound, 240);
   }
 
   function closeDialog(confirmed) {
@@ -2059,10 +2660,11 @@
   }
 
   // key: the key (Space or Enter) holding the button down, until it is released.
-  const hold = { start: 0, timer: 0, active: false, sealed: false, nudge: 0, pointer: false, anim: null, key: null };
+  const hold = { start: 0, timer: 0, words: 0, active: false, sealed: false, nudge: 0, pointer: false, anim: null, key: null };
 
   function resetHold() {
     clearTimeout(hold.timer);
+    clearTimeout(hold.words);
     clearTimeout(hold.nudge);
     hold.active = false;
     if (hold.anim) { hold.anim.cancel(); hold.anim = null; }
@@ -2080,7 +2682,9 @@
     hold.start = performance.now();
     const btn = $('[data-act="confirm"]');
     btn.classList.add('is-holding');
-    holdLabel(HOLD_WORDS.holding);
+    // The fill moves from the first frame; the words change only once it's a hold, so a tap reads as
+    // one change ('Hold it down~'), never three.
+    hold.words = setTimeout(() => { if (hold.active) holdLabel(HOLD_WORDS.holding); }, TAP_MS);
     hold.anim = $('.hold-fill').animate([{ transform: 'translateX(-100%)' }, { transform: 'translateX(0)' }],
       { duration: HOLD_MS, easing: 'linear', fill: 'forwards' });
     const commit = () => {
@@ -2138,7 +2742,7 @@
     resetHold();
   }
 
-  // Tab cycles Nevermind → Hold → the list of chats (to read it through) and back; from anywhere
+  // Tab cycles Never mind → Hold → the list of chats (to read it through) and back; from anywhere
   // else in the dialog it starts at the safe choice.
   function trapFocus(e) {
     if (!modal || e.key !== 'Tab') return;
@@ -2162,22 +2766,29 @@
 
   const LOG_LIMIT = 800;
   const LOG_PREFIX = { success: '♡', error: '✗', warn: '⚠', info: '›', skip: '·' };
+  // Only the marks that carry meaning are read, as words; the rest are decoration.
+  const SAID_PREFIX = { error: 'Error', warn: 'Warning' };
+
+  function linePrefix(tone, text) {
+    return SAID_PREFIX[tone] ? h('span', { class: 'line-pfx', role: 'img', 'aria-label': SAID_PREFIX[tone] }, h('span', { 'aria-hidden': 'true', text }))
+      : h('span', { class: 'line-pfx', 'aria-hidden': 'true', text });
+  }
 
   function bannerLine(text) {
-    return h('div', { class: 'line banner' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text }));
+    return h('div', { class: 'line banner' }, linePrefix('banner', '>'), h('span', { class: 'line-msg', text }));
   }
 
   function logBanner() {
     return [
       bannerLine('wake up, princess~'),
-      bannerLine('loading heart.sys · dagger.dll'),
+      bannerLine(`dopa-os v${VERSION} · loading heart.sys · dagger.dll`),
       bannerLine(`immune · ${immuneSummary()}`),
       bannerLine('♡ SYSTEM ONLINE ♡'),
       bannerLine('AWAITING ORDERS, PRINCESS~'),
-      h('div', { class: 'line banner rule' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text: '♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡' })),
+      h('div', { class: 'line banner rule', 'aria-hidden': 'true' }, h('span', { class: 'line-pfx', text: '>' }), h('span', { class: 'line-msg', text: '♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡' })),
       h('div', { class: 'line prompt', 'data-role': 'prompt' },
         h('span', { class: 'prompt-who', text: 'dopa@mainframe' }),
-        h('span', { class: 'prompt-sep', text: ' ♡ ' }),
+        h('span', { class: 'prompt-sep', 'aria-hidden': 'true', text: ' ♡ ' }),
         h('span', { class: 'prompt-cmd', 'data-role': 'prompt-cmd' }),
         h('span', { class: 'cursor', 'aria-hidden': 'true' })),
     ];
@@ -2207,7 +2818,7 @@
     const time = new Date().toTimeString().slice(0, 8);
     const line = h('div', { class: `line ${tone}${wrap ? ' wrap' : ''}` },
       h('span', { class: 'line-time', text: time }),
-      h('span', { class: 'line-pfx', text: LOG_PREFIX[tone] || '›' }),
+      linePrefix(tone, LOG_PREFIX[tone] || '›'),
       h('span', { class: 'line-msg', text }));
     if (scrub) line.dataset.scrub = scrub;
     body.insertBefore(line, $('[data-role="prompt"]'));
@@ -2236,6 +2847,7 @@
         logExit.cancel();
         logExit = null;
         delete term.dataset.leaving;
+        placeTerminal();
       } else if (term.hidden) {
         term.hidden = false;
         placeTerminal();
@@ -2246,6 +2858,7 @@
       body.scrollTop = body.scrollHeight;
     } else if (isOpen) {
       term.dataset.leaving = 'true'; // clicks go through it to whatever is underneath
+      unplaceTerminal();
       const exit = term.animate(reducedMotion() ? [{ opacity: 1 }, { opacity: 0 }]
         : [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(4px) scale(.985)' }], { duration: 140, easing: 'cubic-bezier(.4,0,1,1)' });
       logExit = exit;
@@ -2254,36 +2867,78 @@
         logExit = null;
         delete term.dataset.leaving;
         term.hidden = true;
+        unplaceTerminal();
         applyFocus();
       }, () => {});
     }
     applyFocus();
   }
 
-  // The log sits beside the panel, on whichever side has room for it, and narrows to fit. With
-  // no room on either side it tucks behind the panel, so Pause and Stop always stay in reach.
+  // The log sits beside the panel, on whichever side has room for it, narrowed to fit and as tall as
+  // the panel. With no room on either side it becomes a sheet over the panel's body, above its
+  // footer, so Pause, Stop, Logs and the status stay uncovered; what it covers can't be reached.
+  const UNDER_SHEET = ['.head', '.tabs', '[data-role="body"]', '[data-role="welcome"]'];
+
+  function sheetCovers(on) {
+    const welcome = $('[data-role="welcome"]');
+    const welcoming = !welcome.hidden && !welcome.dataset.leaving;
+    for (const sel of UNDER_SHEET) {
+      const el = $(sel);
+      // Lifting the sheet leaves the welcome's own cover where it was.
+      el.inert = on || (welcoming && underWelcome().includes(el)) || (el === welcome && !!welcome.dataset.leaving);
+    }
+  }
+
   function placeTerminal() {
     const term = $('.term');
     if (term.hidden) return;
-    const panel = $('.panel').getBoundingClientRect();
-    const hgt = term.offsetHeight || 440;
+    const panelEl = $('.panel');
+    // The panel's own box, not its wobble: a squash after a finish or a drop scales the drawn rect,
+    // and at a window where the room beside is just enough it would push the log over the panel.
+    const shellEl = $('[data-role="shell"]');
+    const left0 = shellEl.offsetLeft + panelEl.offsetLeft;
+    const top0 = shellEl.offsetTop + panelEl.offsetTop;
+    const panel = { left: left0, top: top0, width: panelEl.offsetWidth, right: left0 + panelEl.offsetWidth };
     const gap = 14;
     const MIN = 280;
     const roomL = panel.left - gap - 8;
     const roomR = innerWidth - panel.right - gap - 8;
-    let w = Math.min(380, innerWidth - 16);
-    let left = 8;
-    if (roomL >= MIN) {
-      w = Math.min(380, roomL);
-      left = panel.left - gap - w;
-    } else if (roomR >= MIN) {
-      w = Math.min(380, roomR);
-      left = panel.right + gap;
+    let w;
+    let left;
+    let top;
+    let hgt;
+    if (roomL >= MIN || roomR >= MIN) {
+      w = Math.min(380, roomL >= MIN ? roomL : roomR);
+      left = roomL >= MIN ? panel.left - gap - w : panel.right + gap;
+      // offsetHeight ignores the drag's tilt.
+      hgt = clamp(panelEl.offsetHeight, 300, innerHeight - 16);
+      top = clamp(panel.top, 8, Math.max(8, innerHeight - hgt - 8));
+      if (term.hasAttribute('data-over')) {
+        delete term.dataset.over;
+        sheetCovers(false);
+      }
+    } else {
+      const foot = $('.foot').getBoundingClientRect();
+      w = panel.width;
+      left = panel.left;
+      top = panel.top;
+      hgt = Math.max(120, foot.top - panel.top - 8);
+      term.dataset.over = '';
+      sheetCovers(true);
     }
-    const top = clamp(panel.top, 8, Math.max(8, innerHeight - hgt - 8));
     term.style.width = `${Math.round(w)}px`;
+    term.style.height = `${Math.round(hgt)}px`;
     term.style.left = `${Math.round(left)}px`;
     term.style.top = `${Math.round(top)}px`;
+  }
+
+  // Closing the log lifts the sheet at once, and its size goes once it has faded.
+  function unplaceTerminal() {
+    const term = $('.term');
+    if (term.hasAttribute('data-over')) sheetCovers(false);
+    if (!term.hidden) return;
+    delete term.dataset.over;
+    term.style.height = '';
   }
 
   async function copyLog() {
@@ -2310,7 +2965,9 @@
       wob.raf = requestAnimationFrame(animateWobble);
     } else {
       wob.rot.settle(); wob.sx.settle(); wob.sy.settle();
-      el.style.transform = '';
+      // Settled on a tilt (a drag held still mid-way) it stays there; only true rest clears it.
+      const rest = wob.rot.target === 0 && wob.sx.target === 1 && wob.sy.target === 1;
+      el.style.transform = rest ? '' : `rotate(${wob.rot.value.toFixed(3)}deg)`;
       wob.raf = 0;
     }
   }
@@ -2326,26 +2983,30 @@
     }
   }
 
-  // Kills are the panel's only clock: each one pops the count, pings the live dot and brings the
-  // footer's new line in. Nothing else keeps time, so a wait or a stall is visibly still.
+  // Kills are the panel's only clock: each one pops the count and pings the live dot (and in Many
+  // chats, where the footer's line changes per kill, brings it in). Nothing else keeps time, so a wait
+  // or a stall is visibly still. Every beat is a transform or an opacity, so the compositor plays it
+  // and a long purge costs the page next to nothing.
   function popCount() {
     if (!fxVisible()) return;
-    if (!run.paused && !run.stopping) $('[data-role="status-text"]').animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
     if (reducedMotion()) return;
-    $('[data-role="count"]').animate([
-      { transform: 'scale(1.04)', color: 'var(--rose-300)', textShadow: '0 0 22px rgba(255, 122, 169, .8)' },
-      { transform: 'none' },
-    ], { duration: 300, easing: 'cubic-bezier(.22,1,.36,1)' });
-    $('.live-dot').animate([{ boxShadow: '0 0 0 0 rgba(255, 122, 169, .6)' }, { boxShadow: '0 0 0 6px rgba(255, 122, 169, 0)' }],
-      { duration: 600, easing: 'cubic-bezier(.22,1,.36,1)' });
+    if (!run.paused && !run.stopping && state.runMode === 'batch') {
+      $('[data-role="status-text"]').animate([{ opacity: 0.7 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
+    }
+    $('[data-role="count"]').animate([{ transform: 'scale(1.06)' }, { transform: 'none' }], { duration: 300, easing: 'cubic-bezier(.22,1,.36,1)' });
+    const dot = $('.live-dot');
+    if (dot.getClientRects().length) {
+      dot.animate([{ transform: 'scale(1)', opacity: 0.6 }, { transform: 'scale(3)', opacity: 0 }],
+        { duration: 600, easing: 'cubic-bezier(.22,1,.36,1)', pseudoElement: '::after' });
+    }
   }
 
   // A couple of drops fall from just outside the ring's leading edge, clear of the number.
-  const fxVisible = () => !document.hidden && !$('[data-role="shell"]').hidden;
+  const fxVisible = () => !document.hidden && !minimisedNow();
 
   function bleed() {
-    if (reducedMotion() || !fxVisible()) return;
     const zone = $('.blood');
+    if (reducedMotion() || !fxVisible() || !zone.getClientRects().length) return; // not drawn: Many chats, a strip
     while (zone.childElementCount > 9) zone.firstElementChild.remove();
     const { x, y, angle } = ringHead(lastSnapshot ? lastSnapshot.total : 0);
     const ox = Math.cos(angle) * 12;
@@ -2369,9 +3030,10 @@
 
   // Confetti bursts outward from the ring's rim, so it frames the number instead of covering it.
   function celebrate() {
-    kick({ squash: 0.35 }); // an exhale, not a jolt
-    if (reducedMotion() || !fxVisible()) return;
     const fx = $('[data-role="burst"]');
+    if (!fxVisible() || !fx.getClientRects().length) return; // nowhere to see it: no exhale either
+    kick({ squash: 0.35 }); // an exhale, not a jolt
+    if (reducedMotion()) return;
     const box = fx.getBoundingClientRect();
     const g = $('.gauge').getBoundingClientRect();
     const cx = g.left + g.width / 2 - box.left;
@@ -2432,9 +3094,22 @@
     }
   }
 
-  // Never dragged: stay anchored to the right edge at any window size.
+  // The panel is docked to the side it was dragged nearer to, at the same gap from that edge, so a
+  // window that grows keeps it where you left it. Never dragged: the right edge at any window size.
+  function dockFor(x, y) {
+    const w = panelSize().w || 360;
+    const side = x + w / 2 > innerWidth / 2 ? 'right' : 'left';
+    return { side, dx: side === 'right' ? innerWidth - x - w : x, y };
+  }
+
   function homePosition() {
-    return prefs.x != null && prefs.y != null ? { x: prefs.x, y: prefs.y } : defaultPosition();
+    if (!prefs.dock && prefs.x != null && prefs.y != null) {
+      prefs.dock = dockFor(prefs.x, prefs.y); // a spot saved before docking, read once in this window
+      savePrefs('dock');
+    }
+    const d = prefs.dock;
+    if (!d) return defaultPosition();
+    return { x: d.side === 'right' ? innerWidth - d.dx - (panelSize().w || 360) : d.dx, y: d.y };
   }
 
   const MIN_PANEL = 400;
@@ -2453,9 +3128,13 @@
     const maxH = Math.max(240, innerHeight - top - 12);
     $('.panel').style.maxHeight = `${maxH}px`;
     // The height tier follows the real cap, and never reshapes under a drag. Natural heights: full
-    // 536, snug 460 and strip 344 px, plus 18 for a chat name on two lines.
+    // 532, snug 460 and strip 334 px, plus 18 for a chat name on two lines. Below the strip, tight
+    // lets the strip scroll away so the rows and the card can be reached.
     const layer = $('[data-role="layer"]');
-    if (!layer.dataset.dragging) layer.dataset.fit = maxH >= 556 ? 'full' : maxH >= 482 ? 'snug' : 'strip';
+    if (!layer.dataset.dragging) {
+      layer.dataset.fit = maxH >= 556 ? 'full' : maxH >= 482 ? 'snug' : 'strip';
+      layer.toggleAttribute('data-tight', maxH < 330);
+    }
     placeTerminal();
     placeOrb();
   }
@@ -2496,17 +3175,22 @@
         wob.rot.target = clamp(drag.vx * 0.25, -3.5, 3.5);
         kick();
       }
+      // A hand that holds still levels the panel out gently, rather than at the next twitch.
+      clearTimeout(drag.still);
+      drag.still = setTimeout(() => { if (drag && drag.moved) { wob.rot.target = 0; kick(); } }, 80);
     });
     const end = (e) => {
       if (!drag || e.pointerId !== drag.id) return;
       const { moved, vx } = drag;
+      clearTimeout(drag.still);
       drag = null;
       if (!moved) return;
       wob.rot.target = 0;
       kick({ squash: Math.min(0.25, Math.abs(vx) * 0.01) });
       delete layer.dataset.dragging;
       layoutPanel(); // the height tier waited for the drop
-      savePrefs('x', 'y');
+      prefs.dock = dockFor(prefs.x, prefs.y);
+      savePrefs('dock');
     };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
@@ -2526,6 +3210,9 @@
   // cross-fade in place.
   const DRAWER = 'cubic-bezier(.32, .72, 0, 1)';
   let fold = null; // { open, anims }: the fold in flight, settled when its last animation ends
+  // Minimised, or on the way there: the shell only hides once the fold ends, and a finish that lands
+  // mid-fold belongs to the orb.
+  const minimisedNow = () => (fold ? !fold.open : $('[data-role="shell"]').hidden);
 
   function foldAnimations(open, panel, orb) {
     if (reducedMotion()) {
@@ -2570,12 +3257,20 @@
       orb.hidden = now;
       layer.dataset.open = String(now);
       applyFocus();
+      if (now) renderHero(); // a finish that landed while minimised plays its beats now
     };
     if (open) {
       state.orbDone = null;
+      $('[data-role="milestone"]').textContent = '';
       shell.hidden = false;
       const home = homePosition();
       placeShell(home.x, home.y);
+      // Minimised, the panel rested: it reads the chat you're on now, and the lists you'd see.
+      if (routeStale && !initial) {
+        routeStale = false;
+        refreshRoute();
+        if (state.tab === 'batch') loadPendingLists();
+      }
       applyFocus();
     } else {
       cancelCount();
@@ -2644,10 +3339,21 @@
   // The last look over a counted chat, after its last message went: the card says so.
   const lastLook = () => run.active && !run.paused && state.runMode === 'current' && verifying();
 
+  // This chat's footer while purifying: the card names the chat, so this says the one useful thing.
+  // A wait or a failure line gives way to it again at the next message that goes.
+  const RUN_LINE = 'Purifying~ you can minimise me';
+  // Discord's system messages that nobody can delete, by type, for the log.
+  const KEPT_KINDS = { 1: 'member-added notice', 2: 'member-left notice', 3: 'call notice', 4: 'name change notice', 5: 'icon change notice', 21: 'thread starter' };
+  let skippedTypes = new Set(); // this run's skipped system messages, by type
+
   function wireRunEvents() {
     on('start', ({ targets }) => {
       $('[data-role="count"]').textContent = '0';
-      setStatus(targets.length > 1 ? `Starting on ${plural(targets.length, 'chat')}~` : `Purging \u2068${targets[0].name}\u2069~`, 'info', { flair: '✨' });
+      skippedTypes = new Set();
+      state.outcome = null;
+      state.runNow = null;
+      if (state.runMode === 'current') setStatus(RUN_LINE, 'info', { flair: '✨' });
+      else setStatus(targets.length > 1 ? `Starting on ${plural(targets.length, 'chat')}~` : `Purifying \u2068${targets[0].name}\u2069~`, 'info', { flair: '✨' });
       for (const t of targets) addLog(`queued: ${t.label || t.name}`, 'info');
       renderCurrent();
       renderActions();
@@ -2655,9 +3361,11 @@
     on('target-start', ({ target, index, count }) => {
       setPrompt(`purge ${target.name}`);
       addLog(`── Starting: ${target.label || target.name} ──`, 'info');
-      if (count > 1) setStatus(`Chat ${index + 1} of ${count} · \u2068${target.name}\u2069`, 'info');
+      if (count > 1) setStatus(`Chat ${index + 1} of ${count}${SEP}\u2068${target.name}\u2069`, 'info');
       if (target.row) setRowState(target, 'running');
       revealRow(target);
+      state.runNow = target;
+      if (state.runMode === 'batch') renderCurrent(); // This chat's card names the chat being purified
     });
     on('dm-opened', ({ target, previousKey }) => {
       if (target.row) rekeyRow(target, previousKey);
@@ -2675,9 +3383,10 @@
       addLog(`Deleted: "${preview(msg)}"`, 'success', { scrub: `Deleted ✓ ${target.name}` });
       if (!run.paused && !run.stopping) {
         if (state.runMode === 'batch') {
+          // The numbers first: a long name is what the line cuts, never the progress.
           const i = state.runTargets.indexOf(target) + 1;
-          setStatus(`Chat ${i} of ${state.runTargets.length} · \u2068${target.name}\u2069 · ${target.deleted.toLocaleString()} of ${target.planned ? target.planned.toLocaleString() : '?'}`, 'info', { quiet: true });
-        } else setStatus(`Deleted "${preview(msg, 34)}"`, 'info', { quiet: true, flair: '♡' });
+          setStatus(`Chat ${i} of ${state.runTargets.length}${SEP}${fmt(target.deleted)} of ${target.planned ? fmt(target.planned) : '?'}${SEP}\u2068${target.name}\u2069`, 'info', { quiet: true });
+        } else if ($('[data-role="status"]').title !== RUN_LINE) setStatus(RUN_LINE, 'info', { quiet: true, flair: '✨' });
       }
       if (target.row) setRowState(target, 'running');
     });
@@ -2686,7 +3395,8 @@
       ring.done++;
       const tags = [msg.pinned && 'pinned', msg.type && msg.type !== 0 && msg.type !== 19 && 'system'].filter(Boolean);
       addLog(`FAILED · ${shortReason(reason)}${tags.length ? ` · ${tags.join(', ')}` : ''} · "${preview(msg, 40)}"`, 'error');
-      if (!run.paused && !run.stopping) setStatus(`Couldn't delete "${preview(msg, 24)}" · ${shortReason(reason)}`, 'warn', { quiet: true });
+      // A message's words stay in the log: the footer can be on a shared screen.
+      if (!run.paused && !run.stopping) setStatus(`A message couldn't be purged${SEP}${shortReason(reason)}`, 'warn', { quiet: true });
       if (target.row) setRowState(target, 'running');
     });
     on('gone', ({ msg }) => {
@@ -2699,6 +3409,7 @@
       // A run the switch stopped keeps its verdict on screen; anything else was the old account's.
       const keepVerdict = lastEnd && lastEnd.error;
       if (!keepVerdict) lastEnd = null;
+      state.runCounted.clear(); // the engine dropped every count
       state.selected.clear();
       state.batchRows.clear();
       state.dmsLoaded = false;
@@ -2711,12 +3422,15 @@
       $('[data-role="dm-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your DMs…' }));
       $('[data-role="server-list"]').replaceChildren(h('div', { class: 'list-empty', text: 'Finding your servers…' }));
       addLog('switched Discord accounts — counts and lists reset', 'warn');
-      if (!keepVerdict) setStatus('Switched Discord accounts~ scan again to count', 'warn');
+      if (!keepVerdict) setStatus('Switched Discord accounts~ count again', 'warn');
       if (state.tab === 'batch' && !run.active) { loadDMs(); loadServers({ refresh: true }); }
       // Re-read the chat without a fresh "Ready~": the switch notice (or the stopped run's error) stays.
       setTimeout(() => refreshRoute({ keepScan: true, keepStatus: true }), 0);
     });
-    on('skip', ({ msg }) => addLog(`skipped a system message (type ${msg.type}) — Discord won't delete those`, 'skip'));
+    on('skip', ({ msg }) => {
+      skippedTypes.add(msg.type);
+      addLog(`kept a ${KEPT_KINDS[msg.type] || 'system message'} — Discord doesn't let anyone delete those`, 'skip');
+    });
     on('wait', (w) => {
       showWait(w);
       addLog(waitText(w), 'warn');
@@ -2724,17 +3438,17 @@
     on('log', ({ text, tone }) => addLog(text, tone));
     on('target-end', ({ target, ok, error, immune, midway, stopped, warn }) => {
       if (immune) addLog(midway ? `${target.name} was shielded in another tab — stopped purging there` : `${target.name} is immune — skipped`, 'warn');
-      else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${(target.deleted || 0).toLocaleString()} purged) ──`, 'info');
+      else if (ok || warn) addLog(`── Finished: ${target.label || target.name} (${fmt(target.deleted || 0)} purged) ──`, 'info');
       if (target.row) setRowState(target, immune ? 'immune' : ok ? 'done' : warn ? 'partial' : stopped ? 'stopped' : 'error', error || warn);
     });
     // What the person chose, and the run's own pace, are calm: no alarm badge.
     on('pause', (p) => {
-      setStatus(`Paused~ ${p.deleted.toLocaleString()} purged so far`, 'calm');
+      setStatus('Resume picks up right here~', 'calm');
       renderCurrent();
       renderActions();
     });
     on('resume', () => {
-      setStatus('Purging again~', 'info', { flair: '✨' });
+      setStatus(state.runMode === 'current' ? RUN_LINE : 'Purifying again~', 'info', { flair: '✨' });
       renderCurrent();
       renderActions();
     });
@@ -2751,61 +3465,122 @@
       addLog('────────────────────', 'info');
       if (p.error) addLog(`STOPPED · ${plainError(p).short}`, 'error');
       else if (p.stopped) addLog('STOPPED by you · nothing after this point was touched', 'warn');
-      addLog(`SUMMARY: ${p.deleted.toLocaleString()} purged, ${p.failed.toLocaleString()} failed${p.skipped ? `, ${p.skipped} system skipped` : ''}`, 'info');
+      addLog(`SUMMARY: ${fmt(p.deleted)} purged, ${fmt(p.failed)} failed${p.skipped ? `, ${p.skipped} system skipped` : ''}`, 'info');
       if (p.failures.length) {
         addLog('FAILED MESSAGES:', 'error');
         const shown = p.failures.slice(0, 50);
         shown.forEach((f, i) => addLog(`${i + 1}. ${shortReason(f.reason)}${f.msg.pinned ? ' · pinned' : ''} · "${preview(f.msg, 40)}"`, 'error'));
-        if (p.failures.length > shown.length) addLog(`…and ${(p.failures.length - shown.length).toLocaleString()} more`, 'error');
+        if (p.failures.length > shown.length) addLog(`…and ${fmt(p.failures.length - shown.length)} more`, 'error');
       }
       scrubLog();
-      const minimised = $('[data-role="shell"]').hidden;
+      const minimised = minimisedNow();
       const purged = plural(p.deleted, 'message');
       const problems = p.problems || [];
       const shielded = p.shielded || [];
       const key = state.runKey;
-      if (problems.length) {
-        addLog(`NEEDS ANOTHER LOOK: ${problems.map((x) => `${x.target.name} (${shortReason(x.reason)})`).join(', ')}`, 'warn');
-      }
+      const done = p.elapsedMs ? `Done in ${formatDuration(p.elapsedMs / 1000)}` : 'Done~';
+      // A chat you can't read is a calm fact: only the other problems need another look.
+      const locked = problems.filter((x) => plainError(x.reason).code === 'no-access');
+      const real = problems.filter((x) => !locked.includes(x));
+      const lockedNames = locked.map((x) => x.target.name).join(', ');
+      if (real.length) {
+        addLog(`NEEDS ANOTHER LOOK: ${real.map((x) => `${x.target.name} (${shortReason(x.reason)})`).join(', ')}${locked.length ? ` · skipped (no access): ${lockedNames}` : ''}`, 'warn');
+      } else if (locked.length) addLog(`skipped (no access): ${lockedNames}`, 'info');
+      // This chat's run, finished while another chat is open: the footer names the chat it was in.
+      const runChat = state.runMode === 'current' ? state.runTargets[0] : null;
+      const live = routeTarget();
+      const away = !!runChat && (!live || live.channelId !== runChat.channelId);
+      const there = runChat ? iso(runChat.name) : '';
+      let elsewhere = null;
+      // lastEnd is what the finish says, read by the readout (text), the strip (strip, else text), the
+      // mood, the sticker, the footer and the finish beats (confetti) until the context changes.
       if (p.error) {
         const plain = plainError(p);
-        if (plain.code === 'switched') {
-          setStatus('Stopped to be safe~ you switched Discord accounts', 'warn');
-          lastEnd = { key, text: `Stopped to be safe~ you switched accounts · ${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'error', error: plain.code };
-        } else {
-          // A purge that broke off carries on with Purify; Try again is This chat's way to count.
-          setStatus(plain.short, 'error');
-          lastEnd = { key, text: plain.line.replace(/press Try again$/, 'press Purify to finish'), tone: 'error', error: plain.code };
-        }
+        // A purge that broke off carries on with Purify; the strip keeps that next step in its one line.
+        const STRIPS = {
+          captcha: 'Take a break, then press Purify', network: 'Check your internet, then press Purify',
+          'logged-out': 'Reload Discord, then press Purify', server: 'Discord is busy~ press Purify in a minute',
+          switched: 'Stopped to be safe~ you switched accounts', indexing: 'Discord may find older ones later~',
+        };
+        const text = plain.code === 'logged-out' ? "Couldn't use your Discord login~ reload Discord, then press Purify to finish"
+          : plain.line.replace(/press Try again$/, 'press Purify to finish');
+        const footer = plain.code === 'switched'
+          ? { text: `Switched accounts~ ${purged} purged${state.runAs ? ` as @${state.runAs}` : ''}`, tone: 'warn' }
+          : { text: plain.short, tone: 'error' };
+        lastEnd = { key, text, strip: STRIPS[plain.code], tone: 'error', error: plain.code, footer };
+        if (away && plain.code !== 'switched') elsewhere = { text: `${plain.short} in ${there}`, tone: 'error' };
       } else if (p.stopped) {
-        const handled = p.deleted + p.failed + (p.gone || 0);
-        setStatus('Stopped~ Purify picks up the rest', 'calm');
-        lastEnd = { key, text: p.total > 0 && !p.partial ? `Stopped at ${handled.toLocaleString()} of ${p.total.toLocaleString()}~` : `Stopped~ ${purged} purged`, tone: 'paused', stopped: true };
-      } else if (problems.length) {
-        const n = problems.length;
-        const indexingOnly = problems.every((x) => /indexing/i.test(x.reason));
-        setStatus(indexingOnly ? `${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go later~ Discord is still indexing`
-          : `${plural(n, 'chat')} skipped · ${shortReason(problems[0].reason)}${n > 1 ? ' and more' : ''} · see Logs`, 'warn');
-        lastEnd = { key, text: indexingOnly ? `Purged ${purged} · run again later for older ones` : `Purged ${purged} · ${plural(n, 'chat')} skipped`, tone: 'warn', failed: p.failed, problems: n };
+        const left = p.total - p.deleted - (p.gone || 0);
+        const known = p.total > 0 && !p.partial;
+        lastEnd = {
+          key, text: known ? `Stopped~ ${fmt(left)} of yours still here` : 'Stopped~ the rest are still here', tone: 'paused', stopped: true,
+          footer: { text: 'Purify picks up the rest~', tone: 'calm', sr: known ? `${fmt(left)} of yours still here. ` : 'The rest are still here. ' },
+        };
+        if (away) elsewhere = { text: `Stopped in ${there}~ Purify there picks up the rest`, tone: 'calm' };
+      } else if (runChat && real.length) {
+        // This chat says what happened to it, never 'chat skipped' or 'fought back'.
+        const plain = plainError(real[0].reason);
+        lastEnd = plain.code === 'indexing'
+          ? {
+            key, text: 'Discord may find older ones later~', tone: 'paused', failed: p.failed, problems: 1, mood: 'almost there, princess~',
+            footer: { text: 'Purify again later to catch them~', tone: 'calm' },
+          }
+          : {
+            key, text: plain.line, tone: 'error', failed: p.failed, problems: 1, mood: plain.code === 'no-access' ? 'that door is locked~' : 'oh no… something broke',
+            footer: { text: plain.short, tone: 'error' },
+          };
+        if (away) elsewhere = { text: `${lastEnd.footer.text.replace(/~$/, '')} in ${there}`, tone: lastEnd.footer.tone };
+      } else if (real.length) {
+        const n = real.length;
+        if (real.every((x) => plainError(x.reason).code === 'indexing')) {
+          lastEnd = {
+            key, text: 'Discord may find older ones later~', tone: 'paused', failed: p.failed, problems: n, locked: locked.length,
+            footer: { text: `${plural(n, 'chat')} need${n === 1 ? 's' : ''} another go later~ Discord is still searching`, tone: 'calm' },
+          };
+        } else {
+          const text = n === 1 ? `1 chat skipped${SEP}${shortReason(real[0].reason)}` : `${fmt(n)} chats skipped`;
+          lastEnd = { key, text, tone: 'warn', failed: p.failed, problems: n, locked: locked.length, footer: { text: `${done}${SEP}reasons in Logs`, tone: 'warn', sr: `${text}. ` } };
+        }
       } else if (shielded.length) {
         // Shielded from another tab mid-purge: what's left there stays on purpose, so no "all clean".
-        const who = shielded.length === 1 ? `\u2068${shielded[0]}\u2069` : plural(shielded.length, 'chat');
-        setStatus(`Done~ ${who} stays shielded`, 'immune');
-        lastEnd = { key, text: `Purged ${purged} · ${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length };
+        const who = shielded.length === 1 ? `⁨${shielded[0]}⁩` : plural(shielded.length, 'chat');
+        lastEnd = {
+          key, text: `Purged ${purged}${SEP}${who} shielded midway`, tone: 'warn', failed: p.failed, shielded: shielded.length,
+          footer: { text: `Done~ ${who} stays shielded`, tone: 'immune' },
+        };
       } else if (p.failed) {
-        setStatus(`Done~ ${p.failed.toLocaleString()} wouldn't go · reasons in Logs`, 'warn');
-        lastEnd = { key, text: `Purged ${p.deleted.toLocaleString()} · ${p.failed.toLocaleString()} wouldn't go`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~' };
-        if (p.deleted > 0) celebrate();
+        lastEnd = {
+          key, text: `${plural(p.failed, 'message')} couldn't be purged`, tone: 'warn', failed: p.failed, sticker: 'mostly clean~', confetti: p.deleted > 0, locked: locked.length,
+          footer: { text: `${done}${SEP}reasons in Logs`, tone: 'warn', sr: `${fmt(p.failed)} couldn't be purged. ` },
+        };
+        if (away) elsewhere = { text: `Done~ ${there}${SEP}${fmt(p.failed)} couldn't be purged${SEP}reasons in Logs`, tone: 'warn' };
+      } else if (locked.length) {
+        // Only chats you can't read were skipped: a clean finish for everything that could be reached.
+        const n = locked.length;
+        const text = p.deleted ? `Purged ${purged}~ skipped ${plural(n, 'chat')} you can't read` : `Nothing purged~ ${plural(n, 'chat')} you can't read`;
+        const skipped = n === 1 ? iso(locked[0].target.name) : plural(n, 'chat');
+        const mood = n === 1 ? 'one door stayed locked~' : 'some doors stayed locked~';
+        lastEnd = p.deleted
+          ? { key, text, flair: '✨', tone: 'cheer', sticker: 'flawless~', confetti: true, locked: n, mood, footer: { text: `${done}${SEP}skipped ${skipped}`, tone: 'success', flair: '♡', sr: `${text}. ` } }
+          : { key, text, tone: 'warn', locked: n, mood, footer: { text: `Nothing purged${SEP}skipped ${skipped}`, tone: 'warn', sr: `${text}. ` } };
       } else if (p.deleted) {
-        setStatus(`Done in ${formatDuration(p.elapsedMs / 1000)} · 0 failed`, 'success', { flair: '♡' });
-        lastEnd = { key, text: 'All clean~ nothing left of you here', flair: '✨', tone: 'cheer', sticker: 'flawless~' };
-        celebrate();
+        // Truthful about what stays: nobody can delete Discord's own notices, such as a call's.
+        const kept = [...skippedTypes];
+        const text = !p.skipped || !kept.length ? 'All clean~ nothing left of you here'
+          : kept.every((t) => t === 3) ? "All clean~ only Discord's call notices stay" : "All clean~ only Discord's own notices stay";
+        lastEnd = { key, text, flair: '✨', tone: 'cheer', sticker: 'flawless~', confetti: true, footer: { text: done, tone: 'success', flair: '♡', sr: 'All clean. ' } };
+        if (away) elsewhere = { text: `Done~ ${there} is all clean${SEP}${purged} purged`, tone: 'success', flair: '♡' };
       } else {
-        setStatus('Done~ nothing of yours was here', 'success');
-        lastEnd = { key, text: 'All clear~ nothing to purge here', flair: '✨', tone: 'clear' };
+        lastEnd = { key, text: 'All clear~ nothing of yours here', flair: '✨', tone: 'clear', footer: { text: 'Done~ nothing of yours was here', tone: 'success' } };
+        if (away) elsewhere = { text: `Done~ nothing of yours in ${there}`, tone: 'success' };
       }
+      // Finished in another chat: the footer keeps its line until that chat is visited (its verdict
+      // then says it), or a Count, a Purify or a new run takes over.
+      state.outcome = elsewhere;
+      state.runNow = null;
+      setStatus(...footerArgs(elsewhere || lastEnd.footer));
       // Minimised through the finish line: the orb carries the outcome until reopened.
-      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !problems.length && !shielded.length, tone: lastEnd.tone } : null;
+      state.orbDone = minimised ? { clean: !p.error && !p.stopped && !real.length && !shielded.length && !(locked.length && !p.deleted), tone: lastEnd.tone } : null;
       if (state.runMode === 'batch') settleBatchSelection();
       renderCurrent();
       renderActions();
@@ -2825,6 +3600,32 @@
     on('progress', speakProgress);
   }
 
+  // The journal follows the run: a chat that finished leaves it, a reopened DM keeps its new key, and
+  // the end decides what stays. A finished run keeps nothing; a deliberate Stop in Many chats keeps its
+  // ticks quietly (in This chat, nothing); an error, a crash or the panel going away reads as cut short.
+  function wireJournal() {
+    on('dm-opened', ({ target, previousKey }) => {
+      const at = journal && journal.keys ? journal.keys.indexOf(previousKey) : -1;
+      if (at >= 0) journal.keys[at] = rowKey(target);
+    });
+    on('target-end', ({ target, ok, immune, error }) => {
+      if (ok) state.runCounted.add(target.channelId); // the purge wrote this count, not a Count
+      if (!journal || !journal.keys) return;
+      if (immune || (ok && !target.failed) || (error && plainError(error).blocking)) {
+        journal.keys = journal.keys.filter((k) => k !== rowKey(target));
+        storeJournal(journal);
+      }
+    });
+    on('end', ({ stopped, error }) => {
+      freeRunLock();
+      if (!journal || destroying) return;
+      if (stopped && journal.mode === 'batch') journal.state = 'stopped';
+      else if (stopped || !error) journal = null;
+      if (journal && journal.keys && !journal.keys.length) journal = null;
+      storeJournal(journal);
+    });
+  }
+
   function loadPendingLists() {
     if (run.active || state.scanning) return;
     if (!state.dmsLoaded && !state.dmsLoading) loadDMs();
@@ -2837,11 +3638,11 @@
 
   const ACTIONS = {
     scan: () => (state.scanning ? cancelScan() : state.tab !== 'current' ? scanSelected() : describeFailed() ? refreshRoute() : scanCurrent()),
-    purify: () => (state.tab === 'current' ? askPurgeCurrent() : askPurgeSelected()),
+    purify: () => { state.outcome = null; return state.tab === 'current' ? askPurgeCurrent() : askPurgeSelected(); },
     // Focus follows the work: the control that takes over from the one that goes gets focus.
     pause: () => { handFocus('[data-act="resume"]'); pauseRun(); },
     resume: () => { handFocus('[data-act="pause"]'); resumeRun(); },
-    stop: stopRun,
+    stop: () => { hushSound(); stopRun(); },
     logs: () => toggleLog(),
     'close-log': () => { handFocus('[data-act="logs"]'); toggleLog(false); },
     'copy-log': copyLog,
@@ -2851,9 +3652,10 @@
     'welcome-batch': () => { switchTab('batch'); hideWelcome(); },
     'go-batch': () => { handFocus('.tab[data-tab="batch"]'); switchTab('batch'); },
     restore: () => { handFocus('[data-act="minimize"]'); setOpen(true); },
-    mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); },
+    mute: () => { prefs.muted = !prefs.muted; savePrefs('muted'); renderMute(); if (prefs.muted) hushSound(); },
     poke: () => {
-      kick({ spin: (Math.random() - 0.5) * 26, squash: 0.7 });
+      // Mid-run the panel holds still, so Pause and Stop never move under the pointer; Dopa still squashes.
+      if (!run.active) kick({ spin: (Math.random() - 0.5) * 26, squash: 0.7 });
       const img = $('.avatar img');
       if (!reducedMotion()) img.animate([{ transform: 'scale(0.86, 1.12)' }, { transform: 'scale(1.08, 0.94)', offset: 0.45 }, { transform: 'none' }], { duration: 480, easing: 'cubic-bezier(.2,1.4,.4,1)' });
     },
@@ -2908,7 +3710,7 @@
       confirmBtn.setPointerCapture(e.pointerId);
       beginHold();
     });
-    // Capture keeps a release anywhere reaching endHold; sliding off (even onto Nevermind) lets go.
+    // Capture keeps a release anywhere reaching endHold; sliding off (even onto Never mind) lets go.
     // A mouse is exact; a finger or pen may wander SLOP_PX. Letting go this way says so, and coming
     // back never resumes: a fresh press starts from empty.
     confirmBtn.addEventListener('pointermove', (e) => {
@@ -2928,7 +3730,11 @@
     });
     confirmBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(e); });
     confirmBtn.addEventListener('blur', endHold);
-    listen(document, 'visibilitychange', () => { if (document.hidden) endHold(); });
+    // Coming back to the tab plays a finish's beats that landed while it was hidden.
+    listen(document, 'visibilitychange', () => {
+      if (document.hidden) endHold();
+      else if (lastEnd && lastEnd !== beaten) renderHero();
+    });
     // A key still held when the dialog goes (a finished hold, or Esc) belongs to that hold: its
     // repeats and its release must not press whatever focus moved to (Pause, or Purify again).
     for (const type of ['keydown', 'keypress', 'keyup']) {
@@ -2959,7 +3765,7 @@
         $('.modal').focus(); // keep focus (and Esc/Tab) inside the dialog
       }
     });
-    $('[data-role="filter"]').addEventListener('input', (e) => { state.filter = e.target.value; applyFilter(); });
+    $('[data-role="filter"]').addEventListener('input', onFilterInput);
     for (const type of ['wheel', 'pointerdown', 'keydown']) {
       $('[data-role="body"]').addEventListener(type, () => { lastUserScroll = performance.now(); }, { passive: true });
     }
@@ -2969,15 +3775,90 @@
     });
     makeDraggable();
     wireRunEvents();
+    wireJournal();
+    wireMilestone();
   }
 
   // ── Init ────────────────────────────────────────────────
 
   let host = null;
 
+  // Following Discord from chat to chat: the Navigation API says so within a few milliseconds, and a
+  // poll (one string compare) backs it up, or does the job a little faster where there is no such API.
+  // Minimised, the panel only notes where you went, and reads it when it opens.
+  let lastPath = '';
+  let routeStale = false;
+
+  function navigated() {
+    const was = routeTarget(lastPath);
+    lastPath = location.pathname;
+    const now = routeTarget();
+    // A This chat dialog asks about one chat: moving to another closes it, as Never mind would.
+    if (modal && modal.channelId && (!now || now.channelId !== modal.channelId)) {
+      closeDialog(false);
+      notes.moved = true;
+      setStatus('Moved chats~ nothing purged', 'calm', { quiet: true }); // said aloud once the new chat is read
+    }
+    if (!prefs.open && !run.active) {
+      if (was) state.leftSince.add(was.channelId);
+      cancelCount();
+      if (state.scanning && state.scanKind === 'current') cancelScan();
+      routeStale = true;
+      return;
+    }
+    refreshRoute();
+    // Logging in on /login also arrives as an in-app navigation: lists that failed for want of a
+    // token get another go.
+    if (state.tab === 'batch') loadPendingLists();
+  }
+
+  function followRoute() {
+    lastPath = location.pathname;
+    const check = () => { if (location.pathname !== lastPath) navigated(); };
+    if (window.navigation) listen(window.navigation, 'navigatesuccess', check);
+    every(window.navigation ? 700 : 250, check);
+    listen(window, 'popstate', check);
+  }
+
+  // A run cut short last time (a reload, a closed laptop, a crash) keeps its place. Many chats ticks
+  // what it still had to do and says so; This chat says where to pick up. A deliberate Stop brings the
+  // ticks back without a word. Nothing starts by itself: Purify still counts first and asks. Nothing
+  // comes back for another account, after a day, or while another tab's run holds the lock (it may be
+  // that very run).
+  async function restoreJournal(saved, looked) {
+    if (Math.abs(Date.now() - saved.at) > JOURNAL_TTL_MS) { storeJournal(null); return; }
+    let me;
+    try { me = await whoAmI(); } catch { return; }
+    if (me.id !== saved.user) { storeJournal(null); return; }
+    if (await runLockHeld()) return;
+    await looked; // the chat on screen is known, so a note about it lands once
+    if (run.active || starting || journal) return; // a run began meanwhile: the journal is its own now
+    journal = saved;
+    if (saved.mode === 'batch') {
+      for (const key of saved.keys) {
+        state.selected.add(key);
+        const row = state.batchRows.get(key);
+        if (row && row.box) {
+          row.box.checked = true;
+          row.el.classList.add('is-selected');
+        }
+      }
+      for (const id of saved.guilds) restoredGuilds.add(id);
+      openRestoredGuilds();
+      if (saved.state === 'running' && saved.keys.length) notes.resume = { mode: 'batch', left: saved.keys.length };
+      selectionChanged();
+      loadPendingLists(); // the Many chats badge counts the ticks once their rows are drawn
+    } else if (saved.state === 'running' && saved.chat) {
+      notes.resume = { mode: 'current', chatId: saved.chat.id };
+    }
+    if (notes.resume && prefs.open && !run.active && !state.scanning && !state.counting && !modal) setStatus(...restingStatus());
+  }
+
   function boot() {
-    loadPrefs();
-    syncProtection();
+    // One look at storage: prefs, shields and any journal together.
+    const stored = withStorage((ls) => ({ prefs: readStored(ls), journal: readJournal(ls) }));
+    loadPrefs(stored && stored.prefs);
+    syncProtection(stored && stored.prefs);
     host = mount();
     wire();
     renderMute();
@@ -2987,20 +3868,26 @@
     const pos = homePosition();
     placeShell(pos.x, pos.y);
     setOpen(prefs.open, { initial: true });
+    // It arrives placed rather than dropped in: a short rise as it fades in (only the fade, reduced).
+    if (prefs.open) {
+      $('.panel').animate(reducedMotion() ? [{ opacity: 0 }, { opacity: 1 }]
+        : [{ opacity: 0, transform: 'translateY(6px) scale(.985)' }, { opacity: 1, transform: 'none' }],
+      { duration: 240, easing: 'cubic-bezier(.22,1,.36,1)' });
+    }
     renderProgress(progressSnapshot());
-    if (!prefs.welcomed) showWelcome();
-    refreshRoute();
-    // Logging in on /login also arrives as an in-app navigation: lists that failed for want
-    // of a token get another go.
-    let lastPath = location.pathname;
-    const navigated = () => {
-      lastPath = location.pathname;
-      refreshRoute();
-      if (state.tab === 'batch') loadPendingLists();
-    };
-    every(700, () => { if (location.pathname !== lastPath) navigated(); });
-    listen(window, 'popstate', navigated);
+    // A fresh install gets the welcome; someone updating gets one line on what changed, once.
+    if (!prefs.welcomed) {
+      showWelcome();
+      prefs.seenVersion = shortVersion;
+      savePrefs('seenVersion');
+    } else if (prefs.seenVersion !== shortVersion) notes.news = true;
+    // Minimised, it asks Discord nothing about the chat until it opens.
+    let looked = Promise.resolve();
+    if (prefs.open) looked = refreshRoute();
+    else routeStale = true;
+    followRoute();
     listen(window, 'storage', onStorage);
+    if (stored && stored.journal) restoreJournal(stored.journal, looked);
     console.log(`[Dopa Purifier] v${VERSION} ready~ ✨`);
   }
 
@@ -3013,13 +3900,29 @@
     disposers.push(() => obs.disconnect());
   }
 
+  // Discord is still starting up when this runs: boot waits for a quiet moment, so the panel never adds
+  // to Discord's own start (where there is no idle callback, the next task will do).
+  function start() {
+    whenAppReady(() => {
+      if ('requestIdleCallback' in window) {
+        const id = requestIdleCallback(boot, { timeout: 1500 });
+        disposers.push(() => cancelIdleCallback(id));
+      } else {
+        const id = setTimeout(boot, 0);
+        disposers.push(() => clearTimeout(id));
+      }
+    });
+  }
+
   // Undo everything: stop a running purge, drop listeners and timers, remove the UI.
   function destroy() {
+    destroying = true; // set first: a run ended this way reads as cut short in the journal, not as stopped
     if (run.active) {
       run.stopping = true;
       run.paused = false;
       run.controller.abort();
     }
+    freeRunLock();
     if (state.scanAbort) state.scanAbort.abort();
     clearInterval(waitTick);
     for (const undo of disposers.splice(0)) {
@@ -3028,10 +3931,20 @@
     cancelAnimationFrame(wob.raf);
     clearTimeout(hold.timer);
     clearTimeout(dialogTimer);
+    clearTimeout(switchTimer);
     flushPrefs();
+    clearTimeout(sound.primeTimer);
     if (sound.ctx) sound.ctx.close().catch(() => {});
     if (host) host.remove();
     host = null;
   }
 
-  return { start: () => whenAppReady(boot), destroy };
+  // For the BetterDiscord plugin, whose updates wait for a purge to finish: busy() while one runs, and
+  // whenIdle() resolves when it ends.
+  const idleWaiters = [];
+  // A run that ends, or a start that never became one, lets the waiting update ask again.
+  function settleIdle() { for (const resolve of idleWaiters.splice(0)) resolve(); }
+  const whenIdle =() => (run.active || starting ? new Promise((resolve) => { idleWaiters.push(resolve); }) : Promise.resolve());
+  on('end', settleIdle);
+
+  return { start, destroy, busy: () => run.active || starting, whenIdle };

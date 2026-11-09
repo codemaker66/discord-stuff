@@ -1,9 +1,9 @@
 # Dopa's Discord Purifier ✨
 
-Wipe every message *you* sent in a DM, group or server — gently, in a few clicks.
+Wipe *your* messages from any DM, group or server channel — gently, in a few clicks.
 Nothing else is touched.
 
-<p align="center"><img src="docs/img/purging.webp" alt="The purifier panel mid-purge next to its log window, inside Discord" width="720"></p>
+<p align="center"><img src="docs/img/purging.webp" alt="The Purifier panel at work next to its log window, inside Discord" width="720"></p>
 
 ## Get it
 
@@ -25,8 +25,8 @@ and asks before updating itself.
 
 - **Open a chat, press Purify** — it counts your messages first, so the confirm says exactly how many.
 - **Hold to purify** — no accidental clicks.
-- **Many chats**: tick DMs, groups and server channels (threads and forum posts included), then purge them in one go.
-- **Shield** anyone and their chat is immune. Bardo and Dopa are shielded from the start ♡
+- **Many chats**: pick DMs, groups and server channels (threads and forum posts included), then purify them in one go.
+- **Shield** anyone and your DM with them is immune. Bardo and Dopa are shielded from the start ♡
 - Paces itself to Discord's rate limits (about 40 messages a minute), pauses and resumes,
   and tells you honestly what was skipped.
 

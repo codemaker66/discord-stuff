@@ -5,11 +5,12 @@ and its tab icon (favicon-32.png).
   node test/shots.mjs dist/dopas-discord-purifier.user.js test/out/shots 2 --showcase
   python3 tools/marketing.py test/out/shots [outDir]     (outDir: somewhere other than docs/img, to look first)
 
-Needs Python 3, Pillow and the Inter font (found with fc-match). Shots taken at any pace but the
+Needs Python 3, Pillow and the Inter font (found with fc-match, or on Windows in INTER_DIR or the font folders). Shots taken at any pace but the
 shipped one are refused, so no picture promises a speed the purifier doesn't have; every picture
 carries the pace it was taken at, and test/site.mjs checks it against src/main.js.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -23,9 +24,15 @@ HERO = (1100, 1000)
 
 
 def font(style, size):
-    found = subprocess.run(['fc-match', '-f', '%{file}', f'Inter:{style}'], capture_output=True, text=True, check=True).stdout
+    # Without fontconfig (Windows), look for Inter-<Style>.ttf in INTER_DIR or the Windows font folders.
+    try:
+        found = subprocess.run(['fc-match', '-f', '%{file}', f'Inter:{style}'], capture_output=True, text=True, check=True).stdout
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        dirs = [os.environ.get('INTER_DIR'), Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft/Windows/Fonts', 'C:/Windows/Fonts']
+        files = [Path(d) / f'Inter-{style.capitalize()}.ttf' for d in dirs if d]
+        found = next((str(f) for f in files if f.is_file()), '')
     if 'Inter' not in Path(found).name:
-        sys.exit(f'Inter {style} is not installed (fc-match offered {found or "nothing"})')
+        sys.exit(f'Inter {style} is not installed (looked for {found or "it and found nothing"}; set INTER_DIR to a folder of Inter-*.ttf)')
     return ImageFont.truetype(found, size)
 
 
