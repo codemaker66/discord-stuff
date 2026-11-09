@@ -118,6 +118,13 @@
     try { return await res.json(); } catch { return null; }
   }
 
+  // Discord's clock, from the Date on its answers. Message ids carry Discord's time, so a run's cut-off
+  // (D64) is taken on it: a PC clock that runs fast would purge what you send after confirming, one that
+  // runs slow would leave what you sent before. The header is whole seconds and read once the answer
+  // has landed, so this never runs ahead of Discord: at worst a message from the last second is left.
+  let discordSkewMs = 0;
+  const discordNow = () => Math.floor(Date.now() + discordSkewMs);
+
   // Stop and Cancel drop a read at once. A DELETE or POST already sent is left to land, so
   // "after this one" and the counts stay true. The timeout bounds both: a dead connection
   // turns into a network error and takes the usual backoff instead of hanging for ever.
@@ -130,6 +137,8 @@
     try {
       // Read the body here too, so a server that stalls mid-answer is covered as well.
       const res = await fetch(url, { ...init, signal: ctl.signal });
+      const served = Date.parse(res.headers.get('date') || '');
+      if (Number.isFinite(served)) discordSkewMs = served - Date.now();
       const body = await res.arrayBuffer();
       const empty = res.status === 204 || res.status === 205 || res.status === 304;
       return new Response(empty ? null : body, { status: res.status, statusText: res.statusText, headers: res.headers });
@@ -659,8 +668,9 @@
       token: getToken(), accountSwitched: false,
       deleted: 0, failed: 0, skipped: 0, gone: 0, failures: [], problems: [], shielded: [],
       startedAt: Date.now(), pausedMs: 0, pausedAt: 0, waitMs: 0, firstAt: 0, pausedAtFirst: 0, waitAtFirst: 0,
-      // Discord's ids begin with the time they were made: anything newer was sent after this confirm.
-      capId: String((BigInt(Date.now()) - 1420070400000n) << 22n),
+      // Discord's ids begin with the time they were made, on Discord's clock: anything newer was sent
+      // after this confirm.
+      capId: String((BigInt(discordNow()) - 1420070400000n) << 22n),
       deleteDelay: TIMING.deleteDelayMs, calm: 0, seen: new Set(), blocked: new Map(),
       total: 0,
       uncounted: 0,

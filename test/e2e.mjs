@@ -6198,6 +6198,37 @@ await test('T255 a purge never touches what you send after you confirm', async (
   }
 });
 
+await test('T287 the cut-off is Discord\'s clock: a PC a minute fast spares what you send, an hour slow still takes what you sent', async () => {
+  {
+    // The PC is a minute fast: a message sent mid-run is still newer than the cut-off, and stays.
+    const { page, stats, world, context } = await bootPaced('/channels/4001/5001', { deleteMs: 60, serverDate: true, pageClockMs: 60000 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /^40 messages found/);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await untilCount(page, 3);
+    const [sent] = addMine(world, '5001', 1, { content: () => 'sent while purifying' });
+    await waitEnd(page);
+    assert(!stats.deletes.includes(sent.id) && mine(world, '5001').length === 1, 'a fast PC clock purged the message sent mid-run');
+    assert(await text(page, '[data-role="pct"]') === '40 of 40', `fast finish ${await text(page, '[data-role="pct"]')}`);
+    await context.close();
+  }
+  {
+    // The PC is an hour slow, and three of yours went out ten minutes ago: they go with the rest.
+    const world = buildWorld();
+    addMine(world, '5001', 3, { at: Date.now() - 10 * 60000 });
+    const { page, stats, context } = await bootPaced('/channels/4001/5001', { world, deleteMs: 60, serverDate: true, pageClockMs: -3600000 });
+    await page.click('[data-act="scan"]');
+    await untilStatus(page, /^43 messages found/);
+    await page.click('[data-act="purify"]');
+    await holdConfirm(page);
+    await waitEnd(page);
+    assert(stats.deletes.length === 43 && mine(world, '5001').length === 0, `a slow PC clock left ${mine(world, '5001').length} of yours`);
+    assert(/^All clean~/.test(await text(page, '[data-role="readout-line"]')) && await text(page, '[data-role="pct"]') === '43 of 43', `slow finish ${await text(page, '[data-role="pct"]')}`);
+    await context.close();
+  }
+});
+
 await test('T256 a deliberate Stop brings back only the ticks; the panel going away reads as cut short', async () => {
   const paced = withTiming(source, { deleteDelayMs: 150 });
   {

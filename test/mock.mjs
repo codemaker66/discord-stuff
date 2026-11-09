@@ -250,14 +250,18 @@ export async function installMockDiscord(page, opts = {}) {
     serverError: opts.serverError || 0, // a status such as 502: Discord answers it to every serverErrorOn request
     serverErrorOn: opts.serverErrorOn || 'DELETE', // 'DELETE', 'GET', 'POST' or '*'
     light: !!opts.light, // Discord's light theme: html.theme-light and a light shell behind the panel
+    // Discord's Date on every API answer, on this process's clock: the clock the mock's ids carry, as
+    // Discord's servers' does. Off by default, so a test opts in to the page reading Discord's time.
+    serverDate: !!opts.serverDate,
   };
   // refused: requests the offline or serverError switches turned away.
   const stats = { deletes: [], deleteAttempts: 0, searches: 0, lists: 0, opened: [], closed: [], errors: [], log: [], tokens: [], deleteChannels: [], refused: 0 };
   const ghosts = {}; // channelId -> [{msg, ttl}] deleted-but-still-indexed
   const indexed202 = new Set();
 
+  const dated = (headers = {}) => (cfg.serverDate ? { date: new Date().toUTCString(), ...headers } : headers);
   const json = (route, status, body, headers = {}) =>
-    route.fulfill({ status, contentType: 'application/json', headers, body: body === undefined ? '' : JSON.stringify(body) });
+    route.fulfill({ status, contentType: 'application/json', headers: dated(headers), body: body === undefined ? '' : JSON.stringify(body) });
 
   const searchIn = (cidsIn, q) => {
     let cids = cidsIn;
@@ -381,7 +385,7 @@ export async function installMockDiscord(page, opts = {}) {
       (ghosts[cid] ||= []).push({ msg, ttl: cfg.indexLag });
       stats.deletes.push(mid);
       stats.deleteChannels.push(cid);
-      return route.fulfill({ status: 204, body: '' });
+      return route.fulfill({ status: 204, headers: dated(), body: '' });
     }
     if ((mm = api.match(/^\/channels\/(\d+)$/)) && m === 'DELETE') {
       const ch = world.channels[mm[1]];
@@ -478,6 +482,8 @@ export const SEEN_VERSION = JSON.parse(readFileSync(new URL('../package.json', i
 //   prefs        the stored prefs blob, e.g. one an older version wrote (default: welcomed, and this
 //                version's news seen).
 //   firstRun     no prefs at all, so the welcome shows.
+//   pageClockMs  the PC's clock this far ahead of Discord's (negative: behind). Only the page's
+//                Date.now() moves; the mock's ids and its serverDate keep this process's time.
 export async function openDiscord(browser, path = '/channels/4001/5001', opts = {}) {
   const context = await browser.newContext({
     permissions: opts.permissions || [],
@@ -489,6 +495,7 @@ export async function openDiscord(browser, path = '/channels/4001/5001', opts = 
   });
   if (opts.clock) await context.clock.install();
   const page = await context.newPage();
+  if (opts.pageClockMs) await page.addInitScript((d) => { const real = Date.now.bind(Date); Date.now = () => real() + d; }, opts.pageClockMs);
   const mock = await installMockDiscord(page, opts);
   // Token (and, unless testing first run, "already welcomed") planted once in the top frame,
   // so tests can change them later the way Discord would.
